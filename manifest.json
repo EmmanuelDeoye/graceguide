@@ -8,7 +8,7 @@
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone"],
   "orientation": "portrait-primary",
-  "background_color": "#F8F6F0",
+  "background_color": "#30483A",
   "theme_color": "#30483A",
   "lang": "en",
   "categories": ["lifestyle", "books", "education"],
