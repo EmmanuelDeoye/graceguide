@@ -1,0 +1,97 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid",
+
+        "profile": {
+          ".read": true
+        },
+
+        "notifications": {
+          ".read": "auth != null && auth.uid == $uid",
+          ".write": "auth != null && (auth.uid == $uid || root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com')"
+        },
+
+        "connections": {
+          "$otherUid": {
+            ".write": "auth != null && (auth.uid == $uid || auth.uid == $otherUid)"
+          }
+        },
+
+        "fcmTokens": {
+          ".read": "auth != null && auth.uid == $uid"
+        }
+      }
+    },
+
+    "userDirectory": {
+      ".read": "auth != null && (root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com')",
+      "$uid": {
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
+
+    "analytics": {
+      ".read": "auth != null && (root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com')",
+      "activeDays": {
+        "$day": {
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid"
+          }
+        }
+      }
+    },
+
+    "admins": {
+      ".read": "auth != null",
+      ".write": "auth != null && auth.token.email == 'godledtech@gmail.com'"
+    },
+
+    "spacePosts": {
+      ".read": true,
+      ".indexOn": ["timestamp", "authorId", "type"],
+      "$postId": {
+        ".write": "auth != null && (!data.exists() || data.child('authorId').val() == auth.uid || newData.child('authorId').val() == auth.uid || root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com')"
+      }
+    },
+
+    "communityGroups": {
+      ".read": "auth != null",
+      "$groupId": {
+        ".write": "auth != null"
+      }
+    },
+
+    "quizCompetition": {
+      "current": {
+        ".read": "auth != null",
+        "startTime": {
+          ".write": "auth != null && (root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com')"
+        },
+        "timerMinutes": {
+          ".write": "auth != null && (root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com')"
+        },
+        "concentration": {
+          ".write": "auth != null && (root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com')"
+        },
+        "questions": {
+          ".write": "auth != null && (root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com')"
+        },
+        "participants": {
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid"
+          }
+        }
+      },
+      "history": {
+        ".read": "auth != null",
+        ".write": "auth != null && (root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com')"
+      }
+    }
+  }
+}

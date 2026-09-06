@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#30483A">
+    <meta name="robots" content="noindex, nofollow">
+    <title>GraceGuide — Admin</title>
+    <link rel="icon" type="image/png" sizes="192x192" href="img/icons/icon-192.png">
+    <link rel="stylesheet" href="css/base.css">
+    <link rel="stylesheet" href="css/features.css">
+    <link rel="stylesheet" href="css/admin.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body>
+
+    <!-- ============================================
+         ACCESS GATE — shown while checking auth, while
+         signing in, and if access is denied. The dashboard
+         markup below never even renders until admin access
+         is confirmed.
+         ============================================ -->
+    <div id="admin-gate" class="admin-gate">
+        <div class="admin-gate-card">
+            <img src="img/logo.png" alt="GraceGuide" class="admin-gate-logo">
+            <h1>Grace<span class="brand-guide">Guide</span> Admin</h1>
+            <p id="admin-gate-message" class="admin-gate-message">Checking your access…</p>
+
+            <div id="admin-gate-signin" class="admin-gate-signin hidden">
+                <input type="email" id="admin-email" class="form-input" placeholder="Email" autocomplete="username">
+                <input type="password" id="admin-password" class="form-input" placeholder="Password" autocomplete="current-password">
+                <p id="admin-gate-error" class="admin-gate-error hidden"></p>
+                <button id="admin-signin-btn" class="btn btn-primary btn-block">Sign In</button>
+                <button id="admin-google-btn" class="btn btn-outline btn-block">
+                    <i class="fab fa-google"></i> Sign in with Google
+                </button>
+            </div>
+
+            <div id="admin-gate-denied" class="hidden">
+                <button id="admin-denied-signout-btn" class="btn btn-outline btn-block">Sign Out</button>
+            </div>
+
+            <a href="index.html" class="admin-gate-back">← Back to GraceGuide</a>
+        </div>
+    </div>
+
+    <!-- ============================================
+         DASHBOARD
+         ============================================ -->
+    <div id="admin-dashboard" class="admin-dashboard hidden">
+        <aside class="admin-sidebar" id="admin-sidebar">
+            <div class="admin-sidebar-brand">
+                <img src="img/logo.png" alt="">
+                <span>Grace<span class="brand-guide">Guide</span><br><small>Admin</small></span>
+            </div>
+            <nav class="admin-nav">
+                <button class="admin-nav-btn active" data-tab="overview"><i class="fas fa-chart-line"></i> Overview</button>
+                <button class="admin-nav-btn" data-tab="users"><i class="fas fa-users"></i> Users</button>
+                <button class="admin-nav-btn" data-tab="notifications"><i class="fas fa-bell"></i> Notifications</button>
+                <button class="admin-nav-btn" data-tab="quiz"><i class="fas fa-trophy"></i> Quiz</button>
+                <button class="admin-nav-btn" data-tab="space"><i class="fas fa-layer-group"></i> Space</button>
+                <button class="admin-nav-btn hidden" data-tab="admins" id="admin-nav-admins"><i class="fas fa-user-shield"></i> Admins</button>
+            </nav>
+            <div class="admin-sidebar-footer">
+                <div class="admin-current-user">
+                    <div class="admin-current-user-avatar" id="admin-current-user-avatar">A</div>
+                    <div>
+                        <div class="admin-current-user-name" id="admin-current-user-name">—</div>
+                        <div class="admin-current-user-role" id="admin-current-user-role">Admin</div>
+                    </div>
+                </div>
+                <button id="admin-signout-btn" class="btn btn-outline btn-sm btn-block">
+                    <i class="fas fa-right-from-bracket"></i> Sign Out
+                </button>
+            </div>
+        </aside>
+
+        <main class="admin-main">
+            <header class="admin-topbar">
+                <button id="admin-menu-toggle" class="admin-menu-toggle" aria-label="Menu"><i class="fas fa-bars"></i></button>
+                <h1 id="admin-page-title">Overview</h1>
+            </header>
+            <div class="admin-content" id="admin-content">
+                <!-- Tab panels rendered here by js/admin.js -->
+            </div>
+        </main>
+        <div class="admin-sidebar-backdrop" id="admin-sidebar-backdrop"></div>
+    </div>
+
+    <!-- Shared modal + toast containers for admin.js -->
+    <div id="admin-modal-container" class="admin-modal-container hidden"></div>
+    <div id="admin-toast-container" class="admin-toast-container"></div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+
+    <script src="js/config.js"></script>
+    <script src="js/admin.js"></script>
+</body>
+</html>

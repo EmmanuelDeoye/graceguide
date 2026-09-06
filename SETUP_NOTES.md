@@ -89,3 +89,43 @@ State is computed purely from `now` vs `startTime` (no separate status flag to k
 Also: when scheduling a new round, the admin page should also clear out the previous round's `participants` (or move them into a separate history path) — otherwise old scores will keep showing on the new round's leaderboard.
 
 Your Bible API key and DeepSeek API key are visible in `js/config.js`, which ships to every visitor's browser — this was already true before these changes and is a pre-existing characteristic of a client-only site, not something introduced here. If you want those hidden, it would take a small backend/proxy (or Cloud Functions) in front of those calls. Happy to help with that separately if you'd like.
+
+## 13. Bug fixes (Home blank sometimes, Space slow, notification badge, foreground popups, branding)
+
+**Home page sometimes showing nothing when tapped**: found the real cause — page renders are async, and if any awaited call inside one failed, the function aborted *before* touching the page container, silently leaving whatever the previous page was frozen on screen. Fixed with a general safety net (any page render failure now shows a proper "Something went wrong — Retry" state instead of staying blank/stale) plus hardening `renderHomePage()` specifically so one slow/failing piece can't block the rest.
+
+**Space sometimes slow to load**: the primary indexed query was silently falling back to fetching the *entire* `spacePosts` table client-side whenever there's no index on `timestamp` — which there currently isn't, since no database rules have been deployed yet. **Deploy `database.rules.json`** (see section 14 below) to fix this properly; it adds the missing indexes. Also parallelized two fetches on that page that were needlessly sequential.
+
+**Notification badge/unread state**: rewrote to mark-as-read optimistically (updates instantly rather than waiting on a round trip) and replaced the barely-visible read/unread styling with a proper unread dot + tinted row background.
+
+**Foreground push notifications**: now shown as an in-app popup banner instead of an OS-level notification while the app is open — backgrounded/closed-tab delivery is unchanged (still a real OS notification, since there's no in-app UI to show it in at that point).
+
+**"GraceGuide" branding**: split into two-tone styling ("Grace" in the existing color, "Guide" in a gold accent) everywhere the app name appears as a heading — splash screen, drawer, top bar (Home only), the sign-in modal, and the admin dashboard.
+
+## 14. Admin Dashboard (admin.html) — ACTION NEEDED
+
+A full admin dashboard at `admin.html` (with `css/admin.css` / `js/admin.js`) covers:
+- **Overview**: total users, active-today, new-this-week, Space post count, plus 30-day charts of daily active users and new signups (Chart.js)
+- **Users**: searchable list (username/email/joined/last active), with a quick "send notification to this user" shortcut
+- **Notifications**: send to everyone or to one specific user — delivered as an in-app notification immediately, and as a push once the Cloud Function is deployed (see section 4)
+- **Quiz**: set the competition date/time and per-attempt timer, manage the "Area of Concentration" list, generate MCQ questions with DeepSeek (by difficulty + topic, staged in a preview before adding), manage the question bank manually, view/clear the leaderboard — saving a new date automatically archives the previous round's participants first
+- **Space**: browse/filter all posts, delete unwanted ones
+- **Admins** (master only): grant/revoke admin access by email
+
+### Access control
+`godledtech@gmail.com` is the permanent master admin (hardcoded, can't be revoked from the UI). The master can grant any existing GraceGuide account admin access from the Admins tab — this is stored at `admins/{uid}` and checked by email match or that lookup every time admin.html loads. Signed-in users who qualify also see an "Admin Dashboard" link appear in the main app's drawer automatically.
+
+**This UI-level gate is not a real security boundary by itself** — without deployed rules, a technically-inclined non-admin could still write to these paths directly via browser dev tools. That's what `database.rules.json` is for:
+
+### Deploy the database rules (does double duty — also fixes the Space slowness above)
+```bash
+firebase deploy --only database
+```
+This adds:
+- `.indexOn` for `spacePosts` (timestamp/authorId/type) — fixes the Space loading slowness
+- Real enforcement restricting `admins/`, quiz questions/schedule, and deleting others' Space posts to actual admins
+- A lightweight `userDirectory` (already being written by the app) readable only by admins, and an `analytics/activeDays` presence log — these power the Users list and Overview charts
+
+### DeepSeek question generation — known limitation
+Same caveat as the quiz feature itself: without a deployed security rule gating `quizCompetition/current/questions` until the active window opens, generated (and manually added) questions' correct answers are technically visible to any signed-in client inspecting network traffic ahead of time. The rules file includes admin-only *write* access to questions, but time-gated *read* access would need an additional rule if that matters for your use case — flagged here rather than silently assumed.
+
