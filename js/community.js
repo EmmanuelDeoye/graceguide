@@ -529,11 +529,12 @@ async function renderViewProfilePage() {
         database.ref('spacePosts').orderByChild('authorId').equalTo(userId).once('value').then(s => Object.keys(s.val() || {}).length).catch(() => 0),
         database.ref(`users/${userId}/spaceStreak`).once('value').then(s => (s.val() || {}).count || 0).catch(() => 0)
     ];
+    let journeyLoadFailed = false;
     if (isBrethren) {
         statsPromises.push(
-            database.ref(`users/${userId}/readingHistory`).once('value').then(s => (s.val() || []).length).catch(() => 0),
-            database.ref(`users/${userId}/bookmarks`).once('value').then(s => (s.val() || []).length).catch(() => 0),
-            database.ref(`users/${userId}/notes`).once('value').then(s => (s.val() || []).length).catch(() => 0)
+            database.ref(`users/${userId}/readingHistory`).once('value').then(s => (s.val() || []).length).catch(() => { journeyLoadFailed = true; return 0; }),
+            database.ref(`users/${userId}/bookmarks`).once('value').then(s => (s.val() || []).length).catch(() => { journeyLoadFailed = true; return 0; }),
+            database.ref(`users/${userId}/notes`).once('value').then(s => (s.val() || []).length).catch(() => { journeyLoadFailed = true; return 0; })
         );
     }
     const [brethrenCount, postsCount, streakCount, chaptersRead, bookmarksCount, notesCount] = await Promise.all(statsPromises);
@@ -579,11 +580,11 @@ async function renderViewProfilePage() {
             </div>
 
             <div class="profile-stats">
-                <div class="profile-stat">
+                <div class="profile-stat" style="cursor: pointer;" onclick="showUserBrethrenModal('${userId}', '${name.replace(/'/g, "\\'")}')">
                     <div class="profile-stat-value">${brethrenCount}</div>
                     <div class="profile-stat-label">Brethren</div>
                 </div>
-                <div class="profile-stat">
+                <div class="profile-stat" style="cursor: pointer;" onclick="showUserPostsModal('${userId}', '${name.replace(/'/g, "\\'")}')">
                     <div class="profile-stat-value">${postsCount}</div>
                     <div class="profile-stat-label">Posts</div>
                 </div>
@@ -623,6 +624,11 @@ async function renderViewProfilePage() {
             ${isBrethren ? `
                 <div class="card mb-3">
                     <h3 style="font-weight: 700; margin-bottom: 16px;">User Journey</h3>
+                    ${journeyLoadFailed ? `
+                        <p class="text-muted" style="font-size: 13px;">
+                            <i class="fas fa-triangle-exclamation"></i> Couldn't load this — the site's database rules need to be updated to let Brethren see each other's journey. If you're the site owner, deploy <code>database.rules.json</code>.
+                        </p>
+                    ` : `
                     <div class="flex gap-2" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
                         <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
                             <div style="font-size: 28px; font-weight: 800; color: var(--primary-deep-olive);">${chaptersRead}</div>
@@ -637,6 +643,7 @@ async function renderViewProfilePage() {
                             <div style="font-size: 11px; color: var(--text-slate);">Notes</div>
                         </div>
                     </div>
+                    `}
                 </div>
             ` : ''}
         </div>
@@ -1509,6 +1516,96 @@ async function showMyPostsModal() {
     }
 }
 
+/** Same idea as showBrethrenListModal(), but for viewing someone ELSE's
+    Brethren list from their profile page — deliberately a separate
+    function so the "my own profile" version above is untouched. */
+async function showUserBrethrenModal(uid, displayName) {
+    if (!requireAuth('Sign in to view Brethren.')) return;
+
+    showModal(`
+        <h3 style="margin-bottom: 16px;">${escapeHtml(displayName || 'User')}'s Brethren</h3>
+        <div id="brethren-list-body">
+            <div class="skeleton" style="height: 48px; margin-bottom: 8px;"></div>
+            <div class="skeleton" style="height: 48px; margin-bottom: 8px;"></div>
+        </div>
+    `);
+
+    try {
+        const snapshot = await database.ref(`users/${uid}/connections`).once('value');
+        const connections = snapshot.val() || {};
+        const brethren = Object.entries(connections)
+            .filter(([, info]) => info && info.status === 'accepted')
+            .map(([otherUid, info]) => ({ otherUid, name: info.name || 'A GraceGuide member' }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        const body = document.getElementById('brethren-list-body');
+        if (!body) return; // modal was closed before this resolved
+
+        body.innerHTML = brethren.length > 0 ? `
+            <div style="display:flex; flex-direction:column; gap:4px; max-height: 400px; overflow-y:auto;">
+                ${brethren.map(b => `
+                    <div class="flex items-center gap-2 p-2" style="cursor:pointer; border-bottom: 1px solid rgba(0,0,0,0.06);" onclick="closeModalThen(() => viewUserProfile('${b.otherUid}', '${escapeHtml(b.name).replace(/'/g, "\\'")}'))">
+                        <div class="post-avatar comment-avatar" style="width:40px;height:40px;">${escapeHtml(b.name)[0]?.toUpperCase() || 'U'}</div>
+                        <div style="flex:1; min-width:0; font-weight:600;">${escapeHtml(b.name)}</div>
+                        <i class="fas fa-chevron-right" style="color: var(--text-slate);"></i>
+                    </div>
+                `).join('')}
+            </div>
+        ` : `<p class="text-center text-muted">No Brethren yet.</p>`;
+    } catch (error) {
+        console.error('Error loading Brethren list:', error);
+        const body = document.getElementById('brethren-list-body');
+        if (body) body.innerHTML = `<p class="text-center text-muted">Couldn't load this Brethren list.</p>`;
+    }
+}
+
+/** Same idea as showMyPostsModal(), but for viewing someone ELSE's Space
+    posts from their profile page — deliberately a separate function so
+    the "my own profile" version above is untouched. */
+async function showUserPostsModal(uid, displayName) {
+    if (!requireAuth('Sign in to view posts.')) return;
+
+    showModal(`
+        <h3 style="margin-bottom: 16px;">${escapeHtml(displayName || 'User')}'s Posts</h3>
+        <div id="user-posts-list-body">
+            <div class="skeleton" style="height: 60px; margin-bottom: 8px;"></div>
+            <div class="skeleton" style="height: 60px; margin-bottom: 8px;"></div>
+        </div>
+    `);
+
+    try {
+        const snapshot = await database.ref('spacePosts').orderByChild('authorId').equalTo(uid).once('value');
+        const posts = Object.values(snapshot.val() || {}).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+        const body = document.getElementById('user-posts-list-body');
+        if (!body) return;
+
+        const preview = (post) => {
+            if (post.type === 'text' || !post.type) return truncate(escapeHtml(post.content || ''), 90);
+            if (post.type === 'note') return truncate(escapeHtml(post.text || post.content || ''), 90);
+            if (post.type === 'plan') return `📅 ${escapeHtml(post.title || 'Study Plan')}`;
+            if (post.type === 'video') return `🎬 ${escapeHtml(post.caption || 'Video')}`;
+            return truncate(escapeHtml(post.content || post.text || ''), 90);
+        };
+
+        body.innerHTML = posts.length > 0 ? `
+            <div style="display:flex; flex-direction:column; gap:4px; max-height: 420px; overflow-y:auto;">
+                ${posts.map(post => `
+                    <div class="p-2" style="cursor:pointer; border-bottom: 1px solid rgba(0,0,0,0.06);" onclick="closeModalThen(() => openSpacePostFromNotification('${post.id}', false))">
+                        <div style="font-size: 11px; color: var(--text-slate); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px;">${escapeHtml(post.type || 'post')} • ${formatDate(post.timestamp)}</div>
+                        <div>${preview(post)}</div>
+                        <div style="font-size: 12px; color: var(--text-slate); margin-top: 4px;"><i class="fas fa-hands-praying"></i> ${Object.keys(post.amens || {}).length} &nbsp; <i class="fas fa-comment"></i> ${Object.keys(post.comments || {}).length}</div>
+                    </div>
+                `).join('')}
+            </div>
+        ` : `<p class="text-center text-muted">${escapeHtml(displayName || 'This user')} hasn't posted to Space yet.</p>`;
+    } catch (error) {
+        console.error('Error loading user posts:', error);
+        const body = document.getElementById('user-posts-list-body');
+        if (body) body.innerHTML = `<p class="text-center text-muted">Couldn't load these posts.</p>`;
+    }
+}
+
 function editProfile() {
     const profile = AppState.userProfile || {};
     
@@ -2307,6 +2404,8 @@ window.closeSheetThen = closeSheetThen;
 window.closeModalThen = closeModalThen;
 window.showBrethrenListModal = showBrethrenListModal;
 window.showMyPostsModal = showMyPostsModal;
+window.showUserBrethrenModal = showUserBrethrenModal;
+window.showUserPostsModal = showUserPostsModal;
 window.showAuthModal = showAuthModal;
 window.requireAuth = requireAuth;
 window.handleProfileNavClick = handleProfileNavClick;
