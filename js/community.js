@@ -514,6 +514,31 @@ async function renderViewProfilePage() {
 
     const name = escapeHtml(profile.username || 'User');
     const status = AppState.userConnections.get(userId) || null;
+    const isBrethren = status === 'brethren';
+
+    // Brethren/Posts/Streak are visible to anyone viewing this profile;
+    // "User Journey" (reading history/bookmarks/notes) is only fetched
+    // at all if the viewer is this person's Brethren — matching both the
+    // UI gating below AND the database rules (non-Brethren wouldn't be
+    // able to read those paths regardless).
+    const statsPromises = [
+        database.ref(`users/${userId}/connections`).once('value').then(s => {
+            const conns = s.val() || {};
+            return Object.values(conns).filter(c => c && c.status === 'accepted').length;
+        }).catch(() => 0),
+        database.ref('spacePosts').orderByChild('authorId').equalTo(userId).once('value').then(s => Object.keys(s.val() || {}).length).catch(() => 0),
+        database.ref(`users/${userId}/spaceStreak`).once('value').then(s => (s.val() || {}).count || 0).catch(() => 0)
+    ];
+    if (isBrethren) {
+        statsPromises.push(
+            database.ref(`users/${userId}/readingHistory`).once('value').then(s => (s.val() || []).length).catch(() => 0),
+            database.ref(`users/${userId}/bookmarks`).once('value').then(s => (s.val() || []).length).catch(() => 0),
+            database.ref(`users/${userId}/notes`).once('value').then(s => (s.val() || []).length).catch(() => 0)
+        );
+    }
+    const [brethrenCount, postsCount, streakCount, chaptersRead, bookmarksCount, notesCount] = await Promise.all(statsPromises);
+
+    if (AppState.viewedProfileId !== userId || AppState.currentRoute !== 'view-profile') return;
 
     let connectButtonHTML;
     if (status === 'brethren') {
@@ -553,6 +578,21 @@ async function renderViewProfilePage() {
                 ${status === 'pending_received' ? `<p style="font-size: 12px; color: var(--text-slate); margin-top: 4px;">Sent you a connection request</p>` : ''}
             </div>
 
+            <div class="profile-stats">
+                <div class="profile-stat">
+                    <div class="profile-stat-value">${brethrenCount}</div>
+                    <div class="profile-stat-label">Brethren</div>
+                </div>
+                <div class="profile-stat">
+                    <div class="profile-stat-value">${postsCount}</div>
+                    <div class="profile-stat-label">Posts</div>
+                </div>
+                <div class="profile-stat">
+                    <div class="profile-stat-value">${streakCount}</div>
+                    <div class="profile-stat-label">Streak</div>
+                </div>
+            </div>
+
             <div class="flex gap-2 mb-4" style="justify-content: center; flex-wrap: wrap;">
                 ${connectButtonHTML}
                 ${status === 'brethren' ? `
@@ -579,6 +619,26 @@ async function renderViewProfilePage() {
                     <i class="fas fa-ban"></i> Block
                 </button>
             </div>
+
+            ${isBrethren ? `
+                <div class="card mb-3">
+                    <h3 style="font-weight: 700; margin-bottom: 16px;">User Journey</h3>
+                    <div class="flex gap-2" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
+                        <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
+                            <div style="font-size: 28px; font-weight: 800; color: var(--primary-deep-olive);">${chaptersRead}</div>
+                            <div style="font-size: 11px; color: var(--text-slate);">Chapters Read</div>
+                        </div>
+                        <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
+                            <div style="font-size: 28px; font-weight: 800; color: var(--primary-deep-olive);">${bookmarksCount}</div>
+                            <div style="font-size: 11px; color: var(--text-slate);">Bookmarks</div>
+                        </div>
+                        <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
+                            <div style="font-size: 28px; font-weight: 800; color: var(--primary-deep-olive);">${notesCount}</div>
+                            <div style="font-size: 11px; color: var(--text-slate);">Notes</div>
+                        </div>
+                    </div>
+                </div>
+            ` : ''}
         </div>
     `;
 }

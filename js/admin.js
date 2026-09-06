@@ -81,6 +81,13 @@ function closeAdminModal() {
     container.innerHTML = '';
 }
 
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const container = document.getElementById('admin-modal-container');
+        if (container && !container.classList.contains('hidden')) closeAdminModal();
+    }
+});
+
 /* ============================================
    ACCESS GATE
    ============================================ */
@@ -245,10 +252,12 @@ function renderTab(tab) {
 
     (renderers[tab] || renderOverviewTab)().catch(error => {
         console.error(`Error rendering ${tab} tab:`, error);
+        const isPermissionError = /permission/i.test(error?.message || error?.code || '');
         content.innerHTML = `
             <div class="admin-empty-state">
                 <i class="fas fa-triangle-exclamation"></i>
                 <p>Something went wrong loading this tab.</p>
+                ${isPermissionError ? `<p style="font-size:12px; max-width:360px; margin:8px auto 0;">This looks like a database permissions error — make sure <code>database.rules.json</code> has been deployed (<code>firebase deploy --only database</code>).</p>` : ''}
                 <button class="btn btn-outline btn-sm mt-2" onclick="renderTab('${tab}')">Retry</button>
             </div>
         `;
@@ -318,11 +327,21 @@ function bucketSignupsByDay(userDirectory, daysBack = 30) {
 let overviewChartInstance = null;
 
 async function renderOverviewTab() {
-    const [userDirectory, spacePosts, activeDays] = await Promise.all([
+    const results = await Promise.allSettled([
         fetchUserDirectory(),
         fetchAllSpacePosts(),
         fetchActiveDays(30)
     ]);
+
+    const [userDirResult, postsResult, activeDaysResult] = results;
+    const userDirectory = userDirResult.status === 'fulfilled' ? userDirResult.value : {};
+    const spacePosts = postsResult.status === 'fulfilled' ? postsResult.value : [];
+    const activeDays = activeDaysResult.status === 'fulfilled' ? activeDaysResult.value : [];
+
+    const failures = results.filter(r => r.status === 'rejected');
+    if (failures.length > 0) {
+        failures.forEach(f => console.error('Overview data fetch failed:', f.reason));
+    }
 
     const signups = bucketSignupsByDay(userDirectory, 30);
     const totalUsers = Object.keys(userDirectory).length;
@@ -332,6 +351,12 @@ async function renderOverviewTab() {
     const newThisWeek = Object.values(userDirectory).filter(u => u.createdAt && u.createdAt >= weekAgo).length;
 
     $('#admin-content').innerHTML = `
+        ${failures.length > 0 ? `
+            <div class="admin-empty-state" style="background:#fff3f0; border-radius:12px; padding:16px; margin-bottom:16px; text-align:left;">
+                <p style="color:#a8562f; font-weight:600; margin-bottom:4px;"><i class="fas fa-triangle-exclamation"></i> Some data couldn't load</p>
+                <p style="font-size:13px; color:var(--text-slate);">This usually means the database rules haven't been deployed yet (<code>firebase deploy --only database</code>) — see SETUP_NOTES.md. Showing whatever loaded successfully below.</p>
+            </div>
+        ` : ''}
         <div class="admin-stats-grid">
             <div class="admin-stat-card"><div class="value">${totalUsers}</div><div class="label">Total Users</div></div>
             <div class="admin-stat-card"><div class="value">${activeToday}</div><div class="label">Active Today</div></div>
@@ -353,35 +378,47 @@ async function renderOverviewTab() {
     const labels = signups.map(d => d.date.slice(5)); // MM-DD
 
     if (overviewChartInstance) { overviewChartInstance.forEach(c => c.destroy()); }
-    overviewChartInstance = [
-        new Chart($('#chart-active-users'), {
-            type: 'line',
-            data: {
-                labels,
-                datasets: [{
-                    label: 'Active Users',
-                    data: activeDays.map(d => d.count),
-                    borderColor: '#30483A',
-                    backgroundColor: 'rgba(48,72,58,0.12)',
-                    fill: true,
-                    tension: 0.3
-                }]
-            },
-            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
-        }),
-        new Chart($('#chart-signups'), {
-            type: 'bar',
-            data: {
-                labels,
-                datasets: [{
-                    label: 'New Signups',
-                    data: signups.map(d => d.count),
-                    backgroundColor: '#C7A65A'
-                }]
-            },
-            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
-        })
-    ];
+    overviewChartInstance = [];
+    try {
+        if (typeof Chart === 'undefined') throw new Error('Chart.js did not load');
+        overviewChartInstance = [
+            new Chart($('#chart-active-users'), {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'Active Users',
+                        data: activeDays.map(d => d.count),
+                        borderColor: '#30483A',
+                        backgroundColor: 'rgba(48,72,58,0.12)',
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+            }),
+            new Chart($('#chart-signups'), {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'New Signups',
+                        data: signups.map(d => d.count),
+                        backgroundColor: '#C7A65A'
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+            })
+        ];
+    } catch (error) {
+        // Stat cards above are already rendered — a chart library hiccup
+        // (CDN blocked, ad-blocker, etc.) should never take those down
+        // with it. Just show a small inline note where the charts would be.
+        console.error('Error rendering charts:', error);
+        $$('.admin-chart-wrap').forEach(wrap => {
+            wrap.innerHTML = `<p class="text-muted" style="padding-top:20px;">Charts couldn't load.</p>`;
+        });
+    }
 }
 
 /* ============================================
@@ -433,54 +470,65 @@ function usersTableRowsHTML(users) {
     `).join('');
 }
 
-function jumpToNotifyUser(uid) {
+function jumpToNotifyUser(uid, username) {
     renderTab('notifications');
-    setTimeout(() => {
-        const targetSelect = $('#notif-target-type');
-        if (!targetSelect) return;
-        targetSelect.value = 'specific';
-        targetSelect.dispatchEvent(new Event('change'));
-        const userSelect = $('#notif-target-user');
-        if (userSelect) userSelect.value = uid;
-    }, 50);
+    setTimeout(() => openComposeNotificationModal(uid, username), 50);
 }
 
 /* ============================================
    NOTIFICATIONS TAB
    ============================================ */
 async function renderNotificationsTab() {
+    $('#admin-content').innerHTML = `
+        <div class="admin-panel">
+            <h2>Send Notification</h2>
+            <p class="text-muted" style="margin-bottom:16px;">Delivered as an in-app notification to each recipient immediately, and as a push notification to any device where they've enabled notifications (once the Cloud Function in <code>functions/index.js</code> is deployed).</p>
+            <button id="compose-notif-btn" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Compose Notification</button>
+        </div>
+    `;
+
+    $('#compose-notif-btn').addEventListener('click', () => openComposeNotificationModal());
+}
+
+/** Opens the notification composer as an actual cancelable modal
+    (reusing the shared admin-modal-container) instead of an inline
+    form with no way to back out. Pass a uid/username to pre-target a
+    specific user (used by the Users tab's quick "notify" action). */
+async function openComposeNotificationModal(presetUid = null, presetUsername = null) {
     const userDirectory = await fetchUserDirectory();
     const users = Object.entries(userDirectory).map(([uid, u]) => ({ uid, ...u }))
         .sort((a, b) => (a.username || '').localeCompare(b.username || ''));
 
-    $('#admin-content').innerHTML = `
-        <div class="admin-panel">
-            <h2>Send Notification</h2>
-            <div class="admin-form-row">
-                <label>Send to</label>
-                <select id="notif-target-type" class="form-select">
-                    <option value="all">Everyone (general broadcast)</option>
-                    <option value="specific">A specific user</option>
-                </select>
-            </div>
-            <div class="admin-form-row hidden" id="notif-target-user-row">
-                <label>User</label>
-                <select id="notif-target-user" class="form-select">
-                    ${users.map(u => `<option value="${u.uid}">${escapeHtml(u.username || 'User')} (${escapeHtml(u.email || '')})</option>`).join('')}
-                </select>
-            </div>
-            <div class="admin-form-row">
-                <label>Message</label>
-                <textarea id="notif-message" class="form-textarea" rows="3" placeholder="e.g. New study plan just dropped — check it out!"></textarea>
-            </div>
-            <button id="notif-send-btn" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Send</button>
-            <p class="text-muted" style="font-size:12px; margin-top:10px;">Delivered as an in-app notification to each recipient, and as a push notification to any device where they've enabled notifications (once the Cloud Function in <code>functions/index.js</code> is deployed).</p>
+    showAdminModal(`
+        <h3 style="margin-bottom: 16px;">Compose Notification</h3>
+        <div class="admin-form-row">
+            <label>Send to</label>
+            <select id="notif-target-type" class="form-select">
+                <option value="all" ${!presetUid ? 'selected' : ''}>Everyone (general broadcast)</option>
+                <option value="specific" ${presetUid ? 'selected' : ''}>A specific user</option>
+            </select>
         </div>
-    `;
+        <div class="admin-form-row ${presetUid ? '' : 'hidden'}" id="notif-target-user-row">
+            <label>User</label>
+            <select id="notif-target-user" class="form-select">
+                ${users.map(u => `<option value="${u.uid}" ${u.uid === presetUid ? 'selected' : ''}>${escapeHtml(u.username || 'User')} (${escapeHtml(u.email || '')})</option>`).join('')}
+            </select>
+        </div>
+        <div class="admin-form-row">
+            <label>Message</label>
+            <textarea id="notif-message" class="form-textarea" rows="3" placeholder="e.g. New study plan just dropped — check it out!"></textarea>
+        </div>
+        <div class="flex gap-2" style="display:flex; gap:8px;">
+            <button id="notif-cancel-btn" class="btn btn-outline" style="flex:1;">Cancel</button>
+            <button id="notif-send-btn" class="btn btn-primary" style="flex:1;"><i class="fas fa-paper-plane"></i> Send</button>
+        </div>
+    `);
 
     $('#notif-target-type').addEventListener('change', (e) => {
         $('#notif-target-user-row').classList.toggle('hidden', e.target.value !== 'specific');
     });
+
+    $('#notif-cancel-btn').addEventListener('click', () => closeAdminModal());
 
     $('#notif-send-btn').addEventListener('click', async () => {
         const message = $('#notif-message').value.trim();
@@ -501,11 +549,10 @@ async function renderNotificationsTab() {
                 await Promise.all(uids.map(uid => sendAdminNotification(uid, message)));
                 showAdminToast(`Notification sent to ${uids.length} users.`, 'success');
             }
-            $('#notif-message').value = '';
+            closeAdminModal();
         } catch (error) {
             console.error('Error sending notification:', error);
             showAdminToast('Failed to send notification.', 'error');
-        } finally {
             btn.disabled = false;
             btn.innerHTML = `<i class="fas fa-paper-plane"></i> Send`;
         }
