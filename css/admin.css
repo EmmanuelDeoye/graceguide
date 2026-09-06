@@ -8,6 +8,15 @@
 
 body {
     background: var(--bg-warm-ivory);
+    /* base.css locks the body to overflow:hidden/100vh for the main
+       app's fixed SPA shell (where #page-container scrolls internally
+       instead) — this page is a normal scrolling document, so that has
+       to be undone here or NOTHING on this page can ever scroll. */
+    overflow: visible;
+    overflow-y: auto;
+    height: auto;
+    min-height: 100vh;
+    width: auto;
 }
 
 .hidden { display: none !important; }
