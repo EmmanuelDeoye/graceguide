@@ -18,9 +18,24 @@
         },
 
         "connections": {
+          ".read": "auth != null",
           "$otherUid": {
             ".write": "auth != null && (auth.uid == $uid || auth.uid == $otherUid)"
           }
+        },
+
+        "spaceStreak": {
+          ".read": "auth != null"
+        },
+
+        "readingHistory": {
+          ".read": "auth != null && (auth.uid == $uid || root.child('users').child(auth.uid).child('connections').child($uid).child('status').val() == 'accepted')"
+        },
+        "bookmarks": {
+          ".read": "auth != null && (auth.uid == $uid || root.child('users').child(auth.uid).child('connections').child($uid).child('status').val() == 'accepted')"
+        },
+        "notes": {
+          ".read": "auth != null && (auth.uid == $uid || root.child('users').child(auth.uid).child('connections').child($uid).child('status').val() == 'accepted')"
         },
 
         "fcmTokens": {
