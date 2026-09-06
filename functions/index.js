@@ -44,7 +44,8 @@ const NOTIFICATION_TITLES = {
   space_comment: 'New Comment',
   dm_message: 'New Message',
   group_message: 'New Group Message',
-  daily_reminder: 'Time to read 📖'
+  daily_reminder: 'Time to read 📖',
+  admin_broadcast: 'GraceGuide'
 };
 
 function routeForNotification(notification) {
@@ -59,6 +60,8 @@ function routeForNotification(notification) {
       return notification.conversationId ? `/#/chats/${notification.conversationId}` : '/#/chats';
     case 'group_message':
       return notification.groupId ? `/#/groups/${notification.groupId}` : '/#/community';
+    case 'admin_broadcast':
+      return '/#/home';
     default:
       return '/';
   }

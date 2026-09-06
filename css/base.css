@@ -83,6 +83,13 @@
     --max-content-width: 768px;
 }
 
+/* "Grace" keeps whatever color it naturally inherits in each context;
+   "Guide" gets this warm gold so the two-tone brand name reads
+   consistently everywhere it appears (splash, drawer, top bar, admin). */
+.brand-guide {
+    color: var(--accent-muted-gold);
+}
+
 /* Dark Mode */
 [data-theme="dark"] {
     --bg-warm-ivory: var(--dark-bg-deep-charcoal);
