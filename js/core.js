@@ -353,6 +353,8 @@ function initAuth() {
                 if (user) {
                     AppState.currentUser = user;
                     await loadUserProfile(user.uid);
+                    await syncUserDirectoryAndActivity(user);
+                    checkAndShowAdminLink(user);
                     await loadUserData();
                 } else {
                     if (typeof stopRealtimeListeners === 'function') stopRealtimeListeners();
@@ -373,6 +375,8 @@ function initAuth() {
                     if (typeof updateChatDrawerBadge === 'function') updateChatDrawerBadge();
                     if (typeof updateForumDrawerBadge === 'function') updateForumDrawerBadge();
                     if (typeof loadInterestProfile === 'function') await loadInterestProfile();
+                    const adminLink = document.getElementById('drawer-link-admin');
+                    if (adminLink) adminLink.classList.add('hidden');
                 }
 
                 updateProfileNavIcon();
@@ -423,6 +427,51 @@ async function loadUserProfile(uid) {
             bio: '',
             avatar: ''
         };
+    }
+}
+
+/**
+ * Keeps a lightweight, admin-readable directory in sync (username/email/
+ * createdAt/lastActiveAt per uid) and records one cheap "active today"
+ * marker per day. Neither of these exists anywhere else — this is what
+ * lets the admin dashboard list users and chart traffic without pulling
+ * every user's entire data tree just to see who signed up when.
+ */
+async function syncUserDirectoryAndActivity(user) {
+    try {
+        const todayKey = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+        const updates = {};
+        updates[`userDirectory/${user.uid}`] = {
+            username: AppState.userProfile?.username || user.email?.split('@')[0] || 'User',
+            email: user.email || null,
+            createdAt: AppState.userProfile?.createdAt || Date.now(),
+            lastActiveAt: Date.now()
+        };
+        updates[`analytics/activeDays/${todayKey}/${user.uid}`] = true;
+        await database.ref().update(updates);
+    } catch (error) {
+        console.error('Error syncing user directory/activity:', error);
+    }
+}
+
+/**
+ * Shows the "Admin Dashboard" drawer link only for the master email or
+ * an account granted access at admins/{uid} — everyone else never even
+ * sees it. This is a convenience/discoverability affordance only;
+ * admin.html enforces the real access check itself.
+ */
+async function checkAndShowAdminLink(user) {
+    const link = document.getElementById('drawer-link-admin');
+    if (!link) return;
+    if (user.email === 'godledtech@gmail.com') {
+        link.classList.remove('hidden');
+        return;
+    }
+    try {
+        const snap = await database.ref(`admins/${user.uid}`).once('value');
+        link.classList.toggle('hidden', !snap.exists());
+    } catch (error) {
+        link.classList.add('hidden');
     }
 }
 
@@ -546,7 +595,7 @@ function showAuthModal(options = {}) {
             <div class="auth-modal-icon">
                 <i class="fas fa-dove"></i>
             </div>
-            <h2 class="auth-title">Welcome to GraceGuide</h2>
+            <h2 class="auth-title">Welcome to Grace<span class="brand-guide">Guide</span></h2>
             <p class="auth-subtitle">${message ? escapeHtml(message) : 'Your AI Christian Companion'}</p>
 
             <div id="auth-error-banner" class="auth-error-banner hidden">
@@ -956,6 +1005,28 @@ function navigateTo(route, options = {}) {
                 DOM.pageContainer.scrollTop = AppState.scrollPositions[route] || 0;
             }
         });
+    }).catch((error) => {
+        // Safety net: a render function is async and threw/rejected
+        // (a transient network hiccup, an unexpected data shape, etc)
+        // partway through — before this fix, that left whatever the
+        // PREVIOUS page was frozen on screen with no visible error,
+        // which looked exactly like "nothing happens when I tap Home".
+        // Only touch the DOM if we're still on the route that failed —
+        // the user may have already navigated elsewhere while this was
+        // in flight.
+        console.error(`Error rendering "${route}":`, error);
+        if (AppState.currentRoute === route && DOM.pageContainer) {
+            DOM.pageContainer.innerHTML = `
+                <div class="text-center" style="padding: 80px 24px;">
+                    <i class="fas fa-triangle-exclamation" style="font-size: 40px; opacity: 0.35; margin-bottom: 16px;"></i>
+                    <h3 style="margin-bottom: 8px;">Something went wrong loading this page</h3>
+                    <p class="text-muted" style="margin-bottom: 16px;">Please try again.</p>
+                    <button class="btn btn-primary" onclick="navigateTo('${route}', { replace: true })">
+                        <i class="fas fa-rotate-right"></i> Retry
+                    </button>
+                </div>
+            `;
+        }
     });
 
     // The "add post" button only makes sense on the Space page.
@@ -994,7 +1065,15 @@ function updateNavigation(route) {
         'view-profile': AppState.viewedProfileName || 'Profile',
         quiz: 'Weekly Quiz'
     };
-    DOM.topBarTitle.textContent = titles[route] || 'GraceGuide';
+    const titleText = titles[route] || 'GraceGuide';
+    // The two-tone "Grace"/"Guide" treatment only makes sense for the
+    // literal app name (shown on Home) — every other page title is a
+    // plain label ("Bible", "Settings", etc.) and should stay plain text.
+    if (titleText === 'GraceGuide') {
+        DOM.topBarTitle.innerHTML = 'Grace<span class="brand-guide">Guide</span>';
+    } else {
+        DOM.topBarTitle.textContent = titleText;
+    }
 
     // The Back button only makes sense away from the 3 primary tabs —
     // those are always one tap away via the bottom nav, so a Back
@@ -1056,10 +1135,49 @@ function closeDrawer(fromPopstate = false) {
 async function renderHomePage() {
     DOM.bottomNav.style.display = 'flex';
     DOM.drawer.style.display = 'flex';
-    
-    const reflection = await getDailyReflection();
+
+    // Each of these hits the network/DB — wrapped individually so a
+    // transient failure on ONE (e.g. the quiz competition read) can't
+    // abort the whole page before it ever reaches the innerHTML
+    // assignment below, which previously left the page looking blank/
+    // frozen on whatever was showing before.
+    let reflection;
+    try {
+        reflection = await getDailyReflection();
+    } catch (error) {
+        console.error('Error loading daily reflection:', error);
+        reflection = "Take a moment today to pause and reflect on God's faithfulness in your life.";
+    }
     AppState.todayReflection = reflection;
-    const quizCardHTML = await renderHomeQuizCard();
+
+    let quizCardHTML;
+    try {
+        quizCardHTML = await renderHomeQuizCard();
+    } catch (error) {
+        console.error('Error loading quiz competition card:', error);
+        quizCardHTML = '';
+    }
+
+    let recommendationsHTML;
+    try {
+        recommendationsHTML = getPersonalizedRecommendations().map(rec => `
+            <div class="flex items-center justify-between p-2" style="border-bottom: 1px solid rgba(0,0,0,0.06); cursor: pointer;" onclick="openBibleChapter('${rec.book}', ${rec.chapter})">
+                <div>
+                    <div style="font-weight: 600;">${rec.title}</div>
+                    <div style="font-size: 12px; color: var(--text-slate);">${rec.reference} • ${rec.duration} min read</div>
+                </div>
+                <i class="fas fa-chevron-right" style="color: var(--text-slate);"></i>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('Error building recommendations:', error);
+        recommendationsHTML = '';
+    }
+
+    // Bail out if the user navigated away while the above was loading —
+    // otherwise we'd render Home's content into a container the user has
+    // since moved on from.
+    if (AppState.currentRoute !== 'home') return;
 
     DOM.pageContainer.innerHTML = `
         <div class="home-container" style="max-width: 768px; margin: 0 auto; padding: 16px;">
@@ -1106,15 +1224,7 @@ async function renderHomePage() {
             <div class="card">
                 <h3 style="font-weight: 700; margin-bottom: 16px;">Recommended for You</h3>
                 <div id="recommendations-list">
-                    ${getPersonalizedRecommendations().map(rec => `
-                        <div class="flex items-center justify-between p-2" style="border-bottom: 1px solid rgba(0,0,0,0.06); cursor: pointer;" onclick="openBibleChapter('${rec.book}', ${rec.chapter})">
-                            <div>
-                                <div style="font-weight: 600;">${rec.title}</div>
-                                <div style="font-size: 12px; color: var(--text-slate);">${rec.reference} • ${rec.duration} min read</div>
-                            </div>
-                            <i class="fas fa-chevron-right" style="color: var(--text-slate);"></i>
-                        </div>
-                    `).join('')}
+                    ${recommendationsHTML}
                 </div>
             </div>
         </div>

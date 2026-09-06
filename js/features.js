@@ -1862,15 +1862,20 @@ async function renderSpacePage() {
         });
     });
 
-    await loadSpaceStreak();
-    // Guard against the user having navigated to a different page while
-    // this was loading — otherwise the missing #space-streak-slot element
-    // throws and silently aborts before loadSpacePosts() ever runs.
+    // loadSpaceStreak() and loadSpacePosts() hit independent DB paths —
+    // running them in parallel instead of one-after-another was adding a
+    // full extra network round trip to every Space page load.
+    const streakPromise = loadSpaceStreak().catch((error) => {
+        console.error('Error loading space streak:', error);
+    });
+    const postsPromise = loadSpacePosts();
+
+    await streakPromise;
     if (AppState.currentRoute !== 'space') return;
     const streakSlot = $('#space-streak-slot');
     if (streakSlot) streakSlot.innerHTML = renderSpaceStreakBanner();
 
-    await loadSpacePosts();
+    await postsPromise;
 }
 
 /** Text used to match a post against the Space search bar. */
@@ -1922,7 +1927,9 @@ async function loadSpacePosts() {
 
     let posts;
     try {
-        // Primary path: ordered + limited query (needs a `timestamp` index).
+        // Primary path: ordered + limited query (needs a `timestamp` index —
+        // see database.rules.json; without it this silently falls back to
+        // the much slower full-table read below on every single load).
         const snapshot = await database.ref('spacePosts').orderByChild('timestamp').limitToLast(60).once('value');
         posts = Object.values(snapshot.val() || {});
     } catch (error) {
@@ -1948,6 +1955,8 @@ async function loadSpacePosts() {
     }
 
     try {
+        if (AppState.currentRoute !== 'space') return; // navigated away while this was loading
+
         if (posts.length === 0) {
             container.innerHTML = `
                 <div class="text-center" style="padding: 60px 20px;">

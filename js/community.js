@@ -2154,6 +2154,7 @@ async function renderNotificationPanelContent() {
     ` : '';
 
     const generalNotifs = AppState.notifications.filter(n => n.type !== 'connection_request');
+    const unreadKeys = generalNotifs.filter(n => !n.read && n.key).map(n => n.key);
 
     const sheetContent = `
         <h3 style="margin-bottom: 16px;">Notifications</h3>
@@ -2161,9 +2162,12 @@ async function renderNotificationPanelContent() {
         ${generalNotifs.length > 0 ? `
             ${pendingRequests.length > 0 ? `<h4 style="font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-slate); margin-bottom: 8px;">Recent</h4>` : ''}
             ${generalNotifs.slice(-15).reverse().map(notif => `
-                <div class="p-2" style="border-bottom: 1px solid rgba(0,0,0,0.06); cursor:${notif.postId || notif.fromUid ? 'pointer' : 'default'};" onclick="${notifClickAction(notif)}">
-                    <div style="font-weight: ${notif.read ? '400' : '600'};">${escapeHtml(notif.message)}</div>
-                    <div style="font-size: 12px; color: var(--text-slate);">${formatDate(notif.timestamp)}</div>
+                <div class="notif-row ${notif.read ? '' : 'notif-row-unread'}" onclick="${notifClickAction(notif)}">
+                    ${notif.read ? '' : '<span class="notif-unread-dot"></span>'}
+                    <div style="flex: 1; min-width: 0;">
+                        <div class="notif-row-message">${escapeHtml(notif.message)}</div>
+                        <div style="font-size: 12px; color: var(--text-slate);">${formatDate(notif.timestamp)}</div>
+                    </div>
                 </div>
             `).join('')}
         ` : (pendingRequests.length === 0 ? `<p class="text-center text-muted">No notifications</p>` : '')}
@@ -2171,17 +2175,23 @@ async function renderNotificationPanelContent() {
 
     showSheet(sheetContent);
 
-    // Mark all general notifications as read (connection requests are
-    // handled separately via Accept/Decline, not "read" status).
-    if (generalNotifs.some(n => !n.read)) {
+    // Mark general notifications as read the moment the panel is opened.
+    // Updated in AppState (and the badge recomputed) IMMEDIATELY/
+    // optimistically rather than waiting on the DB round trip — the
+    // badge previously only updated once the live listener re-fired
+    // after the write landed, which could lag or, if that write failed
+    // silently for any reason, never visibly update at all.
+    if (unreadKeys.length > 0) {
+        AppState.notifications = AppState.notifications.map(n =>
+            unreadKeys.includes(n.key) ? { ...n, read: true } : n
+        );
+        updateNotificationBadge();
+
         const updates = {};
-        generalNotifs.forEach(n => { if (!n.read && n.key) updates[`${n.key}/read`] = true; });
-        if (Object.keys(updates).length > 0) {
-            database.ref(`users/${uid}/notifications`).update(updates).then(() => {
-                AppState.notifications = AppState.notifications.map(n => ({ ...n, read: true }));
-                updateNotificationBadge();
-            }).catch(error => console.error('Error marking notifications read:', error));
-        }
+        unreadKeys.forEach(key => { updates[`${key}/read`] = true; });
+        database.ref(`users/${uid}/notifications`).update(updates).catch(error => {
+            console.error('Error marking notifications read:', error);
+        });
     }
 }
 

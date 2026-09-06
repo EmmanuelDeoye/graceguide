@@ -213,6 +213,14 @@ function refreshNotificationSettingsUI() {
  * exactly like a backgrounded one would), in addition to the in-app
  * toast and live badge refresh.
  */
+/**
+ * Foreground pushes render as a proper in-app popup banner (not a toast,
+ * not an OS notification) — the person specifically wants foreground
+ * delivery to feel like part of the app rather than a system-level
+ * interruption. Backgrounded/closed-tab delivery is unaffected and still
+ * shows a real OS notification via firebase-messaging-sw.js, since
+ * there's no "in-app" to show it in at that point.
+ */
 function initForegroundMessageHandler() {
     if (!messaging) return;
     messaging.onMessage((payload) => {
@@ -220,37 +228,57 @@ function initForegroundMessageHandler() {
         const body = payload?.notification?.body || '';
         const data = payload?.data || {};
 
-        showToast(`${title}${body ? ' — ' + body : ''}`, 'info');
-
-        if (Notification.permission === 'granted') {
-            // Prefer showing it via the SW registration when we have one —
-            // this makes it a "persistent" notification the OS keeps in the
-            // shade, consistent with how background pushes are shown.
-            if (fcmServiceWorkerRegistration && fcmServiceWorkerRegistration.showNotification) {
-                fcmServiceWorkerRegistration.showNotification(title, {
-                    body,
-                    icon: '/img/icons/icon-192.png',
-                    badge: '/img/icons/icon-96.png',
-                    data,
-                    tag: data.tag || undefined,
-                    vibrate: [100, 50, 100]
-                });
-            } else {
-                const notification = new Notification(title, {
-                    body,
-                    icon: '/img/icons/icon-192.png',
-                    data
-                });
-                notification.onclick = () => {
-                    window.focus();
-                    if (data.url) navigateTo(data.url.replace('/#/', ''));
-                    notification.close();
-                };
-            }
-        }
+        showInAppNotificationPopup(title, body, data);
 
         if (typeof AppState !== 'undefined' && AppState.currentUser && typeof loadNotifications === 'function') {
             loadNotifications();
+        }
+    });
+}
+
+/**
+ * A slide-down in-app banner for foreground push notifications. Fully
+ * self-contained (own DOM node appended to <body>, own styles inline so
+ * it doesn't depend on css load order) — tapping it navigates using the
+ * payload's data.url, same as tapping a background/system notification
+ * would via firebase-messaging-sw.js's notificationclick handler.
+ */
+function showInAppNotificationPopup(title, body, data = {}) {
+    document.getElementById('in-app-notif-popup')?.remove();
+
+    const popup = document.createElement('div');
+    popup.id = 'in-app-notif-popup';
+    popup.className = 'in-app-notif-popup';
+    popup.innerHTML = `
+        <div class="in-app-notif-icon"><i class="fas fa-dove"></i></div>
+        <div class="in-app-notif-body">
+            <div class="in-app-notif-title">${escapeHtml(title)}</div>
+            ${body ? `<div class="in-app-notif-text">${escapeHtml(body)}</div>` : ''}
+        </div>
+        <button class="in-app-notif-close" aria-label="Dismiss"><i class="fas fa-xmark"></i></button>
+    `;
+    document.body.appendChild(popup);
+
+    requestAnimationFrame(() => popup.classList.add('in-app-notif-popup-visible'));
+
+    const dismiss = () => {
+        popup.classList.remove('in-app-notif-popup-visible');
+        setTimeout(() => popup.remove(), 250);
+    };
+
+    const autoDismissTimer = setTimeout(dismiss, 6000);
+
+    popup.querySelector('.in-app-notif-close').addEventListener('click', (e) => {
+        e.stopPropagation();
+        clearTimeout(autoDismissTimer);
+        dismiss();
+    });
+
+    popup.addEventListener('click', () => {
+        clearTimeout(autoDismissTimer);
+        dismiss();
+        if (data.url && typeof navigateTo === 'function') {
+            navigateTo(data.url.replace('/#/', '').replace(/^\//, '') || 'home');
         }
     });
 }
