@@ -296,6 +296,85 @@ if ('serviceWorker' in navigator) {
 }
 
 /* ============================================
+   FIRST-OPEN NOTIFICATION PERMISSION PROMPT
+   ============================================
+   A one-time (well — "until dismissed for good") modal asking the
+   person to enable push notifications, shown shortly after the app
+   finishes loading. Skipped entirely if:
+     - the browser doesn't support Notification/messaging at all
+     - permission is already 'granted' or already 'denied' (nothing
+       useful a modal can do in either case — 'denied' can only be
+       undone from the browser's own site settings)
+     - the person previously ticked "Don't show this again"
+   ============================================ */
+const NOTIF_PROMPT_DISMISSED_KEY = 'graceguide_notif_prompt_dismissed';
+
+function shouldShowNotificationPermissionPrompt() {
+    if (!('Notification' in window)) return false;
+    if (!messaging) return false;
+    if (FCM_VAPID_KEY === 'REPLACE_WITH_YOUR_VAPID_KEY') return false;
+    if (Notification.permission !== 'default') return false; // already granted or denied
+    if (localStorage.getItem(NOTIF_PROMPT_DISMISSED_KEY) === 'true') return false;
+    return true;
+}
+
+function maybeShowNotificationPermissionModal() {
+    if (!shouldShowNotificationPermissionPrompt()) return;
+
+    // Don't stack on top of the auth modal, or on top of itself if this
+    // somehow gets called twice — and don't interrupt someone who's
+    // already mid-interaction with another modal/sheet.
+    if (document.querySelector('#modal-container:not(.hidden)') || document.querySelector('#sheet-container:not(.hidden)')) return;
+
+    showModal(`
+        <div class="text-center" style="padding: 4px 0 0;">
+            <div class="in-app-notif-icon" style="width:56px; height:56px; font-size:22px; margin:0 auto 16px;"><i class="fas fa-bell"></i></div>
+            <h3 style="margin-bottom: 8px;">Stay in the loop</h3>
+            <p class="text-muted" style="margin-bottom: 20px; line-height: 1.6;">
+                Turn on notifications for your daily verse, quiz reminders, and replies from Brethren — you can change this anytime in Settings.
+            </p>
+        </div>
+        <button class="btn btn-primary btn-block" onclick="handleNotificationPromptEnable()">
+            <i class="fas fa-bell"></i> Enable Notifications
+        </button>
+        <button class="btn btn-outline btn-block mt-2" onclick="handleNotificationPromptDismiss()">
+            Not Now
+        </button>
+        <label style="display:flex; align-items:center; gap:8px; justify-content:center; margin-top:16px; font-size:13px; color: var(--text-slate); cursor:pointer;">
+            <input type="checkbox" id="notif-prompt-dont-show" style="width:16px; height:16px;">
+            Don't show this again
+        </label>
+    `);
+}
+
+function persistNotifPromptDismissalIfChecked() {
+    const checkbox = document.getElementById('notif-prompt-dont-show');
+    if (checkbox && checkbox.checked) {
+        localStorage.setItem(NOTIF_PROMPT_DISMISSED_KEY, 'true');
+    }
+}
+
+function handleNotificationPromptDismiss() {
+    persistNotifPromptDismissalIfChecked();
+    closeModal();
+}
+
+async function handleNotificationPromptEnable() {
+    // Respect the checkbox even on the "enable" path — someone might tick
+    // it and then still tap Enable, meaning "stop asking me, I've got it."
+    persistNotifPromptDismissalIfChecked();
+    // enableNotifications() itself handles the guest case via requireAuth,
+    // which opens the auth modal — closeModal()'s history.back() is async,
+    // so opening another modal right after it (rather than via
+    // closeModalThen) can race and immediately close the new one. See the
+    // closeModalThen() doc comment in core.js for the same pattern.
+    closeModalThen(() => enableNotifications());
+}
+
+window.handleNotificationPromptEnable = handleNotificationPromptEnable;
+window.handleNotificationPromptDismiss = handleNotificationPromptDismiss;
+
+/* ============================================
    INIT
    ============================================ */
 document.addEventListener('DOMContentLoaded', () => {

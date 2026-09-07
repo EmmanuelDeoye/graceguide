@@ -1182,4 +1182,149 @@
     font-weight: 600;
 }
 
+/* Leaderboard rows are now tappable (opens the participant's profile) */
+.quiz-leaderboard-row {
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+.quiz-leaderboard-row:hover {
+    background: rgba(48,72,58,0.14);
+}
+
+.quiz-home-card .quiz-leaderboard-row:hover {
+    background: rgba(255,255,255,0.26);
+}
+
+.quiz-leaderboard-subtext {
+    font-weight: 400;
+    color: var(--text-slate);
+    font-size: 11px;
+}
+
+.quiz-home-card .quiz-leaderboard-subtext {
+    color: rgba(255,255,255,0.75);
+}
+
+/* ============================================
+   QUIZ ANSWER REVIEW
+   ============================================ */
+.quiz-review-item {
+    padding: 14px 0;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+
+.quiz-review-item:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+[data-theme="dark"] .quiz-review-item {
+    border-color: var(--dark-border);
+}
+
+.quiz-review-question {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 6px;
+}
+
+.quiz-review-correct .quiz-review-question i {
+    color: var(--primary-deep-olive);
+}
+
+.quiz-review-incorrect .quiz-review-question i {
+    color: var(--accent-terracotta);
+}
+
+.quiz-review-answer-line {
+    font-size: 13px;
+    color: var(--text-slate);
+    margin-left: 24px;
+    margin-bottom: 2px;
+}
+
+.quiz-review-correct-text {
+    color: var(--primary-deep-olive);
+    font-weight: 600;
+}
+
+.quiz-review-incorrect-text {
+    color: var(--accent-terracotta);
+    font-weight: 600;
+}
+
+.quiz-review-verse {
+    margin-left: 24px;
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--primary-deep-olive);
+    background: rgba(48,72,58,0.08);
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+}
+
+.quiz-review-verse[onclick] {
+    cursor: pointer;
+}
+
+.quiz-review-verse .fa-chevron-right {
+    margin-left: auto;
+    font-size: 10px;
+    opacity: 0.6;
+}
+
+.quiz-review-verse-text {
+    font-weight: 400;
+    font-style: italic;
+    color: var(--text-slate);
+}
+
+[data-theme="dark"] .quiz-review-verse {
+    background: rgba(255,255,255,0.08);
+}
+
+/* ============================================
+   PROFILE — QUIZ STATS
+   ============================================ */
+.profile-quiz-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+
+.profile-quiz-history-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+    font-size: 13px;
+}
+
+.profile-quiz-history-row:last-child {
+    border-bottom: none;
+}
+
+[data-theme="dark"] .profile-quiz-history-row {
+    border-color: var(--dark-border);
+}
+
+.profile-quiz-history-date {
+    color: var(--text-slate);
+    font-size: 12px;
+}
+
+.profile-quiz-history-score {
+    font-weight: 700;
+    color: var(--primary-deep-olive);
+}
+
 

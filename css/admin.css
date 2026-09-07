@@ -516,6 +516,24 @@ body {
     color: var(--primary-deep-olive);
 }
 
+.admin-question-verse {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: rgba(199,166,90,0.1);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+}
+
+.admin-question-verse .admin-icon-btn {
+    margin-left: auto;
+    width: 26px;
+    height: 26px;
+    font-size: 11px;
+}
+
 .admin-question-actions {
     display: flex;
     justify-content: flex-end;
@@ -524,6 +542,21 @@ body {
 }
 
 /* ---- Space post management ---- */
+.admin-space-mod-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 16px;
+    align-items: start;
+}
+
+.admin-space-card {
+    margin: 0;
+}
+
+.admin-space-card .space-card-header {
+    cursor: default;
+}
+
 .admin-space-post {
     display: flex;
     gap: 12px;

@@ -99,15 +99,36 @@ async function loadInterestProfile() {
     try {
         if (AppState.currentUser) {
             const snapshot = await database.ref(`users/${AppState.currentUser.uid}/interestProfile`).once('value');
-            AppState.interestProfile = snapshot.val() || { books: {}, tags: {}, updatedAt: Date.now() };
+            const data = snapshot.val();
+            AppState.interestProfile = normalizeInterestProfile(data);
+            // Self-heal: if the node was missing altogether, or was written by
+            // the old buggy path and only ever got "books" (RTDB drops keys
+            // whose value is an empty object, so "tags" would never have been
+            // persisted), write the normalized shape straight back so both
+            // "books" and "tags" exist in the database going forward.
+            const needsHeal = !data || !data.books || !data.tags
+                || Object.keys(data.books).length === 0 || Object.keys(data.tags).length === 0;
+            if (needsHeal) {
+                database.ref(`users/${AppState.currentUser.uid}/interestProfile`).set(AppState.interestProfile).catch(() => {});
+            }
         } else {
             const local = localStorage.getItem('graceguide_interest_profile');
-            AppState.interestProfile = local ? JSON.parse(local) : { books: {}, tags: {}, updatedAt: Date.now() };
+            AppState.interestProfile = normalizeInterestProfile(local ? JSON.parse(local) : null);
         }
     } catch (error) {
         console.error('Error loading interest profile:', error);
-        AppState.interestProfile = { books: {}, tags: {}, updatedAt: Date.now() };
+        AppState.interestProfile = { books: { _seed: 0 }, tags: { _seed: 0 }, updatedAt: Date.now() };
     }
+}
+
+/** Ensures an interest profile object always has non-empty "books" and
+ * "tags" maps (Realtime Database drops keys whose value is {} on write,
+ * so without a placeholder they can silently vanish from the database
+ * for brand-new users who haven't triggered both signal types yet). */
+function normalizeInterestProfile(data) {
+    const books = (data && data.books && Object.keys(data.books).length > 0) ? data.books : { _seed: 0 };
+    const tags = (data && data.tags && Object.keys(data.tags).length > 0) ? data.tags : { _seed: 0 };
+    return { books, tags, updatedAt: (data && data.updatedAt) || Date.now() };
 }
 
 /** Scores a piece of content (a Space post or a passage) against the

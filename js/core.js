@@ -343,6 +343,12 @@ function initAuth() {
         if (isTimeout) {
             showToast("Taking longer than usual to connect — you're browsing as a guest for now.", 'warning');
         }
+        // Give the initial page its own moment on screen before asking
+        // about notifications — showing this immediately, mid-transition,
+        // reads as a jarring interruption rather than a deliberate ask.
+        if (typeof maybeShowNotificationPermissionModal === 'function') {
+            setTimeout(maybeShowNotificationPermissionModal, 1500);
+        }
     };
 
     const splashTimer = setTimeout(() => enterAppOnce(true), SPLASH_TIMEOUT_MS);
@@ -706,6 +712,18 @@ function showAuthModal(options = {}) {
                     avatar: user.photoURL || '',
                     createdAt: Date.now()
                 });
+                // Seed the interest profile with BOTH buckets present. The Realtime
+                // Database silently drops any key whose value is an empty object, so
+                // writing { books: {}, tags: {} } here would only ever persist
+                // "books" once a real signal lands there — "tags" would never appear
+                // until a tag signal fires (Ask Shepherd / Space). The placeholder
+                // key keeps both nodes alive from account creation onward; consumers
+                // of interestProfile already ignore unknown tag/book keys.
+                await database.ref(`users/${user.uid}/interestProfile`).set({
+                    books: { _seed: 0 },
+                    tags: { _seed: 0 },
+                    updatedAt: Date.now()
+                });
             }
 
             showToast(`Welcome, ${user.displayName || 'friend'}!`, 'success');
@@ -755,6 +773,15 @@ function showAuthModal(options = {}) {
                     bio: '',
                     avatar: '',
                     createdAt: Date.now()
+                });
+                // See the comment on the Google sign-in flow above — this keeps
+                // both "books" and "tags" present under interestProfile from the
+                // very start, instead of "tags" only appearing once a tag signal
+                // happens to fire (which, for a brand-new user, may be a while).
+                await database.ref(`users/${userCredential.user.uid}/interestProfile`).set({
+                    books: { _seed: 0 },
+                    tags: { _seed: 0 },
+                    updatedAt: Date.now()
                 });
 
                 // Email verification — sent on every sign-up to cut down on fake accounts.

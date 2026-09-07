@@ -646,8 +646,60 @@ async function renderViewProfilePage() {
                     `}
                 </div>
             ` : ''}
+
+            <div class="card" id="view-profile-quiz-card">
+                <h3 style="font-weight: 700; margin-bottom: 16px;"><i class="fas fa-trophy"></i> Quiz Performance</h3>
+                <div class="skeleton" style="height: 70px; border-radius: 12px;"></div>
+            </div>
         </div>
     `;
+
+    fetchAndRenderViewedUserQuizStats(userId);
+}
+
+/** Quiz stats for someone else's profile only ever read the public
+    quizLeaderboardAllTime node — never users/{uid}/quizHistory, which is
+    private to its owner (see database.rules.json). */
+async function fetchAndRenderViewedUserQuizStats(userId) {
+    const card = document.getElementById('view-profile-quiz-card');
+    if (!card) return;
+    try {
+        const snap = await database.ref(`quizLeaderboardAllTime/${userId}`).once('value');
+        if (!document.getElementById('view-profile-quiz-card')) return; // navigated away
+        const stats = snap.val();
+
+        if (!stats) {
+            card.innerHTML = `
+                <h3 style="font-weight: 700; margin-bottom: 12px;"><i class="fas fa-trophy"></i> Quiz Performance</h3>
+                <p class="text-center text-muted">Hasn't taken a Weekly Bible Quiz yet.</p>
+            `;
+            return;
+        }
+
+        card.innerHTML = `
+            <h3 style="font-weight: 700; margin-bottom: 16px;"><i class="fas fa-trophy"></i> Quiz Performance</h3>
+            <div class="profile-quiz-stats-grid">
+                <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
+                    <div style="font-size: 24px; font-weight: 800; color: var(--primary-deep-olive);">${stats.totalQuizzes ?? 0}</div>
+                    <div style="font-size: 11px; color: var(--text-slate);">Quizzes Taken</div>
+                </div>
+                <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
+                    <div style="font-size: 24px; font-weight: 800; color: var(--primary-deep-olive);">${stats.accumulatedPercentage ?? 0}%</div>
+                    <div style="font-size: 11px; color: var(--text-slate);">Accumulated Score</div>
+                </div>
+                <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
+                    <div style="font-size: 24px; font-weight: 800; color: var(--primary-deep-olive);">${stats.totalScore ?? 0}/${stats.totalPossible ?? 0}</div>
+                    <div style="font-size: 11px; color: var(--text-slate);">Total Points</div>
+                </div>
+            </div>
+        `;
+    } catch (error) {
+        console.error('Error loading viewed user quiz stats:', error);
+        card.innerHTML = `
+            <h3 style="font-weight: 700; margin-bottom: 12px;"><i class="fas fa-trophy"></i> Quiz Performance</h3>
+            <p class="text-center text-muted">Couldn't load quiz performance right now.</p>
+        `;
+    }
 }
 
 async function sendConnectRequest(otherUid, displayName) {
@@ -1371,6 +1423,11 @@ function renderProfilePage() {
                 </div>
             </div>
 
+            <div class="card mb-3" id="profile-quiz-card">
+                <h3 style="font-weight: 700; margin-bottom: 16px;"><i class="fas fa-trophy"></i> Quiz Performance</h3>
+                <div class="skeleton" style="height: 70px; border-radius: 12px;"></div>
+            </div>
+
             <div class="card mb-3">
                 <h3 style="font-weight: 600; margin-bottom: 16px;">Recent Activity</h3>
                 ${AppState.readingHistory.length > 0 ? `
@@ -1405,6 +1462,73 @@ function renderProfilePage() {
     // loads know it), so fetch it lazily and fill in the stat once ready
     // rather than blocking the whole profile render on a query.
     fetchMySpacePostCount();
+    fetchAndRenderMyQuizStats();
+}
+
+/** Loads this user's quiz history (per-round scores) and their all-time
+    aggregate (accumulated percentage, tie-break time) and fills in the
+    "Quiz Performance" card on their own profile page. Lazy/async for the
+    same reason fetchMySpacePostCount() is — no need to block the rest of
+    the profile on it. */
+async function fetchAndRenderMyQuizStats() {
+    if (!AppState.currentUser) return;
+    const card = document.getElementById('profile-quiz-card');
+    if (!card) return;
+    const uid = AppState.currentUser.uid;
+
+    try {
+        const [historySnap, allTimeSnap] = await Promise.all([
+            database.ref(`users/${uid}/quizHistory`).once('value'),
+            database.ref(`quizLeaderboardAllTime/${uid}`).once('value')
+        ]);
+
+        // Page may have navigated away while this loaded.
+        if (!document.getElementById('profile-quiz-card')) return;
+
+        const history = Object.values(historySnap.val() || {}).sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
+        const allTime = allTimeSnap.val();
+
+        if (history.length === 0) {
+            card.innerHTML = `
+                <h3 style="font-weight: 700; margin-bottom: 12px;"><i class="fas fa-trophy"></i> Quiz Performance</h3>
+                <p class="text-center text-muted">You haven't taken a Weekly Bible Quiz yet — check Home for the next round.</p>
+            `;
+            return;
+        }
+
+        card.innerHTML = `
+            <h3 style="font-weight: 700; margin-bottom: 16px;"><i class="fas fa-trophy"></i> Quiz Performance</h3>
+            <div class="profile-quiz-stats-grid mb-3">
+                <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
+                    <div style="font-size: 24px; font-weight: 800; color: var(--primary-deep-olive);">${allTime?.totalQuizzes ?? history.length}</div>
+                    <div style="font-size: 11px; color: var(--text-slate);">Quizzes Taken</div>
+                </div>
+                <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
+                    <div style="font-size: 24px; font-weight: 800; color: var(--primary-deep-olive);">${allTime?.accumulatedPercentage ?? 0}%</div>
+                    <div style="font-size: 11px; color: var(--text-slate);">Accumulated Score</div>
+                </div>
+                <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
+                    <div style="font-size: 24px; font-weight: 800; color: var(--primary-deep-olive);">${allTime?.totalScore ?? 0}/${allTime?.totalPossible ?? 0}</div>
+                    <div style="font-size: 11px; color: var(--text-slate);">Total Points</div>
+                </div>
+            </div>
+            <div>
+                <h4 style="font-size: 13px; font-weight: 700; color: var(--text-slate); margin-bottom: 4px;">Round History</h4>
+                ${history.slice(0, 10).map(h => `
+                    <div class="profile-quiz-history-row">
+                        <span class="profile-quiz-history-date">${formatDate(h.submittedAt)}</span>
+                        <span class="profile-quiz-history-score">${h.score}/${h.total} <span style="font-weight:400; color:var(--text-slate);">(${h.percentage}%)</span></span>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    } catch (error) {
+        console.error('Error loading quiz stats:', error);
+        card.innerHTML = `
+            <h3 style="font-weight: 700; margin-bottom: 12px;"><i class="fas fa-trophy"></i> Quiz Performance</h3>
+            <p class="text-center text-muted">Couldn't load your quiz history right now.</p>
+        `;
+    }
 }
 
 /** Queries how many Space posts the signed-in user has authored and
@@ -1922,9 +2046,15 @@ function renderSettingsPage() {
                         </div>
                     </div>
                 ` : ''}
-                <button class="btn btn-accent btn-block" onclick="handleLogout()">
-                    <i class="fas fa-sign-out-alt"></i> Sign Out
-                </button>
+                ${AppState.currentUser ? `
+                    <button class="btn btn-accent btn-block" onclick="handleLogout()">
+                        <i class="fas fa-sign-out-alt"></i> Sign Out
+                    </button>
+                ` : `
+                    <button class="btn btn-primary btn-block" onclick="showAuthModal({message: 'Sign in to your GraceGuide account.'})">
+                        <i class="fas fa-right-to-bracket"></i> Sign In
+                    </button>
+                `}
             </div>
         </div>
     `;

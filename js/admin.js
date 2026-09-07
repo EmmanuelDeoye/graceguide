@@ -25,6 +25,7 @@ const AdminState = {
     userDirectory: null,   // cached {uid: {...}} once loaded
     spacePosts: null,      // cached array once loaded
     quizData: null,        // cached quizCompetition/current once loaded
+    quizHistory: null,     // cached quizCompetition/history once loaded
     generatedQuestions: [] // AI-generated questions staged before saving
 };
 
@@ -289,6 +290,16 @@ async function fetchQuizData(force = false) {
     return AdminState.quizData;
 }
 
+async function fetchQuizHistory(force = false) {
+    if (AdminState.quizHistory && !force) return AdminState.quizHistory;
+    const snap = await database.ref('quizCompetition/history').once('value');
+    const raw = snap.val() || {};
+    AdminState.quizHistory = Object.entries(raw)
+        .map(([startTime, round]) => ({ startTime: Number(startTime), ...round }))
+        .sort((a, b) => b.startTime - a.startTime);
+    return AdminState.quizHistory;
+}
+
 async function fetchActiveDays(daysBack = 30) {
     const snap = await database.ref('analytics/activeDays').once('value');
     const raw = snap.val() || {};
@@ -330,13 +341,17 @@ async function renderOverviewTab() {
     const results = await Promise.allSettled([
         fetchUserDirectory(),
         fetchAllSpacePosts(),
-        fetchActiveDays(30)
+        fetchActiveDays(30),
+        fetchQuizData(),
+        fetchQuizHistory()
     ]);
 
-    const [userDirResult, postsResult, activeDaysResult] = results;
+    const [userDirResult, postsResult, activeDaysResult, quizDataResult, quizHistoryResult] = results;
     const userDirectory = userDirResult.status === 'fulfilled' ? userDirResult.value : {};
     const spacePosts = postsResult.status === 'fulfilled' ? postsResult.value : [];
     const activeDays = activeDaysResult.status === 'fulfilled' ? activeDaysResult.value : [];
+    const currentQuizData = quizDataResult.status === 'fulfilled' ? quizDataResult.value : {};
+    const quizHistory = quizHistoryResult.status === 'fulfilled' ? quizHistoryResult.value : [];
 
     const failures = results.filter(r => r.status === 'rejected');
     if (failures.length > 0) {
@@ -350,6 +365,14 @@ async function renderOverviewTab() {
     const weekAgo = Date.now() - 7 * 86400000;
     const newThisWeek = Object.values(userDirectory).filter(u => u.createdAt && u.createdAt >= weekAgo).length;
 
+    // "Rounds" counts every archived round plus the current one if it has
+    // ever had a startTime set; "Attempts" sums every participant entry
+    // across all of them — the same record admin.js's Quiz tab lists in
+    // full under "Past Quiz Rounds".
+    const totalRounds = quizHistory.length + (currentQuizData.startTime ? 1 : 0);
+    const totalQuizAttempts = quizHistory.reduce((sum, r) => sum + Object.keys(r.participants || {}).length, 0)
+        + Object.keys(currentQuizData.participants || {}).length;
+
     $('#admin-content').innerHTML = `
         ${failures.length > 0 ? `
             <div class="admin-empty-state" style="background:#fff3f0; border-radius:12px; padding:16px; margin-bottom:16px; text-align:left;">
@@ -362,6 +385,8 @@ async function renderOverviewTab() {
             <div class="admin-stat-card"><div class="value">${activeToday}</div><div class="label">Active Today</div></div>
             <div class="admin-stat-card"><div class="value">${newThisWeek}</div><div class="label">New This Week</div></div>
             <div class="admin-stat-card"><div class="value">${spacePosts.length}</div><div class="label">Space Posts</div></div>
+            <div class="admin-stat-card"><div class="value">${totalRounds}</div><div class="label">Quiz Rounds</div></div>
+            <div class="admin-stat-card"><div class="value">${totalQuizAttempts}</div><div class="label">Quiz Attempts</div></div>
         </div>
 
         <div class="admin-chart-card">
@@ -574,6 +599,7 @@ async function sendAdminNotification(uid, message) {
    ============================================ */
 async function renderQuizTab() {
     const data = await fetchQuizData();
+    const history = await fetchQuizHistory();
     const startTime = data.startTime || null;
     const timerMinutes = data.timerMinutes || 25;
     const concentration = data.concentration || [];
@@ -667,6 +693,26 @@ async function renderQuizTab() {
                 </table>
             </div>
         </div>
+
+        <div class="admin-panel">
+            <h2>Past Quiz Rounds (${history.length})</h2>
+            <p class="text-muted" style="font-size:12px; margin-bottom:12px;">Every round that's been archived — a new round is archived here automatically each time you save a new schedule date above.</p>
+            <div class="admin-table-wrap">
+                <table class="admin-table">
+                    <thead><tr><th>Date</th><th>Questions</th><th>Participants</th><th></th></tr></thead>
+                    <tbody>
+                        ${history.length > 0 ? history.map(round => `
+                            <tr>
+                                <td>${formatDate(round.startTime)}</td>
+                                <td>${(round.questions || []).length}</td>
+                                <td>${Object.keys(round.participants || {}).length}</td>
+                                <td><button class="btn btn-outline btn-sm" onclick="viewQuizHistoryRound(${round.startTime})">View</button></td>
+                            </tr>
+                        `).join('') : `<tr><td colspan="4" class="admin-loading-row">No past rounds yet.</td></tr>`}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     `;
 
     $('#quiz-save-schedule-btn').addEventListener('click', saveQuizSchedule);
@@ -716,7 +762,8 @@ async function saveConcentrationList() {
     }
 }
 
-function questionCardHTML(q, i) {
+function questionCardHTML(q, i, context = 'bank') {
+    const readOnly = context === 'history';
     return `
         <div class="admin-question-card" data-question-index="${i}">
             <div class="q-text">${i + 1}. ${escapeHtml(q.question)}</div>
@@ -725,11 +772,41 @@ function questionCardHTML(q, i) {
                     <div class="admin-question-option ${oi === q.correctIndex ? 'correct' : ''}">${escapeHtml(opt)}</div>
                 `).join('')}
             </div>
-            <div class="admin-question-actions">
-                <button class="admin-icon-btn danger" onclick="removeQuestion(${i})"><i class="fas fa-trash"></i></button>
+            <div class="admin-question-verse">
+                <i class="fas fa-book-bible"></i>
+                ${q.verseReference ? `<span>${escapeHtml(q.verseReference)}${q.verseText ? ` — "${escapeHtml(q.verseText)}"` : ''}</span>` : `<span class="text-muted">No supporting verse set</span>`}
+                ${readOnly ? '' : `<button class="admin-icon-btn" title="Edit supporting verse" onclick="editQuestionVerse(${i}, '${context}')"><i class="fas fa-pen"></i></button>`}
             </div>
+            ${readOnly ? '' : `
+                <div class="admin-question-actions">
+                    <button class="admin-icon-btn danger" onclick="removeQuestion(${i})"><i class="fas fa-trash"></i></button>
+                </div>
+            `}
         </div>
     `;
+}
+
+async function editQuestionVerse(index, context) {
+    const targetList = context === 'preview' ? AdminState.generatedQuestions : await ensureWorkingQuestions();
+    const q = targetList[index];
+    if (!q) return;
+
+    const reference = prompt('Supporting verse reference (e.g. "John 3:16"), or leave blank to remove:', q.verseReference || '');
+    if (reference === null) return; // cancelled
+    q.verseReference = reference.trim();
+
+    if (q.verseReference) {
+        const verseText = prompt('Optional short verse text to show alongside the reference (leave blank to skip):', q.verseText || '');
+        q.verseText = verseText === null ? (q.verseText || '') : verseText.trim();
+    } else {
+        q.verseText = '';
+    }
+
+    if (context === 'preview') {
+        renderGeneratedPreview(AdminState.generatedQuestions);
+    } else {
+        refreshQuestionsList(targetList);
+    }
 }
 
 let workingQuestions = null;
@@ -766,9 +843,11 @@ async function addManualQuestion() {
     }
     const correctInput = prompt('Which option is correct? Enter 1-4:', '1');
     const correctIndex = Math.min(3, Math.max(0, (parseInt(correctInput) || 1) - 1));
+    const verseReference = (prompt('Supporting verse reference (optional, e.g. "John 3:16"):', '') || '').trim();
+    const verseText = verseReference ? (prompt('Optional short verse text to show with it (leave blank to skip):', '') || '').trim() : '';
 
     const questions = await ensureWorkingQuestions();
-    questions.push({ question, options, correctIndex });
+    questions.push({ question, options, correctIndex, verseReference, verseText });
     refreshQuestionsList(questions);
 }
 
@@ -812,12 +891,49 @@ async function saveQuizSchedule() {
             timerMinutes
         });
         AdminState.quizData = null;
+        AdminState.quizHistory = null; // force a refetch so the new archived round shows up
         showAdminToast('Quiz schedule saved.', 'success');
         renderTab('quiz');
     } catch (error) {
         console.error(error);
         showAdminToast('Failed to save schedule.', 'error');
     }
+}
+
+function viewQuizHistoryRound(startTime) {
+    const round = (AdminState.quizHistory || []).find(r => r.startTime === startTime);
+    if (!round) return;
+
+    const participants = Object.entries(round.participants || {}).map(([uid, p]) => ({ uid, ...p }))
+        .sort((a, b) => (b.score - a.score) || ((a.timeTakenSeconds ?? 9e9) - (b.timeTakenSeconds ?? 9e9)));
+    const questions = round.questions || [];
+
+    showAdminModal(`
+        <h3 style="margin-bottom: 4px;">Round — ${formatDate(startTime)}</h3>
+        <p class="text-muted" style="font-size:12px; margin-bottom:16px;">${questions.length} question${questions.length === 1 ? '' : 's'} • ${participants.length} participant${participants.length === 1 ? '' : 's'}</p>
+
+        <h4 style="font-size:13px; font-weight:700; margin-bottom:8px;">Leaderboard</h4>
+        <div class="admin-table-wrap" style="margin-bottom:20px;">
+            <table class="admin-table">
+                <thead><tr><th>#</th><th>Name</th><th>Score</th><th>Time Taken</th></tr></thead>
+                <tbody>
+                    ${participants.length > 0 ? participants.map((p, i) => `
+                        <tr>
+                            <td>${i + 1}</td>
+                            <td>${escapeHtml(p.name || 'Anonymous')}</td>
+                            <td>${p.score}/${p.total}</td>
+                            <td>${p.timeTakenSeconds ? Math.round(p.timeTakenSeconds / 60) + ' min' : '—'}</td>
+                        </tr>
+                    `).join('') : `<tr><td colspan="4" class="admin-loading-row">No participants took part.</td></tr>`}
+                </tbody>
+            </table>
+        </div>
+
+        <h4 style="font-size:13px; font-weight:700; margin-bottom:8px;">Questions</h4>
+        ${questions.length > 0 ? questions.map((q, i) => questionCardHTML(q, i, 'history')).join('') : `<p class="text-muted">No questions were recorded for this round.</p>`}
+
+        <button class="btn btn-outline btn-block mt-3" onclick="closeAdminModal()">Close</button>
+    `);
 }
 
 async function clearLeaderboard() {
@@ -857,6 +973,8 @@ Respond with ONLY a JSON array (no markdown, no code fences, no commentary) of e
 - "question": the question text
 - "options": an array of exactly 4 short answer strings
 - "correctIndex": the 0-based index (0-3) of the correct option in "options"
+- "verseReference": a short Bible reference that supports the correct answer (e.g. "Exodus 14:21")
+- "verseText": a brief (under 25 words) quote or paraphrase of that verse
 Vary which index is correct across questions — do not always make it 0.`;
 
     try {
@@ -870,7 +988,7 @@ Vary which index is correct across questions — do not always make it 0.`;
                     { role: 'user', content: promptText }
                 ],
                 temperature: 0.8,
-                max_tokens: Math.min(4000, count * 120)
+                max_tokens: Math.min(4000, count * 150)
             })
         });
 
@@ -883,7 +1001,14 @@ Vary which index is correct across questions — do not always make it 0.`;
 
         const clean = parsed
             .filter(q => q && q.question && Array.isArray(q.options) && q.options.length === 4 && typeof q.correctIndex === 'number')
-            .slice(0, count);
+            .slice(0, count)
+            .map(q => ({
+                question: q.question,
+                options: q.options,
+                correctIndex: q.correctIndex,
+                verseReference: typeof q.verseReference === 'string' ? q.verseReference.trim() : '',
+                verseText: typeof q.verseText === 'string' ? q.verseText.trim() : ''
+            }));
 
         AdminState.generatedQuestions = clean;
         renderGeneratedPreview(clean);
@@ -906,7 +1031,7 @@ function renderGeneratedPreview(questions) {
                 <h3 style="margin:0;">Preview (${questions.length})</h3>
                 <button class="btn btn-primary btn-sm" onclick="addGeneratedToQuestionBank()"><i class="fas fa-check"></i> Add All to Question Bank</button>
             </div>
-            ${questions.map((q, i) => questionCardHTML(q, i)).join('')}
+            ${questions.map((q, i) => questionCardHTML(q, i, 'preview')).join('')}
         </div>
     `;
 }
@@ -939,7 +1064,7 @@ async function renderSpaceTab() {
                     <button class="admin-pill" data-type="video">Videos</button>
                 </div>
             </div>
-            <div id="space-mod-list">${spaceModListHTML(posts)}</div>
+            <div id="space-mod-list" class="admin-space-mod-grid">${spaceModListHTML(posts)}</div>
         </div>
     `;
 
@@ -954,24 +1079,112 @@ async function renderSpaceTab() {
     });
 }
 
-function spaceModListHTML(posts) {
-    if (posts.length === 0) return `<p class="admin-loading-row">No posts.</p>`;
-    return posts.map(post => {
-        const preview = post.content || post.text || post.title || post.caption || '(no text content)';
-        return `
-            <div class="admin-space-post" data-post-id="${post.id}">
-                <div class="admin-space-post-body">
-                    <div class="admin-space-post-meta">${escapeHtml(post.type || 'text')} • ${escapeHtml(post.authorName || post.authorId || 'Unknown author')} • ${formatDate(post.timestamp)}</div>
-                    <div class="admin-space-post-content">${escapeHtml(preview)}</div>
-                    <div style="font-size:11px; color: var(--text-slate); margin-top:4px;">
-                        <i class="fas fa-hands-praying"></i> ${Object.keys(post.amens || {}).length} &nbsp;
-                        <i class="fas fa-comment"></i> ${Object.keys(post.comments || {}).length}
-                    </div>
+/** A self-contained copy of the main app's renderSpaceCard/renderSpaceSlides/
+    renderEmbed (js/features.js) so admin.html — which deliberately doesn't
+    load features.js/community.js, see the file header comment — can still
+    show posts exactly as they appear in the app. Interactive engagement
+    (Amen/Save/Comment) is shown as read-only counts here since moderators
+    reviewing content shouldn't be able to accidentally act as the post's
+    author; the one live action is the admin-only Delete button. */
+function adminRenderSpaceEmbed(url) {
+    if (url && (url.includes('youtube.com') || url.includes('youtu.be'))) {
+        const videoId = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/)?.[1];
+        if (videoId) {
+            return `
+                <div class="space-yt-wrap">
+                    <img class="space-yt-thumb" src="https://img.youtube.com/vi/${videoId}/hqdefault.jpg" alt="" loading="lazy">
+                    <div class="space-yt-play"><i class="fas fa-play"></i></div>
                 </div>
+            `;
+        }
+    }
+    if (url && (url.includes('twitter.com') || url.includes('x.com'))) {
+        return `<div class="space-tweet-wrap"><blockquote class="twitter-tweet" data-dnt="true"><a href="${url}"></a></blockquote></div>`;
+    }
+    return `<div class="space-link-card"><i class="fas fa-link" style="font-size: 28px;"></i><a href="${url}" target="_blank" rel="noopener">View Link</a></div>`;
+}
+
+function adminRenderSpaceSlides(post) {
+    const slides = post.slides && post.slides.length > 0 ? post.slides : [{ kind: 'text', text: post.content || post.text || post.caption || '' }];
+    return `
+        <div class="space-carousel">
+            <div class="space-carousel-track">
+                ${slides.map(slide => `
+                    <div class="space-slide">
+                        ${slide.kind === 'verse' ? `
+                            <i class="fas fa-book-bible space-slide-icon"></i>
+                            <p class="space-slide-text">"${escapeHtml(slide.text || '')}"</p>
+                            <p class="space-slide-ref">${escapeHtml(slide.book || '')} ${slide.chapter || ''}:${slide.verse || ''} • ${escapeHtml(slide.version || 'KJV')}</p>
+                        ` : `
+                            ${slide.label ? `<div class="space-slide-label">${escapeHtml(slide.label)}</div>` : ''}
+                            <p class="space-slide-text">${escapeHtml(slide.text || '')}</p>
+                        `}
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+        ${slides.length > 1 ? `
+            <div class="space-carousel-dots">
+                ${slides.map((_, i) => `<span class="space-dot ${i === 0 ? 'active' : ''}"></span>`).join('')}
+            </div>
+        ` : ''}
+    `;
+}
+
+function adminRenderSpaceCard(post) {
+    const amenCount = post.amens ? Object.keys(post.amens).length : 0;
+    const commentCount = post.comments ? Object.keys(post.comments).length : 0;
+    const authorName = escapeHtml(post.authorName || 'Anonymous');
+
+    const typeIcon = {
+        verses: 'fa-book-bible',
+        note: 'fa-sticky-note',
+        plan: 'fa-calendar-check',
+        shepherd: 'fa-dove',
+        video: 'fa-video',
+        text: 'fa-quote-left'
+    }[post.type] || 'fa-quote-left';
+
+    const mediaHTML = (post.type === 'video' && post.videoUrl)
+        ? `<div class="space-video-wrap">${adminRenderSpaceEmbed(post.videoUrl)}</div>`
+        : adminRenderSpaceSlides(post);
+
+    const readChapterBtn = post.sourceBook ? `
+        <div class="space-chapter-btn" style="cursor:default;">
+            <i class="fas fa-book-bible"></i> ${escapeHtml(post.sourceBook)} ${post.sourceChapter || ''}
+        </div>
+    ` : '';
+
+    return `
+        <div class="space-card admin-space-card" data-post-id="${post.id}">
+            <div class="space-card-header">
+                <div class="post-avatar space-author-avatar">${authorName[0]?.toUpperCase() || 'U'}</div>
+                <div style="flex:1;">
+                    <div class="space-author-name">${authorName}</div>
+                    <div class="space-author-time">${formatDate(post.timestamp)}</div>
+                </div>
+                <i class="fas ${typeIcon}" style="color: var(--text-slate); opacity:0.6;"></i>
+            </div>
+
+            ${mediaHTML}
+            ${readChapterBtn}
+
+            <div class="space-actions">
+                <span class="space-action-btn" style="cursor:default;">
+                    <i class="fas fa-hands-praying"></i> <span>Amen${amenCount > 0 ? ` · ${amenCount}` : ''}</span>
+                </span>
+                <span class="space-action-btn" style="cursor:default;">
+                    <i class="fas fa-comment"></i> <span>${commentCount > 0 ? commentCount : 'Comment'}</span>
+                </span>
                 <button class="admin-icon-btn danger" title="Delete post" onclick="deleteSpacePost('${post.id}')"><i class="fas fa-trash"></i></button>
             </div>
-        `;
-    }).join('');
+        </div>
+    `;
+}
+
+function spaceModListHTML(posts) {
+    if (posts.length === 0) return `<p class="admin-loading-row">No posts.</p>`;
+    return posts.map(post => adminRenderSpaceCard(post)).join('');
 }
 
 async function deleteSpacePost(postId) {

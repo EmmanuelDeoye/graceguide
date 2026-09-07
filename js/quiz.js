@@ -43,6 +43,7 @@ const QUIZ_DEFAULT_TIMER_MINUTES = 25;
 let quizCountdownIntervalId = null;
 let quizAttemptTimerIntervalId = null;
 let lastLeaderboardParticipants = [];
+let lastAllTimeLeaderboardEntries = [];
 
 // In-memory state for whichever quiz page view is currently mounted —
 // intentionally NOT in AppState since it's transient UI state specific
@@ -86,6 +87,79 @@ function getSortedParticipants(data) {
     const participants = Object.entries(data?.participants || {}).map(([uid, p]) => ({ uid, ...p }));
     participants.sort((a, b) => (b.score - a.score) || ((a.timeTakenSeconds ?? 9e9) - (b.timeTakenSeconds ?? 9e9)));
     return participants;
+}
+
+/** Same "reference like Exodus 1-14" parsing the concentration list uses,
+    reused here so a question's supporting verse can double as a tappable
+    link straight to that passage in the Bible reader. */
+function resolveVerseReferenceLink(reference) {
+    if (!reference) return null;
+    const parsed = parsePassageReference(reference);
+    return parsed ? { book: parsed.book, chapter: parsed.chapter } : null;
+}
+
+async function fetchAllTimeLeaderboard() {
+    try {
+        const snap = await database.ref('quizLeaderboardAllTime').once('value');
+        const raw = snap.val() || {};
+        const entries = Object.entries(raw).map(([uid, e]) => ({ uid, ...e }));
+        // Same tie-break philosophy as the per-round leaderboard: highest
+        // accumulated percentage first, and when two people are tied on
+        // that, the one who has spent LESS total time across all their
+        // attempts ranks higher.
+        entries.sort((a, b) => (b.accumulatedPercentage - a.accumulatedPercentage) || ((a.totalTimeTakenSeconds ?? 9e9) - (b.totalTimeTakenSeconds ?? 9e9)));
+        return entries;
+    } catch (e) {
+        console.error('Error loading all-time leaderboard:', e);
+        return [];
+    }
+}
+
+/** Writes this attempt into the user's own quiz history (for their
+    profile page) and folds it into their all-time aggregate leaderboard
+    entry. Best-effort — if either write fails, the round submission
+    itself (already saved by the caller) is unaffected. */
+async function recordQuizCompletion(uid, name, result, roundStartTime) {
+    const percentage = result.total > 0 ? Math.round((result.score / result.total) * 1000) / 10 : 0;
+
+    const historyEntry = {
+        startTime: roundStartTime,
+        score: result.score,
+        total: result.total,
+        percentage,
+        timeTakenSeconds: result.timeTakenSeconds,
+        submittedAt: result.submittedAt
+    };
+
+    try {
+        await database.ref(`users/${uid}/quizHistory/${roundStartTime}`).set(historyEntry);
+    } catch (e) {
+        console.error('Error saving quiz history:', e);
+    }
+
+    try {
+        const allTimeRef = database.ref(`quizLeaderboardAllTime/${uid}`);
+        const existingSnap = await allTimeRef.once('value');
+        const existing = existingSnap.val() || { totalQuizzes: 0, totalScore: 0, totalPossible: 0, totalTimeTakenSeconds: 0 };
+
+        const totalQuizzes = (existing.totalQuizzes || 0) + 1;
+        const totalScore = (existing.totalScore || 0) + result.score;
+        const totalPossible = (existing.totalPossible || 0) + result.total;
+        const totalTimeTakenSeconds = (existing.totalTimeTakenSeconds || 0) + (result.timeTakenSeconds || 0);
+        const accumulatedPercentage = totalPossible > 0 ? Math.round((totalScore / totalPossible) * 1000) / 10 : 0;
+
+        await allTimeRef.set({
+            name,
+            totalQuizzes,
+            totalScore,
+            totalPossible,
+            accumulatedPercentage,
+            totalTimeTakenSeconds,
+            lastSubmittedAt: result.submittedAt
+        });
+    } catch (e) {
+        console.error('Error updating all-time leaderboard:', e);
+    }
 }
 
 function formatCountdownParts(ms) {
@@ -164,10 +238,14 @@ async function renderHomeQuizCard() {
         `;
     }
 
-    // ended -> leaderboard
+    // ended -> leaderboard (stays here on Home until the admin schedules
+    // the next round's D-Day, at which point state flips back to
+    // 'countdown' and this card is replaced automatically).
     const participants = getSortedParticipants(data);
     lastLeaderboardParticipants = participants;
-    return renderHomeLeaderboardCard(participants);
+    const allTimeEntries = await fetchAllTimeLeaderboard();
+    lastAllTimeLeaderboardEntries = allTimeEntries;
+    return renderHomeLeaderboardCard(participants) + renderHomeAllTimeLeaderboardCard(allTimeEntries);
 }
 
 function renderHomeLeaderboardCard(participants) {
@@ -181,7 +259,7 @@ function renderHomeLeaderboardCard(participants) {
             ${top5.length > 0 ? `
                 <div class="quiz-leaderboard-list">
                     ${top5.map((p, i) => `
-                        <div class="quiz-leaderboard-row">
+                        <div class="quiz-leaderboard-row" onclick="event.stopPropagation(); viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
                             <span class="quiz-leaderboard-rank">#${i + 1}</span>
                             <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}</span>
                             <span class="quiz-leaderboard-score">${p.score}/${p.total}</span>
@@ -196,6 +274,32 @@ function renderHomeLeaderboardCard(participants) {
     `;
 }
 
+function renderHomeAllTimeLeaderboardCard(entries) {
+    const top5 = entries.slice(0, 5);
+    return `
+        <div class="card mb-4 quiz-home-card quiz-home-leaderboard quiz-home-alltime">
+            <div class="quiz-home-header">
+                <span class="quiz-home-label"><i class="fas fa-medal"></i> All-Time Ranking</span>
+                <span class="quiz-home-tag">${entries.length} player${entries.length === 1 ? '' : 's'}</span>
+            </div>
+            ${top5.length > 0 ? `
+                <div class="quiz-leaderboard-list">
+                    ${top5.map((p, i) => `
+                        <div class="quiz-leaderboard-row" onclick="event.stopPropagation(); viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
+                            <span class="quiz-leaderboard-rank">#${i + 1}</span>
+                            <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}<span class="quiz-leaderboard-subtext"> · ${p.totalQuizzes} quiz${p.totalQuizzes === 1 ? '' : 'zes'}</span></span>
+                            <span class="quiz-leaderboard-score">${p.accumulatedPercentage}%</span>
+                        </div>
+                    `).join('')}
+                </div>
+                <button class="btn btn-outline btn-sm btn-block mt-2" onclick="event.stopPropagation(); showFullAllTimeLeaderboardModal();">
+                    Show More
+                </button>
+            ` : `<p class="text-muted quiz-home-sub">No accumulated scores yet — take part in a round to get ranked here.</p>`}
+        </div>
+    `;
+}
+
 function showFullLeaderboardModal() {
     const participants = lastLeaderboardParticipants;
     showModal(`
@@ -203,14 +307,48 @@ function showFullLeaderboardModal() {
         <p class="text-muted" style="font-size: 12px; margin-bottom: 16px;">${participants.length} participant${participants.length === 1 ? '' : 's'} this round</p>
         <div style="max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;">
             ${participants.length > 0 ? participants.map((p, i) => `
-                <div class="quiz-leaderboard-row">
+                <div class="quiz-leaderboard-row" onclick="viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
                     <span class="quiz-leaderboard-rank">#${i + 1}</span>
                     <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}</span>
                     <span class="quiz-leaderboard-score">${p.score}/${p.total}</span>
                 </div>
             `).join('') : `<p class="text-center text-muted">No participants yet.</p>`}
         </div>
+        <button class="btn btn-outline btn-sm btn-block mt-3" onclick="closeModalThen(showFullAllTimeLeaderboardModal)">
+            <i class="fas fa-medal"></i> View All-Time Ranking
+        </button>
     `);
+}
+
+async function showFullAllTimeLeaderboardModal() {
+    // Modal opens immediately with a loading state, then fills in once the
+    // (possibly not-yet-cached) all-time data arrives — same pattern as
+    // everywhere else in the app that opens a modal before its data is ready.
+    showModal(`
+        <h3 style="margin-bottom: 4px;">All-Time Ranking</h3>
+        <p class="text-muted" style="font-size: 12px; margin-bottom: 16px;">Ranked by accumulated score across every round — ties broken by total time taken.</p>
+        <div id="alltime-leaderboard-body" style="max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;">
+            <div class="skeleton" style="height: 44px; border-radius: 10px;"></div>
+            <div class="skeleton" style="height: 44px; border-radius: 10px;"></div>
+            <div class="skeleton" style="height: 44px; border-radius: 10px;"></div>
+        </div>
+        <button class="btn btn-outline btn-sm btn-block mt-3" onclick="closeModalThen(showFullLeaderboardModal)">
+            <i class="fas fa-trophy"></i> Back to This Round
+        </button>
+    `);
+
+    const entries = lastAllTimeLeaderboardEntries.length > 0 ? lastAllTimeLeaderboardEntries : await fetchAllTimeLeaderboard();
+    lastAllTimeLeaderboardEntries = entries;
+
+    const body = document.getElementById('alltime-leaderboard-body');
+    if (!body) return; // modal was closed while this loaded
+    body.innerHTML = entries.length > 0 ? entries.map((p, i) => `
+        <div class="quiz-leaderboard-row" onclick="viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
+            <span class="quiz-leaderboard-rank">#${i + 1}</span>
+            <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}<span class="quiz-leaderboard-subtext"> · ${p.totalQuizzes} quiz${p.totalQuizzes === 1 ? '' : 'zes'}</span></span>
+            <span class="quiz-leaderboard-score">${p.accumulatedPercentage}%</span>
+        </div>
+    `).join('') : `<p class="text-center text-muted">No accumulated scores yet.</p>`;
 }
 
 /** Ticks whichever countdown element is on screen (home or quiz page)
@@ -327,12 +465,12 @@ function renderQuizPageForState() {
                 <h3 style="margin-bottom: 8px;">This round's quiz has closed</h3>
                 <p class="text-muted">A new round will open on the next scheduled date.</p>
             </div>
-            <div class="card">
+            <div class="card mb-3">
                 <h3 style="font-weight: 700; margin-bottom: 12px;">Leaderboard</h3>
                 ${participants.length > 0 ? `
                     <div class="quiz-leaderboard-list">
                         ${participants.map((p, i) => `
-                            <div class="quiz-leaderboard-row">
+                            <div class="quiz-leaderboard-row" onclick="viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
                                 <span class="quiz-leaderboard-rank">#${i + 1}</span>
                                 <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}</span>
                                 <span class="quiz-leaderboard-score">${p.score}/${p.total}</span>
@@ -341,8 +479,31 @@ function renderQuizPageForState() {
                     </div>
                 ` : `<p class="text-center text-muted">No one took part in this round.</p>`}
             </div>
+            <div class="card">
+                <h3 style="font-weight: 700; margin-bottom: 4px;"><i class="fas fa-medal"></i> All-Time Ranking</h3>
+                <p class="text-muted" style="font-size: 12px; margin-bottom: 12px;">Accumulated score across every round — ties broken by total time taken.</p>
+                <div class="quiz-leaderboard-list" id="quiz-page-alltime-list">
+                    <div class="skeleton" style="height: 44px; border-radius: 10px; margin-bottom: 6px;"></div>
+                    <div class="skeleton" style="height: 44px; border-radius: 10px;"></div>
+                </div>
+            </div>
         </div>
     `;
+    renderQuizPageAllTimeSection();
+}
+
+async function renderQuizPageAllTimeSection() {
+    const entries = await fetchAllTimeLeaderboard();
+    lastAllTimeLeaderboardEntries = entries;
+    const list = document.getElementById('quiz-page-alltime-list');
+    if (!list) return; // navigated away while this loaded
+    list.innerHTML = entries.length > 0 ? entries.map((p, i) => `
+        <div class="quiz-leaderboard-row" onclick="viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
+            <span class="quiz-leaderboard-rank">#${i + 1}</span>
+            <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}<span class="quiz-leaderboard-subtext"> · ${p.totalQuizzes} quiz${p.totalQuizzes === 1 ? '' : 'zes'}</span></span>
+            <span class="quiz-leaderboard-score">${p.accumulatedPercentage}%</span>
+        </div>
+    `).join('') : `<p class="text-center text-muted">No accumulated scores yet.</p>`;
 }
 
 function renderQuizActiveState() {
@@ -462,33 +623,88 @@ async function submitQuizAttempt(isAutoSubmit) {
 
     stopQuizAttemptTimer();
     const questions = quizPageData.questions || [];
+    const answers = { ...quizAttempt.answers };
     let score = 0;
     questions.forEach((q, qi) => {
-        if (quizAttempt.answers[qi] === q.correctIndex) score++;
+        if (answers[qi] === q.correctIndex) score++;
     });
 
     const timeTakenSeconds = Math.round((Date.now() - quizAttempt.startedAt) / 1000);
+    const uid = AppState.currentUser.uid;
+    const name = AppState.userProfile?.username || 'Anonymous';
     const result = {
-        name: AppState.userProfile?.username || 'Anonymous',
+        name,
         score,
         total: questions.length,
         submittedAt: Date.now(),
-        timeTakenSeconds
+        timeTakenSeconds,
+        answers
     };
 
     try {
-        await database.ref(`quizCompetition/current/participants/${AppState.currentUser.uid}`).set(result);
+        await database.ref(`quizCompetition/current/participants/${uid}`).set(result);
         if (!quizPageData.participants) quizPageData.participants = {};
-        quizPageData.participants[AppState.currentUser.uid] = result;
+        quizPageData.participants[uid] = result;
         renderQuizResultScreen(result, false, isAutoSubmit);
+        // Best-effort — the round submission above (the part the
+        // leaderboard reads from) has already succeeded regardless of
+        // whether this secondary bookkeeping does.
+        recordQuizCompletion(uid, name, result, quizPageData.startTime).catch(() => {});
     } catch (error) {
         console.error('Error submitting quiz:', error);
         showToast('Could not submit your quiz. Please try again.', 'error');
     }
 }
 
+/** Per-question review: your answer vs. the correct one, plus a tappable
+    link to the supporting verse when the admin attached one. */
+function renderQuizAnswerBreakdown(questions, userAnswers) {
+    if (!questions || questions.length === 0) return '';
+    userAnswers = userAnswers || {};
+
+    return `
+        <div class="card mt-3">
+            <h3 style="font-weight: 700; margin-bottom: 12px;">Review Your Answers</h3>
+            ${questions.map((q, qi) => {
+                const userIdx = userAnswers[qi];
+                const isCorrect = userIdx === q.correctIndex;
+                const userAnswerText = (userIdx !== undefined && userIdx !== null && q.options?.[userIdx] !== undefined)
+                    ? q.options[userIdx] : null;
+                const correctAnswerText = q.options?.[q.correctIndex];
+                const link = resolveVerseReferenceLink(q.verseReference);
+                const safeBook = link ? link.book.replace(/'/g, "\\'") : '';
+
+                return `
+                    <div class="quiz-review-item ${isCorrect ? 'quiz-review-correct' : 'quiz-review-incorrect'}">
+                        <div class="quiz-review-question">
+                            <i class="fas ${isCorrect ? 'fa-circle-check' : 'fa-circle-xmark'}"></i>
+                            <span><strong>${qi + 1}.</strong> ${escapeHtml(q.question)}</span>
+                        </div>
+                        <div class="quiz-review-answer-line">
+                            Your answer: <span class="${isCorrect ? 'quiz-review-correct-text' : 'quiz-review-incorrect-text'}">${escapeHtml(userAnswerText ?? 'No answer')}</span>
+                        </div>
+                        ${!isCorrect ? `
+                            <div class="quiz-review-answer-line">
+                                Correct answer: <span class="quiz-review-correct-text">${escapeHtml(correctAnswerText ?? '—')}</span>
+                            </div>
+                        ` : ''}
+                        ${q.verseReference ? `
+                            <div class="quiz-review-verse" ${link ? `onclick="openBibleChapter('${safeBook}', ${link.chapter})"` : ''}>
+                                <i class="fas fa-book-bible"></i> ${escapeHtml(q.verseReference)}
+                                ${q.verseText ? `<span class="quiz-review-verse-text">"${escapeHtml(q.verseText)}"</span>` : ''}
+                                ${link ? `<i class="fas fa-chevron-right"></i>` : ''}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
 function renderQuizResultScreen(result, alreadyTaken, wasAutoSubmit) {
     quizAttempt = null;
+    const questions = quizPageData?.questions || [];
     DOM.pageContainer.innerHTML = `
         <div class="quiz-page-container">
             <div class="card text-center">
@@ -498,11 +714,13 @@ function renderQuizResultScreen(result, alreadyTaken, wasAutoSubmit) {
                 <div class="quiz-result-score">${result.score}<span>/${result.total}</span></div>
                 <p class="text-muted" style="margin-top: 12px;">The Leaderboard will update here — and on the Home page — once this round's 24-hour window resets.</p>
             </div>
+            ${renderQuizAnswerBreakdown(questions, result.answers)}
         </div>
     `;
 }
 
 window.showFullLeaderboardModal = showFullLeaderboardModal;
+window.showFullAllTimeLeaderboardModal = showFullAllTimeLeaderboardModal;
 window.startQuizAttempt = startQuizAttempt;
 window.selectQuizAnswer = selectQuizAnswer;
 window.submitQuizAttempt = submitQuizAttempt;
