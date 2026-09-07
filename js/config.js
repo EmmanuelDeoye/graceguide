@@ -55,6 +55,8 @@ const BIBLE_VERSIONS = {
 // Notifications" button will show an error explaining this.
 const FCM_VAPID_KEY = "BBhcDhI3cU0DhE-KyF5jUEwjPLwyOoHMMrb2R--VJjkdsc0fW7hdnYzAnpD6GzJNlJO5EDrZpjFK-khTTlTqOeI";
 
+const TALK_TO_SOMEONE_WHATSAPP_NUMBER = "+2348132912880";
+
 // Initialize Firebase
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
