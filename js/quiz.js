@@ -75,6 +75,29 @@ async function fetchQuizCompetition() {
     }
 }
 
+let cachedQuizHistory = null;
+
+/** Client-side read of quizCompetition/history — every archived round,
+    newest first. Used to fall back to the last completed round's
+    leaderboard whenever the current round has no participants yet
+    (see renderHomeQuizCard). Cached in-memory for the session; admin.js
+    has its own separate cached copy (AdminState.quizHistory) since the
+    two pages never share a JS context. */
+async function fetchQuizHistory() {
+    if (cachedQuizHistory) return cachedQuizHistory;
+    try {
+        const snap = await database.ref('quizCompetition/history').once('value');
+        const raw = snap.val() || {};
+        cachedQuizHistory = Object.entries(raw)
+            .map(([startTime, round]) => ({ startTime: Number(startTime), ...round }))
+            .sort((a, b) => b.startTime - a.startTime);
+        return cachedQuizHistory;
+    } catch (e) {
+        console.error('Error loading quiz history:', e);
+        return [];
+    }
+}
+
 function getQuizState(data) {
     if (!data || !data.startTime) return 'none';
     const now = Date.now();
@@ -211,19 +234,6 @@ async function renderHomeQuizCard() {
         `;
     }
 
-    if (state === 'countdown') {
-        return `
-            <div class="card mb-4 quiz-home-card quiz-home-countdown" onclick="navigateTo('quiz')">
-                <div class="quiz-home-header">
-                    <span class="quiz-home-label"><i class="fas fa-trophy"></i> Weekly Bible Quiz</span>
-                    <span class="quiz-home-tag">Starts soon</span>
-                </div>
-                <div class="quiz-home-countdown-number" id="home-quiz-countdown" data-start="${data.startTime}">${formatBigCountdown(data.startTime - Date.now())}</div>
-                <p class="quiz-home-sub">Tap to see what to study before the clock runs out</p>
-            </div>
-        `;
-    }
-
     if (state === 'active') {
         const remaining = (data.startTime + QUIZ_WINDOW_MS) - Date.now();
         return `
@@ -238,66 +248,204 @@ async function renderHomeQuizCard() {
         `;
     }
 
-    // ended -> leaderboard (stays here on Home until the admin schedules
-    // the next round's D-Day, at which point state flips back to
-    // 'countdown' and this card is replaced automatically).
-    const participants = getSortedParticipants(data);
-    lastLeaderboardParticipants = participants;
-    const allTimeEntries = await fetchAllTimeLeaderboard();
-    lastAllTimeLeaderboardEntries = allTimeEntries;
-    return renderHomeLeaderboardCard(participants) + renderHomeAllTimeLeaderboardCard(allTimeEntries);
+    // 'countdown' (next round hasn't started) or 'ended' (current round's
+    // 24h window closed). Either way: show a countdown card if there's a
+    // genuinely future date to count down to, and — importantly — never
+    // show a blank "0 participants" leaderboard. If the CURRENT round has
+    // no participants yet (either because it hasn't started, or because
+    // it closed with nobody taking part), fall back to the most recent
+    // archived round that actually has participants, so last week's
+    // results stay visible on Home right up until the next D-Day.
+    const currentParticipants = getSortedParticipants(data);
+    let displayParticipants = currentParticipants;
+    let displayLabel = "This Week's Leaderboard";
+
+    if (currentParticipants.length === 0) {
+        try {
+            const history = await fetchQuizHistory();
+            const lastRoundWithData = history.find(r => Object.keys(r.participants || {}).length > 0);
+            if (lastRoundWithData) {
+                displayParticipants = getSortedParticipants(lastRoundWithData);
+                displayLabel = 'Last Session Leaderboard';
+            }
+        } catch (e) {
+            console.error('Error loading previous round for leaderboard fallback:', e);
+        }
+    }
+
+    const countdownHTML = state === 'countdown' ? `
+        <div class="card mb-4 quiz-home-card quiz-home-countdown" onclick="navigateTo('quiz')">
+            <div class="quiz-home-header">
+                <span class="quiz-home-label"><i class="fas fa-trophy"></i> Weekly Bible Quiz</span>
+                <span class="quiz-home-tag">Starts soon</span>
+            </div>
+            <p class="quiz-home-sub">Time until the next quiz opens:</p>
+            <div class="quiz-home-countdown-number" id="home-quiz-countdown" data-start="${data.startTime}">${formatBigCountdown(data.startTime - Date.now())}</div>
+        </div>
+    ` : '';
+
+    lastLeaderboardParticipants = displayParticipants;
+    const leaderboardHTML = renderHomeLeaderboardCard(displayParticipants, displayLabel);
+    // Load all-time data asynchronously so it doesn't block the page render
+    setTimeout(loadAllTimeLeaderboardCarousel, 0);
+    setTimeout(() => syncLeaderboardCarouselHeight(0), 0);
+    return countdownHTML + leaderboardHTML;
 }
 
-function renderHomeLeaderboardCard(participants) {
+function renderHomeLeaderboardCard(participants, label = "This Week's Leaderboard") {
     const top5 = participants.slice(0, 5);
     return `
-        <div class="card mb-4 quiz-home-card quiz-home-leaderboard">
-            <div class="quiz-home-header">
-                <span class="quiz-home-label"><i class="fas fa-trophy"></i> Quiz Leaderboard</span>
-                <span class="quiz-home-tag">${participants.length} participant${participants.length === 1 ? '' : 's'}</span>
-            </div>
-            ${top5.length > 0 ? `
-                <div class="quiz-leaderboard-list">
-                    ${top5.map((p, i) => `
-                        <div class="quiz-leaderboard-row" onclick="event.stopPropagation(); viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
-                            <span class="quiz-leaderboard-rank">#${i + 1}</span>
-                            <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}</span>
-                            <span class="quiz-leaderboard-score">${p.score}/${p.total}</span>
+        <div class="card mb-4 quiz-home-card quiz-home-leaderboard-carousel">
+            <div class="quiz-leaderboard-carousel-wrapper">
+                <div class="quiz-leaderboard-carousel-slide">
+                    <div class="quiz-home-header">
+                        <span class="quiz-home-label"><i class="fas fa-trophy"></i> ${escapeHtml(label)}</span>
+                        <span class="quiz-home-tag">${participants.length} participant${participants.length === 1 ? '' : 's'}</span>
+                    </div>
+                    ${top5.length > 0 ? `
+                        <div class="quiz-leaderboard-list">
+                            ${top5.map((p, i) => `
+                                <div class="quiz-leaderboard-row" onclick="event.stopPropagation(); viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
+                                    <span class="quiz-leaderboard-rank">#${i + 1}</span>
+                                    <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}</span>
+                                    <span class="quiz-leaderboard-score">${p.score}/${p.total}</span>
+                                </div>
+                            `).join('')}
                         </div>
-                    `).join('')}
+                        <button class="btn btn-outline btn-sm btn-block mt-2" onclick="event.stopPropagation(); showFullLeaderboardModal();">
+                            Show More
+                        </button>
+                    ` : `<p class="text-muted quiz-home-sub">No one has taken a quiz yet.</p>`}
                 </div>
-                <button class="btn btn-outline btn-sm btn-block mt-2" onclick="event.stopPropagation(); showFullLeaderboardModal();">
-                    Show More
-                </button>
-            ` : `<p class="text-muted quiz-home-sub">No one has taken this round's quiz yet.</p>`}
+                <div class="quiz-leaderboard-carousel-slide" id="alltime-slide">
+                    <div class="quiz-home-header">
+                        <span class="quiz-home-label"><i class="fas fa-medal"></i> All-Time Ranking</span>
+                        <span class="quiz-home-tag" id="alltime-count">Loading...</span>
+                    </div>
+                    <div id="alltime-carousel-content" class="quiz-leaderboard-list">
+                        <div class="skeleton" style="height: 44px; border-radius: 10px; margin-bottom: 6px;"></div>
+                        <div class="skeleton" style="height: 44px; border-radius: 10px;"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="quiz-leaderboard-carousel-dots">
+                <span class="quiz-dot active" onclick="swipeToLeaderboardSlide(0)"></span>
+                <span class="quiz-dot" onclick="swipeToLeaderboardSlide(1)"></span>
+            </div>
         </div>
     `;
 }
 
-function renderHomeAllTimeLeaderboardCard(entries) {
+async function loadAllTimeLeaderboardCarousel() {
+    const entries = await fetchAllTimeLeaderboard();
+    lastAllTimeLeaderboardEntries = entries;
     const top5 = entries.slice(0, 5);
-    return `
-        <div class="card mb-4 quiz-home-card quiz-home-leaderboard quiz-home-alltime">
-            <div class="quiz-home-header">
-                <span class="quiz-home-label"><i class="fas fa-medal"></i> All-Time Ranking</span>
-                <span class="quiz-home-tag">${entries.length} player${entries.length === 1 ? '' : 's'}</span>
-            </div>
-            ${top5.length > 0 ? `
-                <div class="quiz-leaderboard-list">
-                    ${top5.map((p, i) => `
-                        <div class="quiz-leaderboard-row" onclick="event.stopPropagation(); viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
-                            <span class="quiz-leaderboard-rank">#${i + 1}</span>
-                            <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}<span class="quiz-leaderboard-subtext"> · ${p.totalQuizzes} quiz${p.totalQuizzes === 1 ? '' : 'zes'}</span></span>
-                            <span class="quiz-leaderboard-score">${p.accumulatedPercentage}%</span>
-                        </div>
-                    `).join('')}
+    
+    const countEl = document.getElementById('alltime-count');
+    const contentEl = document.getElementById('alltime-carousel-content');
+    if (countEl) countEl.textContent = `${entries.length} player${entries.length === 1 ? '' : 's'}`;
+    
+    if (!contentEl) return;
+    
+    contentEl.innerHTML = top5.length > 0 ? `
+        <div class="quiz-leaderboard-list">
+            ${top5.map((p, i) => `
+                <div class="quiz-leaderboard-row" onclick="event.stopPropagation(); viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
+                    <span class="quiz-leaderboard-rank">#${i + 1}</span>
+                    <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}<span class="quiz-leaderboard-subtext"> · ${p.totalQuizzes} quiz${p.totalQuizzes === 1 ? '' : 'zes'}</span></span>
+                    <span class="quiz-leaderboard-score">${p.accumulatedPercentage}%</span>
                 </div>
-                <button class="btn btn-outline btn-sm btn-block mt-2" onclick="event.stopPropagation(); showFullAllTimeLeaderboardModal();">
-                    Show More
-                </button>
-            ` : `<p class="text-muted quiz-home-sub">No accumulated scores yet — take part in a round to get ranked here.</p>`}
+            `).join('')}
         </div>
-    `;
+        <button class="btn btn-outline btn-sm btn-block mt-2" onclick="event.stopPropagation(); showFullAllTimeLeaderboardModal();">
+            Show More
+        </button>
+    ` : `<p class="text-center text-muted">No accumulated scores yet.</p>`;
+
+    // The skeleton placeholder that was here before is a lot shorter than
+    // real content usually is, so the card's height needs to be
+    // re-measured now that this slide's content actually changed —
+    // otherwise a late resize only matters if this slide happens to be
+    // the visible one already.
+    syncLeaderboardCarouselHeight();
+}
+
+let currentLeaderboardSlideIndex = 0;
+
+/** Each swipe carousel slide is a full-width flex item in the same row,
+    which means plain CSS flexbox stretch would size EVERY slide (visible
+    or not) to match the tallest one — leaving the shorter, currently
+    visible slide with dead space below its content instead of the card
+    actually shrinking to fit it. Explicitly measuring and setting the
+    outer card's height to just the active slide's content height (and
+    letting overflow:hidden clip the taller sibling, which isn't visible
+    horizontally anyway) fixes that. Re-run this any time the active
+    slide changes OR its content changes size. */
+function syncLeaderboardCarouselHeight(index) {
+    const outer = document.querySelector('.quiz-home-leaderboard-carousel');
+    const slides = document.querySelectorAll('.quiz-leaderboard-carousel-slide');
+    const targetIndex = index ?? currentLeaderboardSlideIndex;
+    const target = slides[targetIndex];
+    if (!outer || !target) return;
+    outer.style.height = target.scrollHeight + 'px';
+}
+
+function swipeToLeaderboardSlide(index) {
+    const wrapper = document.querySelector('.quiz-leaderboard-carousel-wrapper');
+    const dots = document.querySelectorAll('.quiz-leaderboard-carousel-dots .quiz-dot');
+    if (!wrapper || !dots.length) return;
+    currentLeaderboardSlideIndex = index;
+    wrapper.style.transform = `translateX(-${index * 100}%)`;
+    dots.forEach((d, i) => d.classList.toggle('active', i === index));
+    syncLeaderboardCarouselHeight(index);
+}
+
+/** Lets the person drag/swipe between the two leaderboard slides, not
+    just tap the dots. Re-attached each time the carousel is (re)rendered
+    since the DOM nodes it binds to are replaced on every re-render. */
+function initLeaderboardCarouselSwipe() {
+    const wrapper = document.querySelector('.quiz-leaderboard-carousel-wrapper');
+    if (!wrapper || wrapper.dataset.swipeBound) return;
+    wrapper.dataset.swipeBound = 'true';
+    currentLeaderboardSlideIndex = 0;
+
+    let startX = 0;
+    let currentX = 0;
+    let dragging = false;
+
+    const onStart = (clientX) => {
+        dragging = true;
+        startX = clientX;
+        currentX = clientX;
+        wrapper.style.transition = 'none';
+    };
+    const onMove = (clientX) => {
+        if (!dragging) return;
+        currentX = clientX;
+        const deltaPercent = ((currentX - startX) / wrapper.offsetWidth) * 100;
+        const basePercent = -currentLeaderboardSlideIndex * 100;
+        wrapper.style.transform = `translateX(${basePercent + deltaPercent}%)`;
+    };
+    const onEnd = () => {
+        if (!dragging) return;
+        dragging = false;
+        wrapper.style.transition = '';
+        const deltaPercent = ((currentX - startX) / wrapper.offsetWidth) * 100;
+        let nextIndex = currentLeaderboardSlideIndex;
+        if (deltaPercent < -15 && currentLeaderboardSlideIndex < 1) nextIndex = currentLeaderboardSlideIndex + 1;
+        else if (deltaPercent > 15 && currentLeaderboardSlideIndex > 0) nextIndex = currentLeaderboardSlideIndex - 1;
+        swipeToLeaderboardSlide(nextIndex);
+    };
+
+    wrapper.addEventListener('touchstart', (e) => onStart(e.touches[0].clientX), { passive: true });
+    wrapper.addEventListener('touchmove', (e) => onMove(e.touches[0].clientX), { passive: true });
+    wrapper.addEventListener('touchend', onEnd);
+
+    // Mouse support too, for anyone testing on desktop
+    wrapper.addEventListener('mousedown', (e) => onStart(e.clientX));
+    wrapper.addEventListener('mousemove', (e) => { if (dragging) onMove(e.clientX); });
+    wrapper.addEventListener('mouseup', onEnd);
+    wrapper.addEventListener('mouseleave', () => { if (dragging) onEnd(); });
 }
 
 function showFullLeaderboardModal() {
@@ -394,7 +542,7 @@ async function renderQuizPage() {
     renderQuizPageForState();
 }
 
-function renderQuizPageForState() {
+async function renderQuizPageForState() {
     const data = quizPageData;
     const state = getQuizState(data);
 
@@ -413,6 +561,16 @@ function renderQuizPageForState() {
 
     if (state === 'countdown') {
         const concentration = data.concentration || [];
+        let lastSessionParticipants = [];
+        try {
+            const history = await fetchQuizHistory();
+            const lastRoundWithData = history.find(r => Object.keys(r.participants || {}).length > 0);
+            if (lastRoundWithData) lastSessionParticipants = getSortedParticipants(lastRoundWithData);
+        } catch (e) {
+            console.error('Error loading previous round for leaderboard preview:', e);
+        }
+        lastLeaderboardParticipants = lastSessionParticipants;
+
         DOM.pageContainer.innerHTML = `
             <div class="quiz-page-container">
                 <div class="quiz-coming-soon-banner">
@@ -444,6 +602,20 @@ function renderQuizPageForState() {
                         </div>
                     </div>
                 ` : ''}
+                ${lastSessionParticipants.length > 0 ? `
+                    <div class="card">
+                        <h3 style="font-weight: 700; margin-bottom: 12px;">Last Session Leaderboard</h3>
+                        <div class="quiz-leaderboard-list">
+                            ${lastSessionParticipants.slice(0, 10).map((p, i) => `
+                                <div class="quiz-leaderboard-row" onclick="viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
+                                    <span class="quiz-leaderboard-rank">#${i + 1}</span>
+                                    <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}</span>
+                                    <span class="quiz-leaderboard-score">${p.score}/${p.total}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                ` : ''}
             </div>
         `;
         startQuizCountdownTicker(() => renderQuizPage());
@@ -456,7 +628,20 @@ function renderQuizPageForState() {
     }
 
     // ended
-    const participants = getSortedParticipants(data);
+    let participants = getSortedParticipants(data);
+    let leaderboardLabel = 'Leaderboard';
+    if (participants.length === 0) {
+        try {
+            const history = await fetchQuizHistory();
+            const lastRoundWithData = history.find(r => Object.keys(r.participants || {}).length > 0);
+            if (lastRoundWithData) {
+                participants = getSortedParticipants(lastRoundWithData);
+                leaderboardLabel = 'Last Session Leaderboard';
+            }
+        } catch (e) {
+            console.error('Error loading previous round for leaderboard fallback:', e);
+        }
+    }
     lastLeaderboardParticipants = participants;
     DOM.pageContainer.innerHTML = `
         <div class="quiz-page-container">
@@ -466,7 +651,7 @@ function renderQuizPageForState() {
                 <p class="text-muted">A new round will open on the next scheduled date.</p>
             </div>
             <div class="card mb-3">
-                <h3 style="font-weight: 700; margin-bottom: 12px;">Leaderboard</h3>
+                <h3 style="font-weight: 700; margin-bottom: 12px;">${escapeHtml(leaderboardLabel)}</h3>
                 ${participants.length > 0 ? `
                     <div class="quiz-leaderboard-list">
                         ${participants.map((p, i) => `
@@ -477,7 +662,7 @@ function renderQuizPageForState() {
                             </div>
                         `).join('')}
                     </div>
-                ` : `<p class="text-center text-muted">No one took part in this round.</p>`}
+                ` : `<p class="text-center text-muted">No one has taken a quiz yet.</p>`}
             </div>
             <div class="card">
                 <h3 style="font-weight: 700; margin-bottom: 4px;"><i class="fas fa-medal"></i> All-Time Ranking</h3>
@@ -547,6 +732,7 @@ function renderQuizActiveState() {
 
 function startQuizAttempt() {
     if (!requireAuth('Sign in to take the quiz.')) return;
+    if (!requireVerifiedEmail()) return;
 
     const data = quizPageData;
     const questions = data.questions || [];

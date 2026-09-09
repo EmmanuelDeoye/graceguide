@@ -193,7 +193,7 @@ function renderAskPage() {
             <div class="chat-header">
                 <div class="chat-header-title">
                     <i class="fas fa-dove"></i>
-                    <span id="chat-conversation-title">${AppState.currentConversationId ? (AppState.aiConversations.find(c => c.id === AppState.currentConversationId)?.title || 'Shepherd') : 'Shepherd'}</span>
+                    <span id="chat-conversation-title">${AppState.currentConversationId ? escapeHtml(AppState.aiConversations.find(c => c.id === AppState.currentConversationId)?.title || 'Shepherd') : 'Shepherd'}</span>
                 </div>
                 <div class="chat-header-actions">
                     <button class="icon-btn" id="chat-voice-btn" aria-label="Voice settings">
@@ -231,7 +231,7 @@ function renderAskPage() {
             </div>
             
             <div class="chat-input-container">
-                <input type="text" id="chat-input" class="chat-input" placeholder="Ask your question..." onkeypress="if(event.key === 'Enter') sendChatMessage()">
+                <textarea id="chat-input" class="chat-input" placeholder="Ask your question..." rows="1" onkeydown="handleChatInputKeydown(event)" style="max-height: 120px; resize: none;"></textarea>
                 <button class="chat-send-btn" onclick="sendChatMessage()">
                     <i class="fas fa-paper-plane"></i>
                 </button>
@@ -378,6 +378,36 @@ function askSuggestedQuestion(question) {
     }
 }
 
+/** Coarse pointer = touch-primary (phones/tablets). Preferred over
+    feature-detecting touch events, which false-positive on hybrid
+    laptops that have a touchscreen but are primarily used with a
+    keyboard — where Enter-to-send is still the expected behavior. */
+function isTouchPrimaryDevice() {
+    return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+}
+
+function handleChatInputKeydown(event) {
+    const textarea = event.target;
+
+    // Enter without Shift = send — but only on non-touch input. On a
+    // phone's on-screen keyboard there's no comfortable Shift+Enter to
+    // reach for, so treating Enter as "send" there means a return in the
+    // middle of a multi-line thought fires the message early. Touch
+    // devices get plain default behavior: Enter just inserts a newline,
+    // and sending happens only via the send button.
+    if (event.key === 'Enter' && !event.shiftKey && !isTouchPrimaryDevice()) {
+        event.preventDefault();
+        sendChatMessage();
+        return;
+    }
+    
+    // After any input, auto-grow the textarea to fit content
+    setTimeout(() => {
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    }, 0);
+}
+
 async function sendChatMessage(override) {
     const chatInput = $('#chat-input');
 
@@ -391,7 +421,10 @@ async function sendChatMessage(override) {
         displayText = apiText = (override || chatInput?.value.trim());
     }
 
-    if (chatInput) chatInput.value = '';
+    if (chatInput) {
+        chatInput.value = '';
+        chatInput.style.height = 'auto';
+    }
     if (!displayText) return;
     
     // Add user message to chat (what the user sees)
@@ -1175,10 +1208,10 @@ function showConversationHistory() {
                     <div style="font-weight: 600;">${escapeHtml(conv.title || 'Untitled conversation')}</div>
                     <div style="font-size: 12px; color: var(--text-slate);">${formatDate(conv.updatedAt || conv.createdAt)}</div>
                 </div>
-                <button class="icon-btn" onclick="renameConversation('${conv.id}')" aria-label="Rename">
+                <button class="icon-btn" onclick="closeSheetThen(() => renameConversation('${conv.id}'))" aria-label="Rename">
                     <i class="fas fa-pen"></i>
                 </button>
-                <button class="icon-btn" onclick="deleteConversation('${conv.id}')" aria-label="Delete">
+                <button class="icon-btn" onclick="closeSheetThen(() => deleteConversation('${conv.id}'))" aria-label="Delete">
                     <i class="fas fa-trash" style="color: #f44336;"></i>
                 </button>
             </div>
@@ -1227,9 +1260,10 @@ function renameConversation(convId) {
             }
             conv.title = newTitle;
             conv.titleRefined = true;
-            closeModal();
-            showToast('Renamed', 'success');
-            showConversationHistory();
+            closeModalThen(() => {
+                showToast('Renamed', 'success');
+                showConversationHistory();
+            });
         } catch (error) {
             showToast('Failed to rename', 'error');
         }
@@ -1256,9 +1290,10 @@ async function confirmDeleteConversation(convId) {
         if (AppState.currentConversationId === convId) {
             startNewConversation();
         }
-        closeModal();
-        showToast('Conversation deleted', 'success');
-        showConversationHistory();
+        closeModalThen(() => {
+            showToast('Conversation deleted', 'success');
+            showConversationHistory();
+        });
     } catch (error) {
         showToast('Failed to delete', 'error');
     }

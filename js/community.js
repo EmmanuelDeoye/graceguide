@@ -646,60 +646,8 @@ async function renderViewProfilePage() {
                     `}
                 </div>
             ` : ''}
-
-            <div class="card" id="view-profile-quiz-card">
-                <h3 style="font-weight: 700; margin-bottom: 16px;"><i class="fas fa-trophy"></i> Quiz Performance</h3>
-                <div class="skeleton" style="height: 70px; border-radius: 12px;"></div>
-            </div>
         </div>
     `;
-
-    fetchAndRenderViewedUserQuizStats(userId);
-}
-
-/** Quiz stats for someone else's profile only ever read the public
-    quizLeaderboardAllTime node — never users/{uid}/quizHistory, which is
-    private to its owner (see database.rules.json). */
-async function fetchAndRenderViewedUserQuizStats(userId) {
-    const card = document.getElementById('view-profile-quiz-card');
-    if (!card) return;
-    try {
-        const snap = await database.ref(`quizLeaderboardAllTime/${userId}`).once('value');
-        if (!document.getElementById('view-profile-quiz-card')) return; // navigated away
-        const stats = snap.val();
-
-        if (!stats) {
-            card.innerHTML = `
-                <h3 style="font-weight: 700; margin-bottom: 12px;"><i class="fas fa-trophy"></i> Quiz Performance</h3>
-                <p class="text-center text-muted">Hasn't taken a Weekly Bible Quiz yet.</p>
-            `;
-            return;
-        }
-
-        card.innerHTML = `
-            <h3 style="font-weight: 700; margin-bottom: 16px;"><i class="fas fa-trophy"></i> Quiz Performance</h3>
-            <div class="profile-quiz-stats-grid">
-                <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
-                    <div style="font-size: 24px; font-weight: 800; color: var(--primary-deep-olive);">${stats.totalQuizzes ?? 0}</div>
-                    <div style="font-size: 11px; color: var(--text-slate);">Quizzes Taken</div>
-                </div>
-                <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
-                    <div style="font-size: 24px; font-weight: 800; color: var(--primary-deep-olive);">${stats.accumulatedPercentage ?? 0}%</div>
-                    <div style="font-size: 11px; color: var(--text-slate);">Accumulated Score</div>
-                </div>
-                <div class="text-center" style="background: rgba(48,72,58,0.08); padding: 16px; border-radius: 12px;">
-                    <div style="font-size: 24px; font-weight: 800; color: var(--primary-deep-olive);">${stats.totalScore ?? 0}/${stats.totalPossible ?? 0}</div>
-                    <div style="font-size: 11px; color: var(--text-slate);">Total Points</div>
-                </div>
-            </div>
-        `;
-    } catch (error) {
-        console.error('Error loading viewed user quiz stats:', error);
-        card.innerHTML = `
-            <h3 style="font-weight: 700; margin-bottom: 12px;"><i class="fas fa-trophy"></i> Quiz Performance</h3>
-            <p class="text-center text-muted">Couldn't load quiz performance right now.</p>
-        `;
-    }
 }
 
 async function sendConnectRequest(otherUid, displayName) {
@@ -1442,7 +1390,7 @@ function renderProfilePage() {
                 `}
             </div>
             
-            <div class="card">
+            <div class="card mb-3">
                 <h3 style="font-weight: 600; margin-bottom: 16px;">My Bookmarks</h3>
                 ${AppState.bookmarks.length > 0 ? `
                     ${AppState.bookmarks.slice(-5).reverse().map(bookmark => `
@@ -1455,6 +1403,27 @@ function renderProfilePage() {
                     <p class="text-center text-muted">No bookmarks yet</p>
                 `}
             </div>
+
+            <div class="card">
+                <h3 style="font-weight: 600; margin-bottom: 16px;">My Notes</h3>
+                ${AppState.notes.length > 0 ? `
+                    ${AppState.notes.slice(-5).reverse().map((note, idx) => `
+                        <div class="p-2" style="border-bottom: 1px solid rgba(0,0,0,0.06);">
+                            <div style="display: flex; align-items: flex-start; gap: 8px; justify-content: space-between;">
+                                <div style="flex: 1; cursor: pointer;" onclick="viewProfileNote('${escapeHtml(note.reference).replace(/'/g, "\\'")}', '${escapeHtml(note.text || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}')">
+                                    <div style="font-weight: 600;">${escapeHtml(note.reference)}</div>
+                                    ${note.text ? `<div style="font-size: 12px; color: var(--text-slate); margin-top: 4px;">${truncate(escapeHtml(note.text), 80)}</div>` : ''}
+                                </div>
+                                <button class="btn btn-outline btn-sm" title="Share to Space" onclick="shareNoteToSpace('${escapeHtml(note.reference).replace(/'/g, "\\'")}', '${escapeHtml(note.text || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}')" style="flex-shrink: 0; padding: 6px 10px;">
+                                    <i class="fas fa-share"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `).join('')}
+                ` : `
+                    <p class="text-center text-muted">No notes yet</p>
+                `}
+            </div>
         </div>
     `;
 
@@ -1463,6 +1432,85 @@ function renderProfilePage() {
     // rather than blocking the whole profile render on a query.
     fetchMySpacePostCount();
     fetchAndRenderMyQuizStats();
+}
+
+function viewProfileNote(reference, text) {
+    showModal(`
+        <h3 style="margin-bottom: 4px;">${escapeHtml(reference)}</h3>
+        <p class="text-muted" style="font-size: 12px; margin-bottom: 16px;"><i class="fas fa-book-bible"></i> ${escapeHtml(reference)}</p>
+        <div style="background: rgba(48,72,58,0.06); padding: 12px; border-radius: 10px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;">
+            ${escapeHtml(text || '')}
+        </div>
+        <button class="btn btn-outline btn-sm btn-block mt-3" onclick="shareNoteToSpace('${reference.replace(/'/g, "\\'")}', '${text.replace(/'/g, "\\'").replace(/\n/g, '\\n')}')">
+            <i class="fas fa-share"></i> Share to Space
+        </button>
+    `);
+}
+
+async function shareNoteToSpace(reference, text) {
+    if (!requireAuth('Sign in to share notes.')) return;
+
+    closeModal();
+    showModal(`
+        <h3 style="margin-bottom: 12px;">Share Note to Space</h3>
+        <div style="background: rgba(48,72,58,0.06); padding: 12px; border-radius: 10px; margin-bottom: 16px; font-size: 13px; line-height: 1.5;">
+            <strong>${escapeHtml(reference)}</strong>
+            <div style="margin-top: 8px; white-space: pre-wrap; color: var(--text-slate);">
+                ${truncate(escapeHtml(text), 200)}
+            </div>
+        </div>
+        <textarea id="share-note-caption" class="form-input" placeholder="Add a caption (optional)..." style="height: 80px; resize: vertical;"></textarea>
+        <div style="margin-top: 12px; display: flex; gap: 8px;">
+            <button class="btn btn-primary btn-block" onclick="submitSharedNote('${reference.replace(/'/g, "\\'")}', '${text.replace(/'/g, "\\'").replace(/\n/g, '\\n')}')">
+                <i class="fas fa-paper-plane"></i> Share
+            </button>
+            <button class="btn btn-outline btn-block" onclick="closeModal()">Cancel</button>
+        </div>
+    `);
+}
+
+async function submitSharedNote(reference, text) {
+    if (!AppState.currentUser) return;
+
+    const caption = document.getElementById('share-note-caption')?.value.trim() || '';
+    const postContent = caption
+        ? `${caption}\n\n"${text}"`
+        : `My note on ${reference}:\n\n"${text}"`;
+
+    // Reuse the same reference parser the rest of the app uses so the
+    // "Read Chapter" quick-jump button on the resulting card points to
+    // the right place — sourceBook must be just the book name (e.g.
+    // "John"), not the full "John 3:16" reference string.
+    const parsed = typeof parsePassageReference === 'function' ? parsePassageReference(reference) : null;
+
+    const post = {
+        id: generateId(),
+        authorId: AppState.currentUser.uid,
+        authorName: AppState.userProfile?.username || 'Anonymous',
+        timestamp: Date.now(),
+        type: 'note',
+        content: postContent,
+        slides: [],
+        sourceBook: parsed?.book || null,
+        sourceChapter: parsed?.chapter || null,
+        videoUrl: null,
+        planName: null,
+        tags: [],
+        amens: {},
+        saves: {},
+        comments: {}
+    };
+
+    try {
+        await database.ref(`spacePosts/${post.id}`).set(post);
+        if (post.sourceBook && typeof recordInterestSignal === 'function') recordInterestSignal('book', post.sourceBook, 2);
+        if (typeof bumpSpaceStreak === 'function') await bumpSpaceStreak();
+        showToast('Note shared to Space!', 'success');
+        closeModal();
+    } catch (error) {
+        console.error('Error sharing note:', error);
+        showToast('Could not share note. Please try again.', 'error');
+    }
 }
 
 /** Loads this user's quiz history (per-round scores) and their all-time

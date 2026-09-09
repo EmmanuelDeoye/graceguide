@@ -142,6 +142,10 @@ function truncate(text, length = 100) {
     return text.substring(0, length) + '...';
 }
 
+function dayKey(timestamp) {
+    return new Date(timestamp).toISOString().slice(0, 10);
+}
+
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -346,7 +350,10 @@ function initAuth() {
         // Give the initial page its own moment on screen before asking
         // about notifications — showing this immediately, mid-transition,
         // reads as a jarring interruption rather than a deliberate ask.
-        if (typeof maybeShowNotificationPermissionModal === 'function') {
+        // Skipped entirely if they're sitting at the verification gate —
+        // asking about notifications before they can even use the app
+        // is out of place.
+        if (typeof maybeShowNotificationPermissionModal === 'function' && !shouldGateForEmailVerification(AppState.currentUser)) {
             setTimeout(maybeShowNotificationPermissionModal, 1500);
         }
     };
@@ -548,6 +555,87 @@ function requireAuth(message, onAuthenticated) {
     }
     showAuthModal({ message, onSuccess: onAuthenticated });
     return false;
+}
+
+function requireVerifiedEmail() {
+    if (!AppState.currentUser) return true; // not signed in, will be caught by requireAuth
+    if (AppState.currentUser.emailVerified) return true;
+    
+    showModal(`
+        <div class="text-center" style="padding: 4px 0;">
+            <i class="fas fa-envelope" style="font-size: 40px; opacity: 0.6; margin-bottom: 12px;"></i>
+            <h3 style="margin-bottom: 8px;">Verify Your Email</h3>
+            <p class="text-muted" style="margin-bottom: 20px;">Before you can participate in the quiz, please verify your email address.</p>
+            <p style="font-size: 12px; color: var(--text-slate); margin-bottom: 12px;">A verification link was sent to <strong>${escapeHtml(AppState.currentUser.email)}</strong></p>
+        </div>
+        <button class="btn btn-primary btn-block" onclick="resendVerificationEmail()">
+            <i class="fas fa-paper-plane"></i> Send Verification Link
+        </button>
+        <button class="btn btn-outline btn-block mt-2" onclick="closeModal()">
+            Not Now
+        </button>
+    `);
+    return false;
+}
+
+/** Firebase Auth has no concept of "pending" account creation — the
+    account record unavoidably exists the instant createUserWithEmailAnd
+    Password() resolves, which is what makes it possible to send the
+    verification email in the first place. What we CAN do is make sure
+    that account is functionally useless until verified: every route
+    (see the early-return in navigateTo below) redirects to a full-screen
+    gate instead of rendering the requested page, for as long as a
+    password-based account remains unverified. Google/other OAuth sign-ins
+    are exempt since those providers verify email ownership themselves. */
+function shouldGateForEmailVerification(user) {
+    if (!user) return false;
+    if (user.emailVerified) return false;
+    return !!(user.providerData && user.providerData.some(p => p.providerId === 'password'));
+}
+
+function renderEmailVerificationGate() {
+    AppState.currentRoute = 'verify-email';
+    if (DOM.bottomNav) DOM.bottomNav.style.display = 'none';
+    DOM.pageContainer.innerHTML = `
+        <div style="min-height: 65vh; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding: 32px 20px;">
+            <div style="width:72px; height:72px; border-radius:50%; background: rgba(48,72,58,0.1); display:flex; align-items:center; justify-content:center; margin-bottom:20px;">
+                <i class="fas fa-envelope-circle-check" style="font-size:30px; color: var(--primary-deep-olive);"></i>
+            </div>
+            <h2 style="margin-bottom:8px;">Verify Your Email</h2>
+            <p class="text-muted" style="max-width: 320px; margin-bottom: 4px; line-height:1.6;">
+                We sent a verification link to<br><strong>${escapeHtml(AppState.currentUser?.email || '')}</strong>
+            </p>
+            <p class="text-muted" style="max-width: 320px; margin-bottom: 24px; line-height:1.6; font-size: 13px;">
+                Click the link in that email, then tap Continue below. Check your spam folder if you don't see it.
+            </p>
+            <button class="btn btn-primary" style="width: 100%; max-width: 300px; margin-bottom: 10px;" onclick="checkEmailVerificationStatus()">
+                <i class="fas fa-rotate"></i> I've Verified — Continue
+            </button>
+            <button class="btn btn-outline" style="width: 100%; max-width: 300px; margin-bottom: 10px;" onclick="resendVerificationEmail()">
+                <i class="fas fa-paper-plane"></i> Resend Verification Email
+            </button>
+            <button class="btn" style="width: 100%; max-width: 300px; background:none; color: var(--text-slate);" onclick="handleLogout()">
+                Sign Out
+            </button>
+        </div>
+    `;
+}
+
+async function checkEmailVerificationStatus() {
+    if (!AppState.currentUser) return;
+    try {
+        await AppState.currentUser.reload();
+        if (AppState.currentUser.emailVerified) {
+            showToast('Email verified! Welcome to GraceGuide.', 'success');
+            if (DOM.bottomNav) DOM.bottomNav.style.display = 'flex';
+            navigateTo('home', { replace: true });
+        } else {
+            showToast("Still not verified — check your inbox and click the link, then try again.", 'warning');
+        }
+    } catch (error) {
+        console.error('Error checking verification status:', error);
+        showToast('Could not check verification status. Please try again.', 'error');
+    }
 }
 
 // Turns any Firebase Auth error into a short, plain-English sentence —
@@ -945,6 +1033,14 @@ function navigateTo(route, options = {}) {
     if (AppState.sheetOpen) closeSheet(true);
     if (AppState.drawerOpen) closeDrawer(true);
 
+    // Password-based accounts that haven't verified their email get
+    // redirected to the verification gate instead of whatever page they
+    // asked for — see shouldGateForEmailVerification()'s doc comment.
+    if (typeof shouldGateForEmailVerification === 'function' && shouldGateForEmailVerification(AppState.currentUser)) {
+        renderEmailVerificationGate();
+        return;
+    }
+
     // Remember where the user was scrolled to on the page they're leaving,
     // so coming back to it later (or a same-route refresh, e.g. after
     // signing in) doesn't yank them back up to the top.
@@ -1258,6 +1354,7 @@ async function renderHomePage() {
     `;
 
     startQuizCountdownTicker(() => renderHomePage());
+    if (typeof initLeaderboardCarouselSwipe === 'function') initLeaderboardCarouselSwipe();
 }
 
 async function getDailyVerse() {
@@ -1280,18 +1377,106 @@ async function getDailyVerse() {
 }
 
 async function getDailyReflection() {
+    const todayKey = dayKey(Date.now());
+
+    // Reuse today's reflection if we've already generated one — for
+    // signed-in users that's stored in Firebase (stable across their
+    // devices), for guests it's just localStorage. Either way, this
+    // keeps the AI call to once per day per person rather than once per
+    // page load.
+    try {
+        const cached = AppState.currentUser
+            ? (await database.ref(`users/${AppState.currentUser.uid}/dailyReflection`).once('value')).val()
+            : JSON.parse(localStorage.getItem('graceguide_daily_reflection') || 'null');
+        if (cached && cached.date === todayKey && cached.text) {
+            return cached.text;
+        }
+    } catch (error) {
+        console.error('Error reading cached daily reflection:', error);
+    }
+
+    let text;
+    try {
+        text = await generateDailyReflectionWithAI();
+    } catch (error) {
+        console.error('Error generating daily reflection, using fallback pool:', error);
+        text = pickFallbackReflection(todayKey);
+    }
+
+    const entry = { date: todayKey, text };
+    try {
+        if (AppState.currentUser) {
+            await database.ref(`users/${AppState.currentUser.uid}/dailyReflection`).set(entry);
+        } else {
+            localStorage.setItem('graceguide_daily_reflection', JSON.stringify(entry));
+        }
+    } catch (error) {
+        console.error('Error caching daily reflection:', error);
+    }
+
+    return text;
+}
+
+async function generateDailyReflectionWithAI() {
+    const response = await fetch(DEEPSEEK_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+        body: JSON.stringify({
+            model: 'deepseek-chat',
+            messages: [
+                {
+                    role: 'system',
+                    content: "You write short daily devotional reflections for a Christian Bible app. Warm, encouraging, biblically grounded tone. 3-4 sentences. Ground it in a specific biblical truth, story, or principle — vary which one each time rather than defaulting to generic encouragement. End with a brief, concrete invitation to pray, reflect, or act. Plain text only: no greeting, no sign-off, no markdown, no surrounding quotation marks."
+                },
+                { role: 'user', content: "Write today's devotional reflection." }
+            ],
+            temperature: 1.0,
+            max_tokens: 220
+        })
+    });
+    if (!response.ok) throw new Error(`AI request failed (${response.status})`);
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content?.trim().replace(/^["']+|["']+$/g, '');
+    if (!text) throw new Error('Empty AI response');
+    return text;
+}
+
+// Only reached if the AI call itself fails (offline, API error, etc.) —
+// a much larger pool than before so even this fallback path takes weeks,
+// not days, to repeat. Picked by a stable hash of the date rather than
+// day-of-year % length, so the sequence doesn't reset every Jan 1st.
+function pickFallbackReflection(dateKey) {
     const reflections = [
         "Take a moment today to pause and reflect on God's faithfulness in your life. Even in the midst of challenges, He is working all things together for your good. Consider journaling three things you're grateful for.",
         "God's love for you is not based on your performance. Rest in the truth that you are deeply loved and fully known. Let this assurance free you to live boldly and love others well.",
         "In a world full of noise, find time to be still and know that He is God. Your soul needs rest. Schedule intentional quiet time today, even if it's just five minutes.",
         "Consider the areas of your life where you need God's wisdom. He promises to give wisdom generously to those who ask. Bring your decisions before Him in prayer today.",
-        "Your identity is found in Christ, not in what you do or what others think of you. Meditate on who God says you are: loved, chosen, forgiven, and called for a purpose."
+        "Your identity is found in Christ, not in what you do or what others think of you. Meditate on who God says you are: loved, chosen, forgiven, and called for a purpose.",
+        "Joseph waited years between the dream and its fulfillment, betrayed and forgotten along the way — yet God was quietly positioning him the whole time. If your season feels delayed, it may not be denied. Ask God to help you trust His timing today.",
+        "The widow at Zarephath gave from her last handful of flour before she saw the miracle. Faith often means obeying before the provision is visible. Where is God asking you to take a step before you can see the outcome?",
+        "Peter walked on water only as long as his eyes stayed on Jesus rather than the waves. The storm around you may be real, but so is the One who's still with you in it. Name one 'wave' you've been staring at, and consciously turn your attention back to Him.",
+        "David danced before the Lord without worrying who was watching. Worship isn't a performance — it's a response to who God is. Let today have one unguarded moment of gratitude toward Him.",
+        "Elijah expected God in the earthquake and fire, but found Him in a still, small voice. Sometimes we miss God because we're listening for something loud. Spend a few quiet minutes today simply listening.",
+        "The prodigal's father ran to meet him while he was still a long way off. Grace moves toward us before we've finished explaining ourselves. If shame has kept you at a distance from God, today is a good day to stop rehearsing your case and just come home.",
+        "Nehemiah rebuilt a wall while holding a trowel in one hand and a weapon in the other — steady work alongside real opposition. Progress rarely means the resistance disappears; it means you keep building anyway. What's one thing you can keep working at today despite the friction?",
+        "Ruth chose loyalty to Naomi when she had every reason to go back to what was familiar and comfortable. Faithfulness often looks like staying committed when leaving would be easier. Is there a relationship or commitment God is asking you to stay faithful to?",
+        "Gideon's army was cut down to 300 so it would be obvious the victory wasn't about numbers. When your resources feel too small for the task, that's often exactly where God does His clearest work. Bring your 'not enough' to Him today instead of hiding it.",
+        "Paul learned to be content whether he had plenty or little — contentment was something he learned, not something he was simply born with. It's a skill built through practice, not a personality trait some people luck into. What's one thing you have today that you can choose to be grateful for, regardless of circumstance?",
+        "Hannah prayed so fervently that Eli mistook her for drunk — she brought her raw, wordless grief straight to God rather than polishing it first. He can handle your unfiltered prayers. Don't wait until you know how to say it right; just bring it as it is.",
+        "Thomas needed to see before he'd believe, and Jesus met him there instead of shaming him for it. Doubt honestly brought to God isn't the opposite of faith — it's often the doorway into a deeper one. If you have questions today, bring them to Him rather than burying them.",
+        "The Israelites had to actually step into the Jordan before the water parted. Sometimes obedience has to come before the breakthrough, not after it. What's one step of obedience you've been waiting to take until you feel more certain?",
+        "Mary chose to sit and listen while Martha stayed busy with preparations — and Jesus said Mary had chosen what was better. Productivity isn't always the same as presence. Where could you trade a task today for a few unhurried minutes with God?",
+        "Job never got the explanation he demanded, but he did get God Himself — and that turned out to be enough. Not every hard season resolves with a tidy answer. If you're in a season without answers, ask God for His presence even more than His explanations.",
+        "The Good Samaritan stopped for someone his culture told him to walk past. Love that only shows up for people like us isn't yet the love the Bible describes. Who is one person outside your usual circle you could show kindness to today?",
+        "Moses argued with God about his own inadequacy right up until he finally agreed to go. God rarely calls the qualified — He qualifies the called. Where have you been holding back because you don't feel ready enough?",
+        "Daniel kept praying with his windows open even after it became illegal to do so. Consistency in private devotion is what steadies you when public pressure arrives. Is there a small daily practice with God worth protecting, even when it's inconvenient?",
+        "The woman who touched Jesus' robe in a crowd believed a small act of reaching out was enough. You don't need a dramatic gesture of faith — a quiet, honest reach toward God today is enough to be noticed by Him.",
+        "Esther was told she may have come to her position 'for such a time as this.' The specific place you're in today — however ordinary — may be exactly where God intends to use you. Ask Him to show you one way to be useful right where you are."
     ];
-    
-    const now = new Date();
-    const dayOfYear = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
-    
-    return reflections[dayOfYear % reflections.length];
+
+    let hash = 0;
+    for (let i = 0; i < dateKey.length; i++) hash = (hash * 31 + dateKey.charCodeAt(i)) >>> 0;
+    return reflections[hash % reflections.length];
 }
 
 /* ============================================

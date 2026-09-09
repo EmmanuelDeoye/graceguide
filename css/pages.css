@@ -42,6 +42,19 @@
     font-weight: 700;
     font-size: var(--text-base);
     color: var(--primary-deep-olive);
+    flex: 1;
+    min-width: 0;
+}
+
+.chat-header-title i {
+    flex-shrink: 0;
+}
+
+.chat-header-title #chat-conversation-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
 }
 
 .chat-header-actions {
@@ -325,10 +338,11 @@
 
 .chat-input-container {
     display: flex;
+    align-items: flex-end;
     gap: var(--spacing-sm);
     padding: var(--spacing-sm);
     background: var(--card-white);
-    border-radius: var(--radius-full);
+    border-radius: var(--radius-xl);
     box-shadow: var(--shadow-md);
     flex-shrink: 0;
 }
@@ -342,6 +356,16 @@
     background: transparent;
     color: var(--text-charcoal);
     font-family: var(--font-primary);
+    line-height: 1.5;
+}
+
+.chat-input::-webkit-scrollbar {
+    width: 6px;
+}
+
+.chat-input::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.2);
+    border-radius: 3px;
 }
 
 .chat-send-btn {
@@ -867,8 +891,43 @@
     background: linear-gradient(135deg, var(--accent-terracotta), #a8562f);
 }
 
-.quiz-home-leaderboard {
+/* Combined leaderboard carousel (This Week's Leaderboard <-> All-Time
+   Ranking). The outer .card's own padding/background is neutralized so
+   each slide can go full-bleed with its own distinct gradient — the
+   weekly leaderboard keeps the existing gold gradient, and the all-time
+   slide uses the site's primary color, per design request. */
+.quiz-home-leaderboard-carousel {
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+    border: none;
+    cursor: default;
+}
+
+.quiz-home-leaderboard-carousel:active {
+    transform: none;
+}
+
+.quiz-leaderboard-carousel-slide {
+    flex: 1 0 100%;
+    min-width: 100%;
     background: linear-gradient(135deg, var(--accent-muted-gold), #a8842f);
+    padding: var(--spacing-lg);
+    color: white;
+}
+
+.quiz-leaderboard-carousel-slide#alltime-slide {
+    background: linear-gradient(135deg, var(--primary-deep-olive), var(--primary-dark));
+}
+
+.quiz-leaderboard-carousel-dots {
+    background: var(--card-white);
+    margin-top: 0;
+    padding: 12px 0;
+}
+
+[data-theme="dark"] .quiz-leaderboard-carousel-dots {
+    background: var(--dark-card);
 }
 
 .quiz-home-header {
@@ -1204,6 +1263,37 @@
 
 .quiz-home-card .quiz-leaderboard-subtext {
     color: rgba(255,255,255,0.75);
+}
+
+/* Leaderboard carousel (combined This Week + All-Time swipe view).
+   Slide backgrounds/gradients and the dots bar background are defined
+   earlier alongside the other quiz-home-card gradients; this block only
+   handles the sliding mechanics and dot-indicator appearance. */
+.quiz-home-leaderboard-carousel {
+    overflow: hidden;
+    transition: height 0.25s ease;
+}
+
+.quiz-leaderboard-carousel-wrapper {
+    display: flex;
+    transition: transform 0.3s ease;
+}
+
+.quiz-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.2);
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.quiz-dot.active {
+    background: var(--primary-deep-olive);
+}
+
+[data-theme="dark"] .quiz-dot {
+    background: rgba(255,255,255,0.25);
 }
 
 /* ============================================
