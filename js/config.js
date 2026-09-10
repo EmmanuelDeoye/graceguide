@@ -48,6 +48,8 @@ const BIBLE_VERSIONS = {
   AMP: "a81b73293d3080c9-01"
 };
 
+const TALK_TO_SOMEONE_WHATSAPP_NUMBER = "+2348031741711";
+
 // Firebase Cloud Messaging (push notifications) Configuration
 // ⚠️ REPLACE WITH YOUR OWN VAPID KEY — Firebase Console → Project settings
 // → Cloud Messaging → Web configuration → "Web Push certificates" → Generate
