@@ -128,41 +128,98 @@ async function renderShareCardOntoCanvas(canvas, config) {
     const accent = SHARE_CARD_ACCENTS[config.kind] || SHARE_CARD_COLORS.gold;
     const marginX = 84;
 
-    // Background — the same dark-olive gradient used for the Shepherd
-    // promo card / quiz banners elsewhere in the app.
+    // ---- Background: richer multi-stop gradient + soft glow ----
     const bg = ctx.createLinearGradient(0, 0, W, H);
     bg.addColorStop(0, SHARE_CARD_COLORS.olive);
-    bg.addColorStop(1, SHARE_CARD_COLORS.oliveDark);
+    bg.addColorStop(0.55, SHARE_CARD_COLORS.oliveDark);
+    bg.addColorStop(1, '#182920');
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
-    // Soft accent-colored glow near the top for a little depth.
-    const glow = ctx.createRadialGradient(W / 2, 200, 40, W / 2, 200, 640);
-    glow.addColorStop(0, accent + '2A');
+    const glow = ctx.createRadialGradient(W * 0.82, H * 0.16, 40, W * 0.82, H * 0.16, 720);
+    glow.addColorStop(0, accent + '30');
     glow.addColorStop(1, accent + '00');
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, W, H);
 
-    let y = 100;
+    // ---- Background texture: large watermark icon + faint rings, so
+    // the card reads as "designed" rather than a flat color fill.
+    // Opacity is low enough that body text drawn over it stays legible. ----
+    if (config.icon) {
+        ctx.save();
+        ctx.globalAlpha = 0.09;
+        ctx.font = '460px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(config.icon, W + 60, H + 40);
+        ctx.restore();
+    }
+    ctx.save();
+    ctx.globalAlpha = 0.07;
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 2;
+    [[W * 0.1, H * 0.88, 150], [W * 0.92, H * 0.08, 90]].forEach(([cx, cy, r]) => {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
+    });
+    ctx.restore();
+
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
 
-    // Wordmark, matching the app's two-tone "Grace"/"Guide" treatment.
+    // ---- Wordmark: fixed near the top, acts as a consistent header
+    // rather than part of the vertically-centered content block below. ----
+    const wordmarkY = 96;
     ctx.font = '800 40px "Inter", sans-serif';
     ctx.fillStyle = '#FFFFFF';
-    ctx.fillText('Grace', marginX, y);
+    ctx.fillText('Grace', marginX, wordmarkY);
     const graceWidth = ctx.measureText('Grace').width;
     ctx.fillStyle = accent;
-    ctx.fillText('Guide', marginX + graceWidth, y);
+    ctx.fillText('Guide', marginX + graceWidth, wordmarkY);
 
-    y += 84;
+    // ---- Bottom brand bar position (fixed) ----
+    const barY = H - 120;
 
-    // Eyebrow pill.
+    // ---- Pre-measure the content block so it can be vertically
+    // centered in the space between the wordmark and the brand bar,
+    // instead of always starting right under the wordmark and leaving
+    // a dead gap below whatever text happens to fit. ----
+    const contentTop = wordmarkY + 70;
+    const contentBottom = barY - 50;
+    const maxTextWidth = W - marginX * 2;
+    const pillH = 46;
+
+    let blockHeight = 0;
+    if (config.eyebrow) blockHeight += pillH + 44;
+    if (config.icon) blockHeight += 82;
+
+    ctx.font = '700 56px "Playfair Display", serif';
+    const titleLines = wrapCanvasText(ctx, config.title || 'GraceGuide', maxTextWidth).slice(0, 4);
+    blockHeight += titleLines.length * 66 + 20;
+
+    let bodyLines = [];
+    if (config.body) {
+        ctx.font = 'italic 400 34px "Playfair Display", serif';
+        bodyLines = wrapCanvasText(ctx, config.body, maxTextWidth).slice(0, 7);
+        blockHeight += bodyLines.length * 48 + 12;
+    }
+
+    let footerLines = [];
+    if (config.footer) {
+        ctx.font = '600 30px "Inter", sans-serif';
+        footerLines = wrapCanvasText(ctx, config.footer, maxTextWidth).slice(0, 2);
+        blockHeight += footerLines.length * 40;
+    }
+
+    let y = contentTop + Math.max(0, (contentBottom - contentTop - blockHeight) / 2);
+
+    // ---- Eyebrow pill ----
     if (config.eyebrow) {
         const eyebrow = config.eyebrow.toUpperCase();
         ctx.font = '700 24px "Inter", sans-serif';
         const eyebrowWidth = ctx.measureText(eyebrow).width;
-        const pillPadX = 22, pillH = 46;
+        const pillPadX = 22;
         ctx.fillStyle = 'rgba(255,255,255,0.14)';
         roundRectPath(ctx, marginX, y, eyebrowWidth + pillPadX * 2, pillH, pillH / 2);
         ctx.fill();
@@ -170,32 +227,29 @@ async function renderShareCardOntoCanvas(canvas, config) {
         ctx.textBaseline = 'middle';
         ctx.fillText(eyebrow, marginX + pillPadX, y + pillH / 2 + 2);
         ctx.textBaseline = 'alphabetic';
-        y += pillH + 50;
+        y += pillH + 44;
     }
 
-    // Icon.
+    // ---- Icon ----
     if (config.icon) {
         ctx.font = '60px sans-serif';
         ctx.fillText(config.icon, marginX, y + 8);
-        y += 84;
+        y += 82;
     }
 
-    // Title — capped at 4 wrapped lines so long references/titles can't
-    // run the layout into the footer.
+    // ---- Title ----
     ctx.font = '700 56px "Playfair Display", serif';
     ctx.fillStyle = '#FFFFFF';
-    const titleLines = wrapCanvasText(ctx, config.title || 'GraceGuide', W - marginX * 2).slice(0, 4);
     titleLines.forEach(line => {
         ctx.fillText(line, marginX, y);
         y += 66;
     });
     y += 20;
 
-    // Body / quote — italic serif, capped at 7 lines.
-    if (config.body) {
+    // ---- Body / quote ----
+    if (bodyLines.length > 0) {
         ctx.font = 'italic 400 34px "Playfair Display", serif';
         ctx.fillStyle = SHARE_CARD_COLORS.cream;
-        const bodyLines = wrapCanvasText(ctx, config.body, W - marginX * 2).slice(0, 7);
         bodyLines.forEach(line => {
             ctx.fillText(line, marginX, y);
             y += 48;
@@ -203,20 +257,17 @@ async function renderShareCardOntoCanvas(canvas, config) {
         y += 12;
     }
 
-    // Footer meta line (attribution / score / etc).
-    if (config.footer) {
+    // ---- Footer meta line ----
+    if (footerLines.length > 0) {
         ctx.font = '600 30px "Inter", sans-serif';
         ctx.fillStyle = accent;
-        const footerLines = wrapCanvasText(ctx, config.footer, W - marginX * 2).slice(0, 2);
         footerLines.forEach(line => {
             ctx.fillText(line, marginX, y);
             y += 40;
         });
     }
 
-    // Bottom brand bar — always pinned to the same spot regardless of
-    // how much content is above it.
-    const barY = H - 120;
+    // ---- Bottom brand bar ----
     ctx.strokeStyle = 'rgba(255,255,255,0.18)';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -590,6 +641,29 @@ function shareQuizResultCard(result, quizId) {
     });
 }
 
+// 5b. Upcoming quiz (countdown, not yet started) — invites others to
+// join once it opens. Uses the same #/quiz/QUIZ_ID deep link as a
+// completed result; renderSharedQuizPage() (quiz.js) already resolves
+// that id against the live/current round first, so this correctly
+// lands on the not-yet-started round rather than a dead link.
+function shareUpcomingQuizCard(startTime) {
+    if (!startTime) return;
+    const dateStr = formatDate(startTime);
+
+    return openShareSheet({
+        kind: 'quiz',
+        eyebrow: 'Weekly Bible Quiz',
+        icon: '🏆',
+        title: 'Quiz Opens Soon',
+        body: `Join me for this week's GraceGuide Bible Quiz — opens ${dateStr}!`,
+        tagline: 'Think you know your Bible?'
+    }, {
+        url: resolveShareUrl('quiz-result', { quizId: startTime }),
+        shareTitle: 'GraceGuide — Weekly Quiz',
+        shareText: `Join me for this week's GraceGuide Bible Quiz — opens ${dateStr}. Think you know your Bible?`
+    });
+}
+
 // 6. Daily verse
 function shareDailyVerseCard(verse) {
     if (!verse) return;
@@ -627,7 +701,10 @@ function shareDevotionalCard(devotional) {
     if (shareId) {
         // Best-effort, same reasoning as sharePlanCard()'s snapshot
         // write — only ever the safe fields, deliberately never
-        // `devotional.body`.
+        // `devotional.body`. prayerPoints ARE included: unlike body,
+        // they're generated to be generic/non-personal from the start
+        // (see the system prompt in generateDevotionalWithAI), so
+        // there's real, usable content for anyone who opens the link.
         database.ref(`devotionalShares/${shareId}`).set({
             ownerId: AppState.currentUser.uid,
             ownerName: AppState.userProfile?.username || 'A GraceGuide user',
@@ -635,6 +712,7 @@ function shareDevotionalCard(devotional) {
             verseReference: devotional.verseReference || '',
             verseText: devotional.verseText || '',
             prayerPrompt: devotional.prayerPrompt || '',
+            prayerPoints: Array.isArray(devotional.prayerPoints) ? devotional.prayerPoints : [],
             updatedAt: Date.now()
         }).catch(error => console.error('Error saving devotional share snapshot:', error));
     }
@@ -660,5 +738,6 @@ window.shareSpacePostCard = shareSpacePostCard;
 window.shareProfileCard = shareProfileCard;
 window.sharePlanCard = sharePlanCard;
 window.shareQuizResultCard = shareQuizResultCard;
+window.shareUpcomingQuizCard = shareUpcomingQuizCard;
 window.shareDailyVerseCard = shareDailyVerseCard;
 window.shareDevotionalCard = shareDevotionalCard;

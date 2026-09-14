@@ -174,28 +174,38 @@ async function renderSharedQuizPage() {
     }
 
     const participants = getSortedParticipants(round);
+    const notStartedYet = round.startTime > Date.now();
 
     DOM.pageContainer.innerHTML = `
         <div class="quiz-page-container">
             <div class="card mb-3 text-center">
                 <i class="fas fa-trophy" style="font-size: 40px; color: var(--accent-muted-gold); margin-bottom: 12px;"></i>
                 <h3 style="margin-bottom: 4px;">Weekly Bible Quiz</h3>
-                <p class="text-muted">${formatDate(round.startTime)}</p>
+                <p class="text-muted">${notStartedYet ? `Opens ${formatDate(round.startTime)}` : formatDate(round.startTime)}</p>
             </div>
-            <div class="card">
-                <h3 style="font-weight: 700; margin-bottom: 12px;">Leaderboard</h3>
-                ${participants.length > 0 ? `
-                    <div class="quiz-leaderboard-list">
-                        ${participants.map((p, i) => `
-                            <div class="quiz-leaderboard-row" onclick="viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
-                                <span class="quiz-leaderboard-rank">#${i + 1}</span>
-                                <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}</span>
-                                <span class="quiz-leaderboard-score">${p.score}/${p.total}</span>
-                            </div>
-                        `).join('')}
-                    </div>
-                ` : `<p class="text-center text-muted">No one took part in this round.</p>`}
-            </div>
+            ${notStartedYet ? `
+                <div class="card text-center">
+                    <p class="text-muted" style="margin-bottom: 16px;">This round hasn't opened yet — check back once it starts to see the leaderboard, or head to the quiz to get ready.</p>
+                    <button class="btn btn-primary" onclick="navigateTo('quiz', { replace: true })">
+                        <i class="fas fa-trophy"></i> Go to the Quiz
+                    </button>
+                </div>
+            ` : `
+                <div class="card">
+                    <h3 style="font-weight: 700; margin-bottom: 12px;">Leaderboard</h3>
+                    ${participants.length > 0 ? `
+                        <div class="quiz-leaderboard-list">
+                            ${participants.map((p, i) => `
+                                <div class="quiz-leaderboard-row" onclick="viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
+                                    <span class="quiz-leaderboard-rank">#${i + 1}</span>
+                                    <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}</span>
+                                    <span class="quiz-leaderboard-score">${p.score}/${p.total}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : `<p class="text-center text-muted">No one took part in this round.</p>`}
+                </div>
+            `}
         </div>
     `;
 }
@@ -369,6 +379,9 @@ async function renderHomeQuizCard() {
             </div>
             <p class="quiz-home-sub">Time until the next quiz opens:</p>
             <div class="quiz-home-countdown-number" id="home-quiz-countdown" data-start="${data.startTime}">${formatBigCountdown(data.startTime - Date.now())}</div>
+            <button class="btn btn-outline btn-sm mt-2" onclick="event.stopPropagation(); shareUpcomingQuizCard(${data.startTime})">
+                <i class="fas fa-share"></i> Invite Others
+            </button>
         </div>
     ` : '';
 
@@ -671,6 +684,9 @@ async function renderQuizPageForState() {
                 <div class="quiz-page-countdown-wrap">
                     <div class="quiz-page-countdown-number" id="quiz-page-countdown" data-start="${data.startTime}">${formatBigCountdown(data.startTime - Date.now())}</div>
                     <div class="quiz-page-countdown-label">until the quiz opens</div>
+                    <button class="btn btn-outline btn-sm mt-2" onclick="shareUpcomingQuizCard(${data.startTime})">
+                        <i class="fas fa-share"></i> Invite Others
+                    </button>
                 </div>
                 ${concentration.length > 0 ? `
                     <div class="card mb-3">

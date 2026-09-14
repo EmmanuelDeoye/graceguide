@@ -1561,6 +1561,17 @@ async function renderSharedDevotionalPage() {
                 ` : ''}
             </div>
 
+            ${share.prayerPoints && share.prayerPoints.length > 0 ? `
+                <div class="card mb-3">
+                    <h3 style="font-weight: 700; margin-bottom: 12px;"><i class="fas fa-hands-praying" style="color: var(--primary-deep-olive);"></i> Prayer Points</h3>
+                    <ul class="devotional-prayer-points">
+                        ${share.prayerPoints.map(point => `
+                            <li><i class="fas fa-circle-dot"></i> <span>${escapeHtml(point)}</span></li>
+                        `).join('')}
+                    </ul>
+                </div>
+            ` : ''}
+
             <div class="shared-content-cta">
                 <p>Get your own personalized daily devotional on GraceGuide.</p>
                 <button class="btn btn-primary btn-block" onclick="navigateTo('home', { replace: true })">
@@ -1998,10 +2009,12 @@ async function generateDevotionalWithAI(personalContext, continuityEntries, date
             messages: [
                 {
                     role: 'system',
-                    content: `You are Shepherd, writing a short, warm, biblically grounded daily devotional for a specific user of the GraceGuide Bible app. Personalize it using the context given, but weave it in naturally and only where it genuinely fits — don't recite their stats back at them or force a connection to every detail. If a previous devotional's theme naturally continues today, you may build on it briefly without repeating it. If nothing personal fits well, still write a solid, grounded devotional.
+                    content: `You are Shepherd, writing a short, warm, biblically grounded daily devotional for a specific user of the GraceGuide Bible app. Personalize the "body" using the context given, but weave it in naturally and only where it genuinely fits — don't recite their stats back at them or force a connection to every detail. If a previous devotional's theme naturally continues today, you may build on it briefly without repeating it. If nothing personal fits well, still write a solid, grounded devotional.
+
+"prayerPoints" is different: keep those GENERIC and tied only to the verse/theme, never to anything personal about this user — they may be shown to other people if this devotional gets shared, so they must stand alone for anyone.
 
 Respond with ONLY valid JSON — no markdown, no code fences, no commentary — matching exactly this shape:
-{"title": "3-6 word title", "body": "2-4 short paragraphs of devotional content separated by \\n\\n", "verseReference": "e.g. Philippians 4:6-7", "verseText": "short quote or close paraphrase of that passage, under 30 words", "prayerPrompt": "one short, concrete prayer or action prompt, 1-2 sentences", "themes": ["2-4 short lowercase theme words"]}`
+{"title": "3-6 word title", "body": "2-4 short paragraphs of devotional content separated by \\n\\n", "verseReference": "e.g. Philippians 4:6-7", "verseText": "short quote or close paraphrase of that passage, under 30 words", "prayerPrompt": "one short, concrete prayer or action prompt, 1-2 sentences", "prayerPoints": ["3-4 short, general, actionable prayer points related to today's verse/theme — each under 15 words, generic enough for anyone to pray, not tied to this specific user's activity"], "themes": ["2-4 short lowercase theme words"]}`
                 },
                 {
                     role: 'user',
@@ -2009,7 +2022,7 @@ Respond with ONLY valid JSON — no markdown, no code fences, no commentary — 
                 }
             ],
             temperature: 0.9,
-            max_tokens: 500
+            max_tokens: 600
         })
     });
 
@@ -2028,6 +2041,7 @@ Respond with ONLY valid JSON — no markdown, no code fences, no commentary — 
         verseReference: parsed.verseReference ? String(parsed.verseReference).trim() : '',
         verseText: parsed.verseText ? String(parsed.verseText).trim() : '',
         prayerPrompt: parsed.prayerPrompt ? String(parsed.prayerPrompt).trim() : '',
+        prayerPoints: Array.isArray(parsed.prayerPoints) ? parsed.prayerPoints.slice(0, 5).map(p => String(p).trim()).filter(Boolean) : [],
         themes: Array.isArray(parsed.themes) ? parsed.themes.slice(0, 4).map(t => String(t).trim().toLowerCase()).filter(Boolean) : []
     };
 }
@@ -2045,6 +2059,11 @@ function pickFallbackDevotional(dateKey) {
             verseReference: 'Isaiah 40:31',
             verseText: 'Those who hope in the Lord will renew their strength; they will soar on wings like eagles.',
             prayerPrompt: "Bring one thing you're waiting on to God today, and ask Him for patience rather than a timeline.",
+            prayerPoints: [
+                'Ask God for patience in the specific season you\'re in right now.',
+                'Thank Him for the quiet work He may be doing that isn\'t visible yet.',
+                'Pray for strength to trust His timing over your own.'
+            ],
             themes: ['patience', 'trust']
         },
         {
@@ -2053,6 +2072,11 @@ function pickFallbackDevotional(dateKey) {
             verseReference: 'Romans 5:8',
             verseText: 'While we were still sinners, Christ died for us.',
             prayerPrompt: 'Thank God today for one specific way He has loved you that you did nothing to earn.',
+            prayerPoints: [
+                'Thank God for a specific way He has shown you love.',
+                'Ask Him to help you rest instead of striving to be loved.',
+                'Pray for someone who needs to know they\'re loved unconditionally.'
+            ],
             themes: ['grace', 'identity']
         },
         {
@@ -2061,6 +2085,11 @@ function pickFallbackDevotional(dateKey) {
             verseReference: 'Psalm 46:10',
             verseText: 'Be still, and know that I am God.',
             prayerPrompt: 'Set aside five uninterrupted minutes today with no agenda except being still before God.',
+            prayerPoints: [
+                'Ask God to quiet the noise crowding out His voice in your life.',
+                'Pray for the discipline to make space for stillness today.',
+                'Thank Him for being present even in the busiest moments.'
+            ],
             themes: ['stillness', 'prayer']
         },
         {
@@ -2069,6 +2098,11 @@ function pickFallbackDevotional(dateKey) {
             verseReference: 'James 1:5',
             verseText: 'If any of you lacks wisdom, let him ask God, who gives generously to all without reproach.',
             prayerPrompt: 'Name one real decision you\'re facing and specifically ask God for wisdom about it today.',
+            prayerPoints: [
+                'Ask God for clear wisdom on a decision you\'re facing.',
+                'Pray for peace while you wait for clarity.',
+                'Thank Him for giving wisdom generously, without judgment.'
+            ],
             themes: ['wisdom', 'guidance']
         },
         {
@@ -2077,6 +2111,11 @@ function pickFallbackDevotional(dateKey) {
             verseReference: 'Matthew 6:34',
             verseText: 'Do not worry about tomorrow, for tomorrow will worry about itself.',
             prayerPrompt: 'Name one worry about the future you can consciously hand over to God today, just for today.',
+            prayerPoints: [
+                'Hand over one worry about tomorrow to God, just for today.',
+                'Thank Him for His provision so far.',
+                'Ask for grace to stay present instead of anxious about what\'s ahead.'
+            ],
             themes: ['trust', 'provision']
         },
         {
@@ -2085,6 +2124,11 @@ function pickFallbackDevotional(dateKey) {
             verseReference: '2 Corinthians 12:9',
             verseText: 'My grace is sufficient for you, for my power is made perfect in weakness.',
             prayerPrompt: 'Name one area of weakness honestly before God today instead of trying to hide or fix it alone.',
+            prayerPoints: [
+                'Bring one area of weakness honestly before God.',
+                'Ask Him to meet you in it with His strength, not judgment.',
+                'Pray for courage to stop hiding it and trust His grace instead.'
+            ],
             themes: ['weakness', 'grace']
         }
     ];
@@ -2195,17 +2239,28 @@ async function renderDevotionalPage() {
                 ` : ''}
             </div>
 
-            <div class="flex gap-2 mb-4">
-                <button class="btn ${devotional.completed ? 'btn-outline' : 'btn-primary'}" style="flex: 1;" ${devotional.completed ? 'disabled' : ''} onclick="markDevotionalDone()">
+            ${devotional.prayerPoints && devotional.prayerPoints.length > 0 ? `
+                <div class="card mb-3">
+                    <h3 style="font-weight: 700; margin-bottom: 12px;"><i class="fas fa-hands-praying" style="color: var(--primary-deep-olive);"></i> Prayer Points</h3>
+                    <ul class="devotional-prayer-points">
+                        ${devotional.prayerPoints.map(point => `
+                            <li><i class="fas fa-circle-dot"></i> <span>${escapeHtml(point)}</span></li>
+                        `).join('')}
+                    </ul>
+                </div>
+            ` : ''}
+
+            <div class="devotional-action-row mb-4">
+                <button class="btn ${devotional.completed ? 'btn-outline' : 'btn-primary'}" ${devotional.completed ? 'disabled' : ''} onclick="markDevotionalDone()">
                     <i class="fas ${devotional.completed ? 'fa-check' : 'fa-circle-check'}"></i> ${devotional.completed ? 'Completed' : 'Mark as Done'}
                 </button>
-                <button class="btn btn-outline" style="flex: 1;" onclick="discussDevotionalWithShepherd()">
+                <button class="btn btn-outline" onclick="discussDevotionalWithShepherd()">
                     <i class="fas fa-dove"></i> Discuss with Shepherd
                 </button>
+                <button class="btn btn-outline" onclick="shareDevotionalCard(AppState.todayDevotional)">
+                    <i class="fas fa-share"></i> Share Devotional
+                </button>
             </div>
-            <button class="btn btn-outline btn-block mb-4" onclick="shareDevotionalCard(AppState.todayDevotional)">
-                <i class="fas fa-share"></i> Share Devotional
-            </button>
         </div>
     `;
 }
