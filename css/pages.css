@@ -1417,4 +1417,263 @@
     color: var(--primary-deep-olive);
 }
 
+/* ============================================
+   DAILY DEVOTIONAL
+   ============================================ */
+.devotional-card {
+    cursor: pointer;
+    transition: box-shadow var(--transition-fast), opacity var(--transition-fast);
+}
+
+.devotional-card:hover {
+    box-shadow: var(--shadow-md);
+}
+
+.devotional-card.devotional-card-done {
+    background: rgba(48,72,58,0.08);
+    opacity: 0.75;
+}
+
+.devotional-card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.devotional-card-icon {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    border-radius: var(--radius-full);
+    background: linear-gradient(135deg, var(--accent-muted-gold), #b8934a);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 17px;
+}
+
+.devotional-card-heading {
+    flex: 1;
+    min-width: 0;
+}
+
+.devotional-card-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-slate);
+}
+
+.devotional-card-title {
+    font-weight: 700;
+    font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.devotional-card-chevron {
+    color: var(--text-slate);
+    flex-shrink: 0;
+}
+
+.devotional-card-done-badge {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-full);
+    background: var(--primary-deep-olive);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+}
+
+.devotional-card-preview {
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--text-slate);
+    line-height: 1.5;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+/* ---- Full devotional page ---- */
+.devotional-page-container {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 16px;
+}
+
+.devotional-hero {
+    text-align: center;
+    background: linear-gradient(135deg, var(--accent-muted-gold), #b8934a);
+    color: white;
+    padding: 32px 20px;
+}
+
+.devotional-hero-icon {
+    width: 52px;
+    height: 52px;
+    margin: 0 auto 12px;
+    border-radius: var(--radius-full);
+    background: rgba(255,255,255,0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+}
+
+.devotional-hero-label {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.85;
+    margin-bottom: 6px;
+}
+
+.devotional-hero-title {
+    font-size: 22px;
+    font-weight: 800;
+    margin-bottom: 8px;
+}
+
+.devotional-hero-date {
+    font-size: 13px;
+    opacity: 0.85;
+}
+
+.devotional-paragraph {
+    color: var(--text-slate);
+    line-height: 1.7;
+    margin-bottom: 14px;
+}
+
+.devotional-paragraph:last-of-type {
+    margin-bottom: 18px;
+}
+
+.devotional-verse-block {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    background: rgba(199,166,90,0.12);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+    margin-bottom: 14px;
+}
+
+.devotional-verse-block[onclick] {
+    cursor: pointer;
+}
+
+.devotional-verse-block i.fa-book-bible {
+    color: var(--accent-muted-gold);
+    font-size: 16px;
+    margin-top: 2px;
+}
+
+.devotional-verse-text {
+    font-style: italic;
+    color: var(--text-charcoal);
+    line-height: 1.5;
+    margin-bottom: 4px;
+}
+
+.devotional-verse-ref {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--primary-deep-olive);
+}
+
+.devotional-prayer-block {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    background: rgba(48,72,58,0.08);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+}
+
+.devotional-prayer-block i {
+    color: var(--primary-deep-olive);
+    font-size: 16px;
+    margin-top: 2px;
+}
+
+.devotional-prayer-block p {
+    color: var(--text-slate);
+    line-height: 1.6;
+    font-size: 14px;
+}
+
+/* ============================================
+   SHARE CARDS (Phase 2)
+   ============================================ */
+.share-card-preview-wrap {
+    position: relative;
+    width: 100%;
+    max-width: 240px;
+    margin: 0 auto 18px;
+    aspect-ratio: 1080 / 1350;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+    background: var(--primary-deep-olive);
+}
+
+.share-card-preview-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.share-card-preview-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255,255,255,0.7);
+    font-size: 22px;
+}
+
+.share-sheet-actions {
+    max-width: 360px;
+    margin: 0 auto;
+}
+
+/* ============================================
+   DEEP-LINKED SHARED-CONTENT PAGES (Phase 3)
+   ============================================ */
+.shared-post-container {
+    max-width: 520px;
+    margin: 0 auto;
+    padding: 16px;
+}
+
+/* Reusable "come join GraceGuide" banner shown at the bottom of every
+   shared-content page (post/plan/devotional) — same layout, each page
+   just supplies its own message + button. */
+.shared-content-cta {
+    text-align: center;
+    background: rgba(48,72,58,0.08);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    margin-top: 16px;
+}
+
+.shared-content-cta p {
+    color: var(--text-slate);
+    font-size: 14px;
+    margin-bottom: 14px;
+    line-height: 1.5;
+}
+
 
