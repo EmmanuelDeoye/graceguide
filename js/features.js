@@ -513,6 +513,21 @@ function discussReflectionWithShepherd() {
     }, 400);
 }
 
+function discussDevotionalWithShepherd() {
+    const devotional = AppState.todayDevotional;
+    if (!devotional) {
+        navigateTo('ask');
+        return;
+    }
+    navigateTo('ask');
+    setTimeout(() => {
+        sendChatMessage({
+            displayText: "Let's talk about today's devotional.",
+            apiText: `Today's devotional is titled "${devotional.title}". Content: "${devotional.body}"${devotional.verseReference ? ` Supporting verse: ${devotional.verseReference}${devotional.verseText ? ` — "${devotional.verseText}"` : ''}.` : ''} The user wants to discuss this devotional and go deeper into it. Respond directly about its themes and application without asking the user to restate or repeat it to you.`
+        });
+    }, 400);
+}
+
 /**
  * Builds a compact summary of the signed-in user's profile and app
  * activity so Shepherd can personalize its responses (e.g. reference
@@ -1359,6 +1374,9 @@ function renderPlannerPage() {
                             <button class="btn btn-outline btn-sm" onclick="addPlannerDay()">
                                 <i class="fas fa-plus"></i> Add Entry
                             </button>
+                            <button class="btn btn-outline btn-sm" onclick="sharePlanCard(AppState.currentPlan)" aria-label="Share plan">
+                                <i class="fas fa-share"></i>
+                            </button>
                             <button class="btn btn-outline btn-sm" onclick="deleteCurrentPlan()" style="color:#f44336; border-color:rgba(244,67,54,0.4);">
                                 <i class="fas fa-trash"></i>
                             </button>
@@ -2178,6 +2196,69 @@ function scrollSpaceCarousel(postId, index) {
     }
 }
 
+/** #/space/post/POST_ID — a dedicated page for viewing a single shared
+    Space post (explicitly sanctioned by the Phase 3 spec, since there's
+    no existing single-post view to reuse — Space is normally browsed as
+    a feed). spacePosts is already publicly readable (database.rules.json
+    — same as the main Space feed), so this works for guests too.
+
+    Reuses renderSpaceCard() as-is rather than building a second card
+    template: the post is merged into AppState.spacePosts (if not
+    already loaded there) so the card's existing Amen/Comment/Save/
+    Share/Delete buttons keep working exactly as they do in the feed —
+    they all look the post up via AppState.spacePosts.find(), same as
+    always. */
+async function renderSharedSpacePostPage() {
+    const postId = AppState.sharedSpacePostId;
+    if (!postId) { navigateTo('space', { replace: true }); return; }
+
+    DOM.pageContainer.innerHTML = `
+        <div class="shared-post-container">
+            <div class="skeleton" style="height: 320px; border-radius: 16px;"></div>
+        </div>
+    `;
+
+    let post = (AppState.spacePosts || []).find(p => p.id === postId) || null;
+    if (!post) {
+        try {
+            const snap = await database.ref(`spacePosts/${postId}`).once('value');
+            if (snap.exists()) {
+                post = { id: postId, ...snap.val() };
+                if (!AppState.spacePosts) AppState.spacePosts = [];
+                AppState.spacePosts.push(post);
+            }
+        } catch (error) {
+            console.error('Error loading shared post:', error);
+        }
+    }
+
+    if (AppState.currentRoute !== 'shared-space-post' || AppState.sharedSpacePostId !== postId) return;
+
+    if (!post) {
+        DOM.pageContainer.innerHTML = renderDeepLinkNotFound({
+            icon: 'fa-layer-group',
+            title: "This post isn't available",
+            message: 'It may have been removed, or the link might be incorrect.',
+            ctaRoute: 'space',
+            ctaLabel: 'Browse Space'
+        });
+        return;
+    }
+
+    DOM.pageContainer.innerHTML = `
+        <div class="shared-post-container">
+            ${renderSpaceCard(post)}
+            <div class="shared-content-cta">
+                <p>Join GraceGuide to read the Word, share your own reflections, and connect with Brethren.</p>
+                <button class="btn btn-primary btn-block" onclick="navigateTo('space', { replace: true })">
+                    <i class="fas fa-layer-group"></i> Explore Space
+                </button>
+            </div>
+        </div>
+    `;
+    initSpaceCarouselObservers();
+}
+
 function initSpaceCarouselObservers() {
     $$('.space-carousel-track').forEach(track => {
         track.addEventListener('scroll', () => {
@@ -2587,17 +2668,25 @@ async function shareSpacePost(postId) {
     const post = AppState.spacePosts.find(p => p.id === postId);
     if (!post) return;
 
-    let shareText = `${post.authorName}: `;
-    if (post.type === 'video') {
-        shareText += post.videoUrl;
+    // shareSpacePostCard() (js/sharecards.js) is the Phase 2 share-card
+    // engine. Falls back to the original plain-text share if that file
+    // somehow isn't loaded. Either way, once the person picks a share
+    // action (or the plain fallback fires), we still offer the existing
+    // "also share to a group?" flow below, completely unchanged.
+    if (typeof shareSpacePostCard === 'function') {
+        await shareSpacePostCard(post);
     } else {
-        shareText += (post.slides || []).map(s => s.text).join(' ');
-    }
-
-    if (navigator.share) {
-        navigator.share({ title: 'GraceGuide Space', text: shareText }).catch(() => {});
-    } else {
-        navigator.clipboard.writeText(shareText).then(() => showToast('Copied to clipboard!', 'success'));
+        let shareText = `${post.authorName}: `;
+        if (post.type === 'video') {
+            shareText += post.videoUrl;
+        } else {
+            shareText += (post.slides || []).map(s => s.text).join(' ');
+        }
+        if (navigator.share) {
+            navigator.share({ title: 'GraceGuide Space', text: shareText }).catch(() => {});
+        } else {
+            navigator.clipboard.writeText(shareText).then(() => showToast('Copied to clipboard!', 'success'));
+        }
     }
 
     if (AppState.currentUser) {

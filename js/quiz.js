@@ -112,6 +112,94 @@ function getSortedParticipants(data) {
     return participants;
 }
 
+/** #/quiz/QUIZ_ID — a dedicated page for viewing one specific round's
+    leaderboard by its id (the round's startTime, same value used both
+    as quizCompetition/current.startTime and as the key under
+    quizCompetition/history). Reuses getSortedParticipants() — the exact
+    same sort/tie-break logic as every other leaderboard in the app.
+
+    quizCompetition data requires sign-in (database.rules.json) just
+    like every other quiz view already does — that's not loosened for
+    this entry point, so guests get a sign-in prompt instead of the data. */
+async function renderSharedQuizPage() {
+    const quizId = AppState.sharedQuizId;
+    if (!quizId) { navigateTo('quiz', { replace: true }); return; }
+
+    if (!AppState.currentUser) {
+        DOM.pageContainer.innerHTML = `
+            <div class="text-center" style="padding: 80px 24px;">
+                <i class="fas fa-trophy" style="font-size: 40px; opacity: 0.35; margin-bottom: 16px;"></i>
+                <h3 style="margin-bottom: 8px;">Sign in to view this quiz</h3>
+                <p class="text-muted" style="margin-bottom: 16px;">Quiz results are only visible to signed-in GraceGuide users.</p>
+                <button class="btn btn-primary" onclick="showAuthModal({message: 'Sign in to view this quiz result.'})">Sign In</button>
+            </div>
+        `;
+        return;
+    }
+
+    DOM.pageContainer.innerHTML = `
+        <div class="quiz-page-container">
+            <div class="skeleton" style="height: 260px; border-radius: 16px;"></div>
+        </div>
+    `;
+
+    let round = null;
+    try {
+        // A round shared right after it closes might not be archived to
+        // history yet, so check the live/current round first (same id)
+        // before falling back to the archive.
+        const currentSnap = await database.ref('quizCompetition/current').once('value');
+        const current = currentSnap.val();
+        if (current && current.startTime != null && String(current.startTime) === String(quizId)) {
+            round = current;
+        } else {
+            const historySnap = await database.ref(`quizCompetition/history/${quizId}`).once('value');
+            round = historySnap.exists() ? historySnap.val() : null;
+        }
+    } catch (error) {
+        console.error('Error loading shared quiz round:', error);
+    }
+
+    if (AppState.currentRoute !== 'shared-quiz' || AppState.sharedQuizId !== quizId) return;
+
+    if (!round) {
+        DOM.pageContainer.innerHTML = renderDeepLinkNotFound({
+            icon: 'fa-trophy',
+            title: "This quiz round isn't available",
+            message: 'The link may be incorrect, or this round may no longer be on record.',
+            ctaRoute: 'quiz',
+            ctaLabel: "Go to This Week's Quiz"
+        });
+        return;
+    }
+
+    const participants = getSortedParticipants(round);
+
+    DOM.pageContainer.innerHTML = `
+        <div class="quiz-page-container">
+            <div class="card mb-3 text-center">
+                <i class="fas fa-trophy" style="font-size: 40px; color: var(--accent-muted-gold); margin-bottom: 12px;"></i>
+                <h3 style="margin-bottom: 4px;">Weekly Bible Quiz</h3>
+                <p class="text-muted">${formatDate(round.startTime)}</p>
+            </div>
+            <div class="card">
+                <h3 style="font-weight: 700; margin-bottom: 12px;">Leaderboard</h3>
+                ${participants.length > 0 ? `
+                    <div class="quiz-leaderboard-list">
+                        ${participants.map((p, i) => `
+                            <div class="quiz-leaderboard-row" onclick="viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
+                                <span class="quiz-leaderboard-rank">#${i + 1}</span>
+                                <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}</span>
+                                <span class="quiz-leaderboard-score">${p.score}/${p.total}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                ` : `<p class="text-center text-muted">No one took part in this round.</p>`}
+            </div>
+        </div>
+    `;
+}
+
 /** Same "reference like Exodus 1-14" parsing the concentration list uses,
     reused here so a question's supporting verse can double as a tappable
     link straight to that passage in the Bible reader. */
@@ -888,8 +976,13 @@ function renderQuizAnswerBreakdown(questions, userAnswers) {
     `;
 }
 
+let lastQuizResultForShare = null;
+let lastQuizResultQuizId = null;
+
 function renderQuizResultScreen(result, alreadyTaken, wasAutoSubmit) {
     quizAttempt = null;
+    lastQuizResultForShare = result;
+    lastQuizResultQuizId = quizPageData?.startTime ?? null;
     const questions = quizPageData?.questions || [];
     DOM.pageContainer.innerHTML = `
         <div class="quiz-page-container">
@@ -898,6 +991,9 @@ function renderQuizResultScreen(result, alreadyTaken, wasAutoSubmit) {
                 <h3 style="margin-bottom: 4px;">${alreadyTaken ? "You've already taken this round" : 'Quiz submitted!'}</h3>
                 ${wasAutoSubmit ? `<p class="text-muted" style="margin-bottom: 12px;">Time ran out, so your answers were submitted automatically.</p>` : ''}
                 <div class="quiz-result-score">${result.score}<span>/${result.total}</span></div>
+                <button class="btn btn-outline btn-sm mt-2" onclick="shareQuizResultCard(lastQuizResultForShare, lastQuizResultQuizId)">
+                    <i class="fas fa-share"></i> Share Result
+                </button>
                 <p class="text-muted" style="margin-top: 12px;">The Leaderboard will update here — and on the Home page — once this round's 24-hour window resets.</p>
             </div>
             ${renderQuizAnswerBreakdown(questions, result.answers)}

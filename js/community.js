@@ -1350,6 +1350,9 @@ function renderProfilePage() {
                 <button class="btn btn-outline btn-sm" onclick="showUserBible()">
                     <i class="fas fa-book-bible"></i> My Bible
                 </button>
+                <button class="btn btn-outline btn-sm" onclick="shareProfileCard()">
+                    <i class="fas fa-share"></i> Share
+                </button>
             </div>
 
             <!-- Your Journey (moved from Home — sits just before Recent Activity) -->
@@ -2343,8 +2346,6 @@ function initEventListeners() {
     // between routes both consume a history entry, so the hardware/browser
     // back button steps through the app instead of exiting it.
     window.addEventListener('popstate', (e) => {
-        const state = e.state || {};
-
         // A modal/sheet/drawer was just closed via its own UI (X button,
         // backdrop click, etc.) and called history.back() purely to keep
         // the URL/history stack tidy. That should never re-render the
@@ -2374,8 +2375,13 @@ function initEventListeners() {
         if (!authReady) return;
 
         AppState.appNavDepth = Math.max(0, AppState.appNavDepth - 1);
-        const route = state.route || (window.location.hash.replace('#/', '') || 'home');
-        navigateTo(route, { fromPopstate: true });
+        // Phase 3: always re-derive from the CURRENT hash (which the
+        // browser has already updated for us by this point) rather than
+        // trusting state.route alone — this is what lets back/forward
+        // between deep-linked entries (e.g. #/profile/abc123 <-> #/space)
+        // correctly re-set AppState.viewedProfileId etc, not just the
+        // bare internal route name.
+        navigateToHash(window.location.hash || '#/home', { fromPopstate: true });
     });
     
     // Online/offline

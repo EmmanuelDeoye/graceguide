@@ -55,7 +55,16 @@ const AppState = {
     currentConversationId: null,
     viewedProfileId: null,
     viewedProfileName: null,
+    // Phase 3 — set by navigateToHash() just before navigating to each
+    // corresponding shared-content route, mirroring how viewedProfileId
+    // already works for view-profile.
+    sharedSpacePostId: null,
+    sharedPlanShareId: null,
+    sharedQuizId: null,
+    sharedDevotionalShareId: null,
     todayReflection: '',
+    todayVerse: null,
+    todayDevotional: null,
     selectedVoiceId: null,
     communityGroups: [],
     currentGroupId: null,
@@ -332,9 +341,22 @@ function initAuth() {
     // Known routes that can legitimately be deep-linked / restored on
     // launch. Anything else (or missing) falls back to the default tab
     // instead of forcing everyone onto Shepherd every time the app opens.
+    // Phase 3: a hash that parses as one of the six shareable deep-link
+    // patterns (#/profile/ID, #/bible/BOOK/CH/VS, etc) is valid too —
+    // this is what makes those URLs work after a hard refresh, not just
+    // when navigated to from inside the app.
     const VALID_INITIAL_ROUTES = ['home', 'bible', 'ask', 'space', 'community', 'planner', 'messages', 'profile', 'settings', 'talk-to-someone'];
-    const hashRoute = window.location.hash.replace('#/', '');
-    const initialRoute = VALID_INITIAL_ROUTES.includes(hashRoute) ? hashRoute : 'ask';
+    const DEEP_LINK_ROUTE_MARKERS = ['deep-profile', 'deep-space-post', 'deep-planner', 'deep-bible', 'deep-quiz', 'deep-devotional'];
+    const hashRoute = window.location.hash.replace(/^#\//, '');
+    const bootParsedRoute = parseAppRoute(window.location.hash);
+    // hashRoute.length check preserves the original behavior for an
+    // empty or bare "#/" hash exactly (falls back to 'ask' below) —
+    // parseAppRoute() on its own would otherwise treat "no hash" as
+    // {route:'home'}, which is the right default for a parser in
+    // general but not what boot-time should do here.
+    const isValidBootRoute = hashRoute.length > 0
+        && (DEEP_LINK_ROUTE_MARKERS.includes(bootParsedRoute.route) || VALID_INITIAL_ROUTES.includes(bootParsedRoute.route));
+    const initialHash = isValidBootRoute ? window.location.hash : null;
 
     const enterAppOnce = (isTimeout) => {
         if (settled) return;
@@ -343,7 +365,11 @@ function initAuth() {
         updateProfileNavIcon();
         updateDrawerAuthButton();
         showMainApp();
-        navigateTo(initialRoute, { replace: true });
+        if (initialHash) {
+            navigateToHash(initialHash, { replace: true });
+        } else {
+            navigateTo('ask', { replace: true });
+        }
         if (isTimeout) {
             showToast("Taking longer than usual to connect — you're browsing as a guest for now.", 'warning');
         }
@@ -1005,8 +1031,126 @@ function handleLogout() {
 /* ============================================
    ROUTING
    ============================================ */
+
+/* ---- PHASE 3: DEEP LINKING ----
+   A thin layer on top of the existing single-segment hash router
+   (#/home, #/bible, #/quiz, ...), which is untouched below. This adds
+   support for shareable, parameterized routes:
+     #/profile/USER_ID
+     #/space/post/POST_ID
+     #/planner/SHARE_ID
+     #/bible/BOOK/CHAPTER/VERSE
+     #/quiz/QUIZ_ID
+     #/devotional/SHARE_ID
+   Anything that doesn't match one of these patterns falls straight
+   through as a plain route name — identical to how the router already
+   behaved before this was added. */
+
+/** Parses a raw hash (e.g. "#/profile/abc123" or "#/bible/John/3/16")
+    into { route, params, urlPath }. `route` is either one of the six
+    'deep-*' markers below (for navigateToHash() to act on) or, for any
+    non-matching hash, just the first path segment — exactly what the
+    pre-Phase-3 router used as the route name. `urlPath` is the
+    normalized path (no leading "#/") to keep in the address bar. */
+function parseAppRoute(hash) {
+    const path = String(hash || '').replace(/^#\/?/, '').replace(/\/+$/, '');
+    const segments = path.split('/').filter(Boolean).map(s => decodeURIComponent(s));
+
+    if (segments.length === 0) return { route: 'home', params: {}, urlPath: null };
+
+    const [first, second, third, fourth] = segments;
+
+    if (first === 'profile' && second) {
+        return { route: 'deep-profile', params: { userId: second }, urlPath: path };
+    }
+    if (first === 'space' && second === 'post' && third) {
+        return { route: 'deep-space-post', params: { postId: third }, urlPath: path };
+    }
+    if (first === 'planner' && second) {
+        return { route: 'deep-planner', params: { shareId: second }, urlPath: path };
+    }
+    if (first === 'bible' && second && third) {
+        const chapter = parseInt(third, 10);
+        const verse = fourth ? parseInt(fourth, 10) : null;
+        return { route: 'deep-bible', params: { book: second, chapter, verse }, urlPath: path };
+    }
+    if (first === 'quiz' && second) {
+        return { route: 'deep-quiz', params: { quizId: second }, urlPath: path };
+    }
+    if (first === 'devotional' && second) {
+        return { route: 'deep-devotional', params: { shareId: second }, urlPath: path };
+    }
+
+    // Not a dynamic pattern — plain existing static route (#/home,
+    // #/bible, #/quiz, #/profile alone, etc), same as always.
+    return { route: first, params: {}, urlPath: null };
+}
+
+/** The actual entry point boot-time and popstate now go through instead
+    of calling navigateTo() directly with a raw hash segment. Applies
+    whatever AppState a deep link needs (mirroring how viewUserProfile()
+    already sets AppState.viewedProfileId before navigating), then hands
+    off to the ordinary navigateTo() using existing internal route names/
+    renderers wherever one already exists. Safe to call with ANY hash —
+    non-dynamic hashes just resolve to a normal navigateTo() call. */
+function navigateToHash(hash, options = {}) {
+    const parsed = parseAppRoute(hash);
+    const navOptions = parsed.urlPath ? { ...options, urlPath: parsed.urlPath } : options;
+
+    switch (parsed.route) {
+        case 'deep-profile':
+            // Reuses the existing view-profile flow verbatim, including
+            // its own "that's actually you" redirect to the private
+            // profile route — see viewUserProfile().
+            AppState.viewedProfileId = parsed.params.userId;
+            AppState.viewedProfileName = null;
+            if (AppState.currentUser && parsed.params.userId === AppState.currentUser.uid) {
+                navigateTo('profile', options); // no urlPath: this is the private, non-shareable "my profile" route
+            } else {
+                navigateTo('view-profile', navOptions);
+            }
+            return;
+
+        case 'deep-space-post':
+            AppState.sharedSpacePostId = parsed.params.postId;
+            navigateTo('shared-space-post', navOptions);
+            return;
+
+        case 'deep-planner':
+            AppState.sharedPlanShareId = parsed.params.shareId;
+            navigateTo('shared-plan', navOptions);
+            return;
+
+        case 'deep-bible': {
+            const maxChapter = BIBLE_BOOK_CHAPTERS[parsed.params.book];
+            const chapterInRange = maxChapter && parsed.params.chapter >= 1 && parsed.params.chapter <= maxChapter;
+            // openBibleChapter() keeps the URL in sync itself (see its
+            // doc comment), so this doesn't go through navigateTo here.
+            if (chapterInRange) {
+                openBibleChapter(parsed.params.book, parsed.params.chapter, parsed.params.verse || undefined);
+            } else {
+                navigateTo('bible', options); // invalid book/chapter — fall back to the book list rather than a dead end
+            }
+            return;
+        }
+
+        case 'deep-quiz':
+            AppState.sharedQuizId = parsed.params.quizId;
+            navigateTo('shared-quiz', navOptions);
+            return;
+
+        case 'deep-devotional':
+            AppState.sharedDevotionalShareId = parsed.params.shareId;
+            navigateTo('shared-devotional', navOptions);
+            return;
+
+        default:
+            navigateTo(parsed.route, options);
+    }
+}
+
 function navigateTo(route, options = {}) {
-    const { fromPopstate = false, replace = false } = options;
+    const { fromPopstate = false, replace = false, urlPath = null } = options;
 
     // Stop any Shepherd voice playback before leaving/changing pages
     if (typeof stopSpeaking === 'function') stopSpeaking();
@@ -1052,9 +1196,13 @@ function navigateTo(route, options = {}) {
     updateNavigation(route);
 
     // Update browser history / URL hash so the back button navigates
-    // within the app instead of leaving it.
+    // within the app instead of leaving it. `urlPath` (Phase 3) lets a
+    // deep-linkable route (e.g. 'view-profile') show a richer, shareable
+    // URL (e.g. "profile/abc123") while still dispatching to the exact
+    // same internal route/renderer below — existing callers never pass
+    // it, so this is a no-op for every pre-Phase-3 route.
     if (!fromPopstate) {
-        const url = `#/${route}`;
+        const url = `#/${urlPath || route}`;
         if (replace) {
             history.replaceState({ route }, '', url);
         } else if (window.location.hash !== url) {
@@ -1106,6 +1254,21 @@ function navigateTo(route, options = {}) {
             break;
         case 'quiz':
             renderResult = renderQuizPage();
+            break;
+        case 'devotional':
+            renderResult = renderDevotionalPage();
+            break;
+        case 'shared-space-post':
+            renderResult = renderSharedSpacePostPage();
+            break;
+        case 'shared-plan':
+            renderResult = renderSharedPlanPage();
+            break;
+        case 'shared-quiz':
+            renderResult = renderSharedQuizPage();
+            break;
+        case 'shared-devotional':
+            renderResult = renderSharedDevotionalPage();
             break;
         default:
             renderResult = renderHomePage();
@@ -1186,7 +1349,12 @@ function updateNavigation(route) {
         settings: 'Settings',
         'talk-to-someone': 'Talk to Someone',
         'view-profile': AppState.viewedProfileName || 'Profile',
-        quiz: 'Weekly Quiz'
+        quiz: 'Weekly Quiz',
+        devotional: 'Daily Devotional',
+        'shared-space-post': 'Shared Post',
+        'shared-plan': 'Shared Plan',
+        'shared-quiz': 'Shared Quiz Result',
+        'shared-devotional': 'Shared Devotional'
     };
     const titleText = titles[route] || 'GraceGuide';
     // The two-tone "Grace"/"Guide" treatment only makes sense for the
@@ -1225,6 +1393,182 @@ function goBack() {
     } else {
         navigateTo('home');
     }
+}
+
+/* ---- PHASE 3: shared-content pages ----
+   #/space/post/POST_ID  -> renderSharedSpacePostPage()  (features.js, reuses renderSpaceCard)
+   #/planner/SHARE_ID    -> renderSharedPlanPage()        (below, reuses plannerShares public snapshots)
+   #/quiz/QUIZ_ID         -> renderSharedQuizPage()        (quiz.js, reuses getSortedParticipants)
+   #/devotional/SHARE_ID -> renderSharedDevotionalPage()  (below, reuses devotionalShares public snapshots)
+   #/profile/USER_ID     -> reuses the existing renderViewProfilePage() directly, no new renderer needed. */
+
+/** Shared "this link doesn't lead anywhere (anymore)" state, used by
+    every one of the four new dedicated shared-content pages so invalid/
+    deleted/expired links all get the same graceful, on-brand treatment
+    instead of a blank page or a console error. */
+function renderDeepLinkNotFound({ icon, title, message, ctaRoute, ctaLabel }) {
+    return `
+        <div class="text-center" style="padding: 80px 24px;">
+            <i class="fas ${icon || 'fa-circle-question'}" style="font-size: 40px; opacity: 0.35; margin-bottom: 16px;"></i>
+            <h3 style="margin-bottom: 8px;">${escapeHtml(title || "This link isn't available")}</h3>
+            <p class="text-muted" style="margin-bottom: 20px;">${escapeHtml(message || 'It may have been removed, or the link might be incorrect.')}</p>
+            <button class="btn btn-primary" onclick="navigateTo('${ctaRoute || 'home'}', { replace: true })">
+                ${ctaLabel || 'Go to GraceGuide'}
+            </button>
+        </div>
+    `;
+}
+
+/** #/planner/SHARE_ID — reads the PUBLIC plannerShares/{shareId} snapshot
+    written by sharePlanCard() (js/sharecards.js), never the owner's
+    private users/{uid}/planner data. Only ever shows the safe summary
+    fields that snapshot contains (name, progress, streak, today's single
+    passage) — there is no full day-by-day itinerary to expose here in
+    the first place. */
+async function renderSharedPlanPage() {
+    const shareId = AppState.sharedPlanShareId;
+    if (!shareId) { navigateTo('planner', { replace: true }); return; }
+
+    DOM.pageContainer.innerHTML = `
+        <div class="planner-container">
+            <div class="skeleton" style="height: 240px; border-radius: 16px;"></div>
+        </div>
+    `;
+
+    let share = null;
+    try {
+        const snap = await database.ref(`plannerShares/${shareId}`).once('value');
+        share = snap.exists() ? snap.val() : null;
+    } catch (error) {
+        console.error('Error loading shared plan:', error);
+    }
+
+    if (AppState.currentRoute !== 'shared-plan' || AppState.sharedPlanShareId !== shareId) return;
+
+    if (!share) {
+        DOM.pageContainer.innerHTML = renderDeepLinkNotFound({
+            icon: 'fa-calendar-check',
+            title: "This plan isn't available",
+            message: 'The share link may be incorrect, or the plan may have been removed.',
+            ctaRoute: 'planner',
+            ctaLabel: 'Go to My Study Planner'
+        });
+        return;
+    }
+
+    DOM.pageContainer.innerHTML = `
+        <div class="planner-container">
+            <div class="card mb-3">
+                <h3 style="font-weight: 700; margin-bottom: 4px;">${escapeHtml(share.name || 'Study Plan')}</h3>
+                <p class="text-muted" style="font-size: 13px; margin-bottom: 16px;">Shared by ${escapeHtml(share.ownerName || 'a GraceGuide user')}</p>
+                <div class="planner-stats">
+                    <div class="stat-card">
+                        <div class="stat-value">${share.progress || 0}%</div>
+                        <div class="stat-label">Progress</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${share.streak || 0}</div>
+                        <div class="stat-label">Day Streak</div>
+                    </div>
+                </div>
+                ${share.currentPassage ? `
+                    <div class="devotional-verse-block mt-3" ${share.currentPassage ? `onclick="openPassageReference('${escapeHtml(share.currentPassage).replace(/'/g, "\\'")}')"` : ''}>
+                        <i class="fas fa-book-bible"></i>
+                        <div>
+                            <p class="devotional-verse-ref">Currently reading: ${escapeHtml(share.currentPassage)}</p>
+                            ${share.currentTopic ? `<p style="font-size: 13px; color: var(--text-slate); margin-top: 4px;">${escapeHtml(share.currentTopic)}</p>` : ''}
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+            <div class="shared-content-cta">
+                <p>Build your own personalized Bible reading plan on GraceGuide.</p>
+                <button class="btn btn-primary btn-block" onclick="navigateTo('planner', { replace: true })">
+                    <i class="fas fa-calendar-check"></i> Start Your Own Plan
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+/** #/devotional/SHARE_ID — reads the PUBLIC devotionalShares/{shareId}
+    snapshot written by shareDevotionalCard() (js/sharecards.js). That
+    snapshot deliberately only ever contains title/verseReference/
+    verseText/prayerPrompt — never the AI-personalized `body`, which can
+    reference the owner's own reading/quiz/Ask activity (see
+    buildDevotionalPersonalizationContext). There is no private data to
+    accidentally expose here because the private version was never
+    written to this public node in the first place. */
+async function renderSharedDevotionalPage() {
+    const shareId = AppState.sharedDevotionalShareId;
+    if (!shareId) { navigateTo('home', { replace: true }); return; }
+
+    DOM.pageContainer.innerHTML = `
+        <div class="devotional-page-container">
+            <div class="skeleton" style="height: 200px; border-radius: 16px; margin-bottom: 16px;"></div>
+            <div class="skeleton" style="height: 140px; border-radius: 16px;"></div>
+        </div>
+    `;
+
+    let share = null;
+    try {
+        const snap = await database.ref(`devotionalShares/${shareId}`).once('value');
+        share = snap.exists() ? snap.val() : null;
+    } catch (error) {
+        console.error('Error loading shared devotional:', error);
+    }
+
+    if (AppState.currentRoute !== 'shared-devotional' || AppState.sharedDevotionalShareId !== shareId) return;
+
+    if (!share) {
+        DOM.pageContainer.innerHTML = renderDeepLinkNotFound({
+            icon: 'fa-sun',
+            title: "This devotional isn't available",
+            message: 'The share link may be incorrect, or it may no longer be available.',
+            ctaRoute: 'home',
+            ctaLabel: 'Go to GraceGuide'
+        });
+        return;
+    }
+
+    const verseLink = typeof resolveVerseReferenceLink === 'function' ? resolveVerseReferenceLink(share.verseReference) : null;
+    const safeBook = verseLink ? verseLink.book.replace(/'/g, "\\'") : '';
+
+    DOM.pageContainer.innerHTML = `
+        <div class="devotional-page-container">
+            <div class="card devotional-hero">
+                <div class="devotional-hero-icon"><i class="fas fa-sun"></i></div>
+                <div class="devotional-hero-label">Daily Devotional</div>
+                <h2 class="devotional-hero-title">${escapeHtml(share.title || "Today's Devotional")}</h2>
+                <div class="devotional-hero-date">Shared by ${escapeHtml(share.ownerName || 'a GraceGuide user')}</div>
+            </div>
+
+            <div class="card mb-3">
+                ${share.verseReference ? `
+                    <div class="devotional-verse-block" ${verseLink ? `onclick="openBibleChapter('${safeBook}', ${verseLink.chapter})"` : ''}>
+                        <i class="fas fa-book-bible"></i>
+                        <div>
+                            ${share.verseText ? `<p class="devotional-verse-text">"${escapeHtml(share.verseText)}"</p>` : ''}
+                            <p class="devotional-verse-ref">${escapeHtml(share.verseReference)}${verseLink ? ' <i class="fas fa-chevron-right"></i>' : ''}</p>
+                        </div>
+                    </div>
+                ` : ''}
+                ${share.prayerPrompt ? `
+                    <div class="devotional-prayer-block">
+                        <i class="fas fa-hands-praying"></i>
+                        <p>${escapeHtml(share.prayerPrompt)}</p>
+                    </div>
+                ` : ''}
+            </div>
+
+            <div class="shared-content-cta">
+                <p>Get your own personalized daily devotional on GraceGuide.</p>
+                <button class="btn btn-primary btn-block" onclick="navigateTo('home', { replace: true })">
+                    <i class="fas fa-sun"></i> Get My Daily Devotional
+                </button>
+            </div>
+        </div>
+    `;
 }
 
 function openDrawer() {
@@ -1273,6 +1617,15 @@ async function renderHomePage() {
     }
     AppState.todayReflection = reflection;
 
+    let verse = null;
+    try {
+        verse = await getDailyVerse();
+        AppState.todayVerse = verse;
+    } catch (error) {
+        console.error('Error loading daily verse:', error);
+        verse = null;
+    }
+
     let quizCardHTML;
     try {
         quizCardHTML = await renderHomeQuizCard();
@@ -1280,6 +1633,16 @@ async function renderHomePage() {
         console.error('Error loading quiz competition card:', error);
         quizCardHTML = '';
     }
+
+    let devotional = null;
+    try {
+        devotional = await getTodayDevotional();
+        AppState.todayDevotional = devotional;
+    } catch (error) {
+        console.error('Error loading daily devotional:', error);
+        devotional = null;
+    }
+    const devotionalCardHTML = renderDailyDevotionalCard(devotional);
 
     let recommendationsHTML;
     try {
@@ -1304,6 +1667,9 @@ async function renderHomePage() {
 
     DOM.pageContainer.innerHTML = `
         <div class="home-container" style="max-width: 768px; margin: 0 auto; padding: 16px;">
+            <!-- Daily Devotional (before the quiz card until marked done) -->
+            ${devotional && !devotional.completed ? devotionalCardHTML : ''}
+
             <!-- Weekly Bible Quiz: countdown / live / leaderboard -->
             ${quizCardHTML}
             
@@ -1333,15 +1699,25 @@ async function renderHomePage() {
 
             <!-- Reflection -->
             <div class="card mb-4">
-                <div class="flex items-center gap-2 mb-3">
-                    <i class="fas fa-lightbulb" style="color: var(--accent-muted-gold);"></i>
-                    <h3 style="font-weight: 700; font-size: 18px;">Today's Reflection</h3>
+                <div class="flex items-center gap-2 mb-3" style="justify-content: space-between;">
+                    <div class="flex items-center gap-2">
+                        <i class="fas fa-lightbulb" style="color: var(--accent-muted-gold);"></i>
+                        <h3 style="font-weight: 700; font-size: 18px;">Today's Reflection</h3>
+                    </div>
+                    ${verse ? `
+                        <button class="icon-btn" onclick="shareDailyVerseCard(AppState.todayVerse)" aria-label="Share today's verse" title="Share today's verse">
+                            <i class="fas fa-share"></i>
+                        </button>
+                    ` : ''}
                 </div>
                 <p style="color: var(--text-slate); line-height: 1.7;">${reflection}</p>
                 <button class="btn btn-outline btn-sm mt-3" onclick="discussReflectionWithShepherd()">
                     <i class="fas fa-dove"></i> Discuss with Shepherd
                 </button>
             </div>
+
+            <!-- Daily Devotional (moved here once marked done) -->
+            ${devotional && devotional.completed ? devotionalCardHTML : ''}
             
             <!-- Recommended Reading -->
             <div class="card">
@@ -1477,6 +1853,387 @@ function pickFallbackReflection(dateKey) {
     let hash = 0;
     for (let i = 0; i < dateKey.length; i++) hash = (hash * 31 + dateKey.charCodeAt(i)) >>> 0;
     return reflections[hash % reflections.length];
+}
+
+/* ============================================
+   DAILY DEVOTIONAL (personalized, signed-in users only)
+   ============================================
+   One AI-generated devotional per signed-in user per calendar day,
+   saved to users/{uid}/devotionals/{YYYY-MM-DD} (private to that user —
+   it falls under the general users/$uid rule, no other user can read
+   it). Cache-first: once today's entry exists, every re-render reads it
+   straight from Firebase instead of calling the AI again. Guests never
+   get one — this is an explicitly personalized feature, there's nothing
+   meaningful to personalize without a signed-in profile.
+   ============================================ */
+
+/** Returns today's devotional for the signed-in user, generating and
+    saving one via AI on the first load of the day. Returns null for
+    guests, or (rarely) if even the fallback path throws — callers must
+    treat null as "don't show the card/page" and never let this break
+    the rest of the app. */
+async function getTodayDevotional() {
+    if (!AppState.currentUser) return null;
+    const uid = AppState.currentUser.uid;
+    const todayKey = dayKey(Date.now());
+
+    try {
+        const snap = await database.ref(`users/${uid}/devotionals/${todayKey}`).once('value');
+        const existing = snap.val();
+        if (existing) return existing;
+    } catch (error) {
+        console.error("Error reading today's devotional:", error);
+        // Fall through and try to generate one anyway — worst case this
+        // regenerates once more than necessary this session.
+    }
+
+    let devotional;
+    try {
+        const [personalContext, continuityEntries] = await Promise.all([
+            buildDevotionalPersonalizationContext(),
+            fetchDevotionalContinuityContext(uid, todayKey)
+        ]);
+        devotional = await generateDevotionalWithAI(personalContext, continuityEntries, todayKey);
+        devotional.source = 'ai';
+    } catch (error) {
+        console.error('Error generating devotional via AI, using fallback:', error);
+        devotional = pickFallbackDevotional(todayKey);
+        devotional.source = 'fallback';
+    }
+
+    devotional.date = todayKey;
+    devotional.completed = false;
+    devotional.completedAt = null;
+    devotional.generatedAt = Date.now();
+
+    try {
+        await database.ref(`users/${uid}/devotionals/${todayKey}`).set(devotional);
+    } catch (error) {
+        console.error("Error saving today's devotional:", error);
+        // Still hand back what we generated so this session's card/page
+        // has something to show, even though a save failure means
+        // it'll likely regenerate again on the next load.
+    }
+
+    return devotional;
+}
+
+/** A compact list of the last few days' devotional titles/themes (not
+    full bodies — keeps the prompt small) so the AI can naturally build
+    on a recent thread if one fits, without repeating itself. */
+async function fetchDevotionalContinuityContext(uid, excludeDateKey) {
+    try {
+        const snap = await database.ref(`users/${uid}/devotionals`).orderByKey().limitToLast(4).once('value');
+        const raw = snap.val() || {};
+        return Object.values(raw)
+            .filter(d => d.date !== excludeDateKey)
+            .sort((a, b) => (a.date < b.date ? 1 : -1))
+            .slice(0, 3)
+            .map(d => ({ date: d.date, title: d.title, themes: d.themes || [] }));
+    } catch (error) {
+        console.error('Error fetching devotional continuity context:', error);
+        return [];
+    }
+}
+
+/** Compiles what the AI should know about this specific user to
+    personalize today's devotional. Reuses Shepherd's own
+    buildShepherdUserContext() (features.js) for the bulk of it — reading
+    history, study plan, Space activity, Brethren/forum counts, etc. —
+    and adds the handful of signals that builder doesn't include: actual
+    Ask/Shepherd conversation topics (not just a count), recent quiz
+    performance, and top interest tags/books. */
+async function buildDevotionalPersonalizationContext() {
+    const base = typeof buildShepherdUserContext === 'function' ? await buildShepherdUserContext() : '';
+    const lines = [];
+
+    const recentTopics = (AppState.aiConversations || [])
+        .slice(-5)
+        .map(c => c.title)
+        .filter(Boolean);
+    if (recentTopics.length > 0) {
+        lines.push(`Recent topics they've asked Shepherd about: ${recentTopics.join('; ')}.`);
+    }
+
+    try {
+        const uid = AppState.currentUser.uid;
+        const [historySnap, allTimeSnap] = await Promise.all([
+            database.ref(`users/${uid}/quizHistory`).orderByKey().limitToLast(1).once('value'),
+            database.ref(`quizLeaderboardAllTime/${uid}`).once('value')
+        ]);
+        const lastRound = Object.values(historySnap.val() || {})[0];
+        const allTime = allTimeSnap.val();
+        if (lastRound) lines.push(`Most recent Weekly Bible Quiz result: ${lastRound.score}/${lastRound.total} (${lastRound.percentage}%).`);
+        if (allTime) lines.push(`Overall quiz participation: ${allTime.totalQuizzes} quiz(zes) taken, ${allTime.accumulatedPercentage}% accumulated score.`);
+    } catch (error) {
+        console.error('Error adding quiz context to devotional:', error);
+    }
+
+    const profile = AppState.interestProfile;
+    if (profile) {
+        const topOf = (bucket) => Object.entries(bucket || {})
+            .filter(([key]) => key !== '_seed')
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([key]) => key);
+        const topTags = topOf(profile.tags);
+        const topBooks = topOf(profile.books);
+        if (topTags.length > 0) lines.push(`Topics they engage with most: ${topTags.join(', ')}.`);
+        if (topBooks.length > 0) lines.push(`Books of the Bible they read most: ${topBooks.join(', ')}.`);
+    }
+
+    return [base, ...lines].filter(Boolean).join('\n');
+}
+
+async function generateDevotionalWithAI(personalContext, continuityEntries, dateKey) {
+    const continuityText = continuityEntries.length > 0
+        ? `Their recent devotionals, for natural continuity (don't repeat these — build on one only if it genuinely fits, otherwise ignore):\n${continuityEntries.map(e => `- ${e.date}: "${e.title}" (themes: ${(e.themes || []).join(', ') || 'none recorded'})`).join('\n')}`
+        : 'No previous devotionals on record yet.';
+
+    const response = await fetch(DEEPSEEK_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+        body: JSON.stringify({
+            model: 'deepseek-chat',
+            messages: [
+                {
+                    role: 'system',
+                    content: `You are Shepherd, writing a short, warm, biblically grounded daily devotional for a specific user of the GraceGuide Bible app. Personalize it using the context given, but weave it in naturally and only where it genuinely fits — don't recite their stats back at them or force a connection to every detail. If a previous devotional's theme naturally continues today, you may build on it briefly without repeating it. If nothing personal fits well, still write a solid, grounded devotional.
+
+Respond with ONLY valid JSON — no markdown, no code fences, no commentary — matching exactly this shape:
+{"title": "3-6 word title", "body": "2-4 short paragraphs of devotional content separated by \\n\\n", "verseReference": "e.g. Philippians 4:6-7", "verseText": "short quote or close paraphrase of that passage, under 30 words", "prayerPrompt": "one short, concrete prayer or action prompt, 1-2 sentences", "themes": ["2-4 short lowercase theme words"]}`
+                },
+                {
+                    role: 'user',
+                    content: `Today's date: ${dateKey}\n\n${personalContext}\n\n${continuityText}\n\nWrite today's devotional.`
+                }
+            ],
+            temperature: 0.9,
+            max_tokens: 500
+        })
+    });
+
+    if (!response.ok) throw new Error(`AI request failed (${response.status})`);
+    const data = await response.json();
+    let raw = data.choices?.[0]?.message?.content?.trim();
+    if (!raw) throw new Error('Empty AI response');
+    raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+    const objectMatch = raw.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(objectMatch ? objectMatch[0] : raw);
+    if (!parsed.title || !parsed.body) throw new Error('Malformed devotional response');
+
+    return {
+        title: String(parsed.title).trim(),
+        body: String(parsed.body).trim(),
+        verseReference: parsed.verseReference ? String(parsed.verseReference).trim() : '',
+        verseText: parsed.verseText ? String(parsed.verseText).trim() : '',
+        prayerPrompt: parsed.prayerPrompt ? String(parsed.prayerPrompt).trim() : '',
+        themes: Array.isArray(parsed.themes) ? parsed.themes.slice(0, 4).map(t => String(t).trim().toLowerCase()).filter(Boolean) : []
+    };
+}
+
+// Only ever reached if the AI call itself fails (offline, API error,
+// malformed response, etc). A modest pool keyed off a stable hash of
+// the date, same approach as pickFallbackReflection above — not
+// personalized (there's no AI call to personalize it with), but enough
+// to keep the homepage/devotional page working through an outage.
+function pickFallbackDevotional(dateKey) {
+    const pool = [
+        {
+            title: 'Steady in the Waiting',
+            body: "Some seasons ask you to move; others ask you to wait well. Waiting isn't wasted time when your heart stays anchored in trust rather than anxiety.\n\nGod is rarely as slow as it feels — He's often doing quiet work in you before He does visible work through you.",
+            verseReference: 'Isaiah 40:31',
+            verseText: 'Those who hope in the Lord will renew their strength; they will soar on wings like eagles.',
+            prayerPrompt: "Bring one thing you're waiting on to God today, and ask Him for patience rather than a timeline.",
+            themes: ['patience', 'trust']
+        },
+        {
+            title: 'Known Before Performance',
+            body: "It's easy to treat God's love like a wage — something earned by getting it right. But His love reached you before you'd done anything to deserve it, and it doesn't fluctuate with your performance.\n\nLet that settle your striving today. You're not working to be loved; you're working from a place of already being loved.",
+            verseReference: 'Romans 5:8',
+            verseText: 'While we were still sinners, Christ died for us.',
+            prayerPrompt: 'Thank God today for one specific way He has loved you that you did nothing to earn.',
+            themes: ['grace', 'identity']
+        },
+        {
+            title: 'A Quiet Place',
+            body: "Noise has a way of crowding out the still, small voice. Not because God stops speaking, but because we stop listening.\n\nA few unhurried minutes of quiet aren't a luxury for the spiritually advanced — they're an ordinary, available doorway into hearing Him more clearly.",
+            verseReference: 'Psalm 46:10',
+            verseText: 'Be still, and know that I am God.',
+            prayerPrompt: 'Set aside five uninterrupted minutes today with no agenda except being still before God.',
+            themes: ['stillness', 'prayer']
+        },
+        {
+            title: 'Wisdom for the Decision',
+            body: "Whatever decision is sitting in front of you right now, you don't have to make it in your own strength alone. Wisdom is something God gives generously, not grudgingly, to anyone who genuinely asks.\n\nBring the specific decision to Him, not just a vague request for guidance in general.",
+            verseReference: 'James 1:5',
+            verseText: 'If any of you lacks wisdom, let him ask God, who gives generously to all without reproach.',
+            prayerPrompt: 'Name one real decision you\'re facing and specifically ask God for wisdom about it today.',
+            themes: ['wisdom', 'guidance']
+        },
+        {
+            title: 'Enough for Today',
+            body: "Manna in the wilderness only kept for a day — God provided exactly enough, not a stockpile for the future. It's a strange kind of provision that asks you to trust Him again tomorrow rather than settle in on today's supply.\n\nWhatever you need today, ask for today's portion. Tomorrow will have its own.",
+            verseReference: 'Matthew 6:34',
+            verseText: 'Do not worry about tomorrow, for tomorrow will worry about itself.',
+            prayerPrompt: 'Name one worry about the future you can consciously hand over to God today, just for today.',
+            themes: ['trust', 'provision']
+        },
+        {
+            title: 'Strength in Weakness',
+            body: "Paul asked three times for his weakness to be removed, and the answer wasn't removal — it was a promise that grace would be enough for it. Sometimes God's power shows up most clearly precisely where we're not strong enough on our own.\n\nWhatever weakness you're tempted to hide today, it may be exactly where His strength wants to meet you.",
+            verseReference: '2 Corinthians 12:9',
+            verseText: 'My grace is sufficient for you, for my power is made perfect in weakness.',
+            prayerPrompt: 'Name one area of weakness honestly before God today instead of trying to hide or fix it alone.',
+            themes: ['weakness', 'grace']
+        }
+    ];
+
+    let hash = 0;
+    for (let i = 0; i < dateKey.length; i++) hash = (hash * 31 + dateKey.charCodeAt(i)) >>> 0;
+    return { ...pool[hash % pool.length] };
+}
+
+/** Home page card — position handled by the caller (renderHomePage):
+    shown just before the quiz card while incomplete, and moved to just
+    after Today's Reflection once marked done. Clicking anywhere on it
+    opens the full devotional page. */
+function renderDailyDevotionalCard(devotional) {
+    if (!devotional) return '';
+    const preview = truncate((devotional.body || '').replace(/\s*\n+\s*/g, ' ').trim(), 100);
+    return `
+        <div class="card mb-4 devotional-card ${devotional.completed ? 'devotional-card-done' : ''}" onclick="navigateTo('devotional')">
+            <div class="devotional-card-header">
+                <div class="devotional-card-icon"><i class="fas fa-sun"></i></div>
+                <div class="devotional-card-heading">
+                    <div class="devotional-card-label">Daily Devotional</div>
+                    <div class="devotional-card-title">${escapeHtml(devotional.title || "Today's Devotional")}</div>
+                </div>
+                ${devotional.completed
+                    ? `<span class="devotional-card-done-badge" title="Completed"><i class="fas fa-check"></i></span>`
+                    : `<i class="fas fa-chevron-right devotional-card-chevron"></i>`
+                }
+            </div>
+            <p class="devotional-card-preview">${escapeHtml(preview)}</p>
+        </div>
+    `;
+}
+
+async function renderDevotionalPage() {
+    if (!AppState.currentUser) {
+        DOM.pageContainer.innerHTML = `
+            <div class="text-center" style="padding: 80px 24px;">
+                <i class="fas fa-sun" style="font-size: 40px; opacity: 0.35; margin-bottom: 16px;"></i>
+                <h3 style="margin-bottom: 8px;">Sign in for your daily devotional</h3>
+                <p class="text-muted" style="margin-bottom: 16px;">Devotionals are personalized to you, so they're only available when you're signed in.</p>
+                <button class="btn btn-primary" onclick="showAuthModal({message: 'Sign in to get your daily devotional.'})">Sign In</button>
+            </div>
+        `;
+        return;
+    }
+
+    const todayKey = dayKey(Date.now());
+    if (!AppState.todayDevotional || AppState.todayDevotional.date !== todayKey) {
+        DOM.pageContainer.innerHTML = `
+            <div class="devotional-page-container">
+                <div class="skeleton" style="height: 200px; border-radius: 16px; margin-bottom: 16px;"></div>
+                <div class="skeleton" style="height: 140px; border-radius: 16px;"></div>
+            </div>
+        `;
+        try {
+            AppState.todayDevotional = await getTodayDevotional();
+        } catch (error) {
+            console.error('Error loading devotional page:', error);
+            AppState.todayDevotional = null;
+        }
+    }
+
+    if (AppState.currentRoute !== 'devotional') return; // navigated away while loading
+
+    const devotional = AppState.todayDevotional;
+    if (!devotional) {
+        DOM.pageContainer.innerHTML = `
+            <div class="text-center" style="padding: 80px 24px;">
+                <i class="fas fa-triangle-exclamation" style="font-size: 40px; opacity: 0.35; margin-bottom: 16px;"></i>
+                <h3 style="margin-bottom: 8px;">Couldn't load today's devotional</h3>
+                <p class="text-muted" style="margin-bottom: 16px;">Please try again in a moment.</p>
+                <button class="btn btn-primary" onclick="navigateTo('devotional', { replace: true })"><i class="fas fa-rotate-right"></i> Retry</button>
+            </div>
+        `;
+        return;
+    }
+
+    const paragraphs = (devotional.body || '').split(/\n\s*\n+/).map(p => p.trim()).filter(Boolean);
+    const verseLink = typeof resolveVerseReferenceLink === 'function' ? resolveVerseReferenceLink(devotional.verseReference) : null;
+    const safeBook = verseLink ? verseLink.book.replace(/'/g, "\\'") : '';
+
+    DOM.pageContainer.innerHTML = `
+        <div class="devotional-page-container">
+            <div class="card devotional-hero">
+                <div class="devotional-hero-icon"><i class="fas fa-sun"></i></div>
+                <div class="devotional-hero-label">Daily Devotional</div>
+                <h2 class="devotional-hero-title">${escapeHtml(devotional.title || "Today's Devotional")}</h2>
+                <div class="devotional-hero-date">${formatDate(devotional.generatedAt || Date.now())}</div>
+            </div>
+
+            <div class="card mb-3">
+                ${paragraphs.map(p => `<p class="devotional-paragraph">${escapeHtml(p)}</p>`).join('')}
+                ${devotional.verseReference ? `
+                    <div class="devotional-verse-block" ${verseLink ? `onclick="openBibleChapter('${safeBook}', ${verseLink.chapter})"` : ''}>
+                        <i class="fas fa-book-bible"></i>
+                        <div>
+                            ${devotional.verseText ? `<p class="devotional-verse-text">"${escapeHtml(devotional.verseText)}"</p>` : ''}
+                            <p class="devotional-verse-ref">${escapeHtml(devotional.verseReference)}${verseLink ? ' <i class="fas fa-chevron-right"></i>' : ''}</p>
+                        </div>
+                    </div>
+                ` : ''}
+                ${devotional.prayerPrompt ? `
+                    <div class="devotional-prayer-block">
+                        <i class="fas fa-hands-praying"></i>
+                        <p>${escapeHtml(devotional.prayerPrompt)}</p>
+                    </div>
+                ` : ''}
+            </div>
+
+            <div class="flex gap-2 mb-4">
+                <button class="btn ${devotional.completed ? 'btn-outline' : 'btn-primary'}" style="flex: 1;" ${devotional.completed ? 'disabled' : ''} onclick="markDevotionalDone()">
+                    <i class="fas ${devotional.completed ? 'fa-check' : 'fa-circle-check'}"></i> ${devotional.completed ? 'Completed' : 'Mark as Done'}
+                </button>
+                <button class="btn btn-outline" style="flex: 1;" onclick="discussDevotionalWithShepherd()">
+                    <i class="fas fa-dove"></i> Discuss with Shepherd
+                </button>
+            </div>
+            <button class="btn btn-outline btn-block mb-4" onclick="shareDevotionalCard(AppState.todayDevotional)">
+                <i class="fas fa-share"></i> Share Devotional
+            </button>
+        </div>
+    `;
+}
+
+async function markDevotionalDone() {
+    if (!AppState.currentUser || !AppState.todayDevotional || AppState.todayDevotional.completed) return;
+    const uid = AppState.currentUser.uid;
+    const todayKey = dayKey(Date.now());
+    const completedAt = Date.now();
+
+    AppState.todayDevotional.completed = true;
+    AppState.todayDevotional.completedAt = completedAt;
+
+    try {
+        await database.ref(`users/${uid}/devotionals/${todayKey}`).update({ completed: true, completedAt });
+        showToast('Devotional marked as done', 'success');
+    } catch (error) {
+        console.error('Error marking devotional done:', error);
+        showToast('Could not save — please try again.', 'error');
+        AppState.todayDevotional.completed = false;
+        AppState.todayDevotional.completedAt = null;
+        return;
+    }
+
+    // Re-render whichever of the two places that show it is currently
+    // on screen, so its state/position updates immediately.
+    if (AppState.currentRoute === 'devotional') renderDevotionalPage();
+    else if (AppState.currentRoute === 'home') renderHomePage();
 }
 
 /* ============================================
@@ -2247,9 +3004,16 @@ function addNoteToSelectedVerses() {
 }
 
 function shareSelectedVerses() {
-    const verseNumbers = Array.from(AppState.selectedVerses).join(', ');
-    const reference = `${AppState.currentBook} ${AppState.currentChapter}:${verseNumbers}`;
-    shareVerse(reference);
+    const verseNumbers = Array.from(AppState.selectedVerses).sort((a, b) => a - b);
+    const reference = `${AppState.currentBook} ${AppState.currentChapter}:${verseNumbers.join(', ')}`;
+    // Look up the actual rendered text for the selected verse(s) — same
+    // DOM pattern used by postSelectedVersesToSpace() — so the share
+    // card/text has real content instead of just a bare reference.
+    const text = verseNumbers
+        .map(v => $(`.bible-verse[data-verse="${v}"] .bible-text`)?.textContent.trim())
+        .filter(Boolean)
+        .join(' ');
+    shareVerse(reference, text);
 }
 
 function askAIAboutSelectedVerses() {
@@ -2269,15 +3033,22 @@ function askAIAboutSelectedVerses() {
 }
 
 function shareVerse(reference, text = '') {
+    // shareVerseCard() (js/sharecards.js) is the Phase 2 share-card
+    // engine — offers a branded image alongside the plain text/link.
+    // Falls back to the original plain-text share if that file somehow
+    // isn't loaded, so this never breaks even in a partial deploy.
+    if (typeof shareVerseCard === 'function') {
+        shareVerseCard(reference, text);
+        return;
+    }
+
     const shareText = text ? `"${text}" - ${reference}` : reference;
-    
     if (navigator.share) {
         navigator.share({
             title: 'Bible Verse',
             text: shareText
         }).catch(() => {});
     } else {
-        // Fallback copy to clipboard
         navigator.clipboard.writeText(shareText).then(() => {
             showToast('Verse copied to clipboard!', 'success');
         });
@@ -2333,11 +3104,29 @@ function openBibleChapter(book, chapter, verse) {
     AppState.currentBook = book;
     AppState.currentChapter = chapter;
 
+    // Phase 3: keep the address bar in sync with whatever chapter is
+    // actually showing, so it's always refreshable/shareable as
+    // #/bible/BOOK/CHAPTER[/VERSE] — not just when arriving via a deep
+    // link.
+    const urlPath = `bible/${encodeURIComponent(book)}/${chapter}${verse ? '/' + verse : ''}`;
+
     let loadPromise;
     if (AppState.currentRoute !== 'bible') {
-        navigateTo('bible'); // renderBiblePage() picks up the reader view we just set above
+        // Goes through the full navigateTo() (closes overlays, honors
+        // the email-verification gate, stops Shepherd voice playback,
+        // etc.) exactly as before — just now with a urlPath so the
+        // pushed URL reflects the actual chapter instead of a bare
+        // "#/bible".
+        navigateTo('bible', { urlPath });
         loadPromise = AppState.lastRenderPromise;
     } else {
+        // Already on the Bible tab: bypass navigateTo (as before this
+        // change too) so paging between chapters/cross-references
+        // doesn't re-run its full dispatch or restore a stale scroll
+        // position from the chapter being left. replaceState (never
+        // push) so this doesn't flood the back button with a stop for
+        // every single chapter/verse link followed while reading.
+        history.replaceState({ route: 'bible' }, '', `#/${urlPath}`);
         loadPromise = renderBibleReaderView(book, chapter);
     }
     if (verse && loadPromise && typeof loadPromise.then === 'function') {
