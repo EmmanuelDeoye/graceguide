@@ -891,6 +891,18 @@
     background: linear-gradient(135deg, var(--accent-terracotta), #a8562f);
 }
 
+/* The default .btn-outline (dark text/border on transparent) is meant
+   for light card backgrounds — on these dark-gradient quiz cards it
+   would render as nearly invisible without this override. */
+.quiz-home-card .btn-outline {
+    color: white;
+    border-color: rgba(255,255,255,0.55);
+}
+
+.quiz-home-card .btn-outline:hover {
+    background: rgba(255,255,255,0.12);
+}
+
 /* Combined leaderboard carousel (This Week's Leaderboard <-> All-Time
    Ranking). The outer .card's own padding/background is neutralized so
    each slide can go full-bleed with its own distinct gradient — the
@@ -1611,6 +1623,47 @@
     color: var(--text-slate);
     line-height: 1.6;
     font-size: 14px;
+}
+
+.devotional-prayer-points {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.devotional-prayer-points li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 14px;
+    color: var(--text-slate);
+    line-height: 1.5;
+}
+
+.devotional-prayer-points li i {
+    color: var(--accent-muted-gold);
+    font-size: 8px;
+    margin-top: 7px;
+    flex-shrink: 0;
+}
+
+/* Mark as Done / Discuss with Shepherd / Share — side by side on wider
+   screens, stacked full-width on mobile (where 3 squeezed-together
+   buttons get cramped and hard to tap accurately). */
+.devotional-action-row {
+    display: flex;
+    gap: 10px;
+}
+
+.devotional-action-row .btn {
+    flex: 1;
+}
+
+@media (max-width: 480px) {
+    .devotional-action-row {
+        flex-direction: column;
+    }
 }
 
 /* ============================================
