@@ -114,6 +114,20 @@
       "$uid": {
         ".write": "auth != null && auth.uid == $uid"
       }
+    },
+
+    "plannerShares": {
+      ".read": true,
+      "$shareId": {
+        ".write": "auth != null && (!data.exists() ? newData.child('ownerId').val() == auth.uid : data.child('ownerId').val() == auth.uid)"
+      }
+    },
+
+    "devotionalShares": {
+      ".read": true,
+      "$shareId": {
+        ".write": "auth != null && (!data.exists() ? newData.child('ownerId').val() == auth.uid : data.child('ownerId').val() == auth.uid)"
+      }
     }
   }
 }
