@@ -263,6 +263,7 @@ body {
 .admin-content {
     padding: 24px;
     max-width: 1100px;
+    overflow-x: hidden;
 }
 
 .admin-sidebar-backdrop {
@@ -288,6 +289,9 @@ body {
     }
     .admin-sidebar-backdrop.visible {
         display: block;
+    }
+    .admin-content {
+        padding: 16px;
     }
 }
 
@@ -544,9 +548,10 @@ body {
 /* ---- Space post management ---- */
 .admin-space-mod-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
     gap: 16px;
     align-items: start;
+    min-width: 0;
 }
 
 .admin-space-card {
