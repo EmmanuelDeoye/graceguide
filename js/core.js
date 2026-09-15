@@ -222,16 +222,19 @@ function closeModal(fromPopstate = false) {
 }
 
 /**
- * Same reasoning as closeSheetThen(): closeModal()'s history.back() is
- * async, so anything that itself navigates or opens another
- * modal/sheet right afterward (e.g. openBibleChapter -> navigateTo,
- * which does its own history.pushState) can race it. Use this instead
- * of `onclick="closeModal(); next()"` whenever `next` navigates or
- * opens another overlay.
+ * Same reasoning as closeSheetThen() (see runAfterHistoryUnwinds()'s
+ * doc comment for the full race-condition explanation): closeModal()'s
+ * history.back() is async, so anything that itself navigates or opens
+ * another modal/sheet right afterward (e.g. openBibleChapter ->
+ * navigateTo, which does its own history.pushState) needs to wait for
+ * the real popstate event, not a guessed delay. Use this instead of
+ * `onclick="closeModal(); next()"` whenever `next` navigates or opens
+ * another overlay.
  */
 function closeModalThen(next) {
+    const wasConsumingHistory = AppState.modalOpen && history.state && history.state.overlay === 'modal';
     closeModal();
-    setTimeout(next, 0);
+    runAfterHistoryUnwinds(wasConsumingHistory, next);
 }
 
 function showSheet(content, options = {}) {
@@ -287,9 +290,42 @@ function closeSheet(fromPopstate = false) {
  * would sometimes silently do nothing. Deferring `next` by one tick lets
  * the back-navigation actually finish first.
  */
+/** Shared by closeSheetThen()/closeModalThen(): waits for the actual
+    popstate event that the overlay's own history.back() call triggers
+    before running `next`, instead of guessing with a fixed-delay
+    setTimeout. That guess is a genuine race — history.back()'s popstate
+    dispatch timing isn't guaranteed relative to a 0ms timeout, and when
+    the timeout wins, `next` (e.g. opening a new modal, which pushes its
+    own history entry) runs BEFORE the popstate handler has consumed
+    suppressNextPopstateNav. The popstate event then arrives late, sees
+    the flag still set, and — per its own suppress-branch — closes
+    whatever `next` just opened. This is what made things like the
+    Shepherd conversation rename/delete buttons flash open and
+    immediately close most of the time. Falls back to a short timeout
+    only when there's nothing to actually wait for (overlay wasn't
+    consuming a history entry in the first place). */
+function runAfterHistoryUnwinds(wasConsumingHistory, next) {
+    if (!wasConsumingHistory) {
+        setTimeout(next, 0);
+        return;
+    }
+    let done = false;
+    function run() {
+        if (done) return;
+        done = true;
+        window.removeEventListener('popstate', run);
+        next();
+    }
+    window.addEventListener('popstate', run);
+    // Safety net in case this particular back() doesn't end up
+    // dispatching a popstate at all — don't strand `next` forever.
+    setTimeout(run, 150);
+}
+
 function closeSheetThen(next) {
+    const wasConsumingHistory = AppState.sheetOpen && history.state && history.state.overlay === 'sheet';
     closeSheet();
-    setTimeout(next, 0);
+    runAfterHistoryUnwinds(wasConsumingHistory, next);
 }
 
 function setLoading(isLoading) {
@@ -1614,46 +1650,16 @@ async function renderHomePage() {
     DOM.bottomNav.style.display = 'flex';
     DOM.drawer.style.display = 'flex';
 
-    // Each of these hits the network/DB — wrapped individually so a
-    // transient failure on ONE (e.g. the quiz competition read) can't
-    // abort the whole page before it ever reaches the innerHTML
-    // assignment below, which previously left the page looking blank/
-    // frozen on whatever was showing before.
-    let reflection;
-    try {
-        reflection = await getDailyReflection();
-    } catch (error) {
-        console.error('Error loading daily reflection:', error);
-        reflection = "Take a moment today to pause and reflect on God's faithfulness in your life.";
-    }
-    AppState.todayReflection = reflection;
-
+    // getDailyVerse() is fully synchronous under the hood (just a
+    // day-of-year array lookup) despite its async signature, so it's
+    // safe to resolve inline without delaying the shell render below.
     let verse = null;
     try {
         verse = await getDailyVerse();
         AppState.todayVerse = verse;
     } catch (error) {
         console.error('Error loading daily verse:', error);
-        verse = null;
     }
-
-    let quizCardHTML;
-    try {
-        quizCardHTML = await renderHomeQuizCard();
-    } catch (error) {
-        console.error('Error loading quiz competition card:', error);
-        quizCardHTML = '';
-    }
-
-    let devotional = null;
-    try {
-        devotional = await getTodayDevotional();
-        AppState.todayDevotional = devotional;
-    } catch (error) {
-        console.error('Error loading daily devotional:', error);
-        devotional = null;
-    }
-    const devotionalCardHTML = renderDailyDevotionalCard(devotional);
 
     let recommendationsHTML;
     try {
@@ -1671,18 +1677,28 @@ async function renderHomePage() {
         recommendationsHTML = '';
     }
 
-    // Bail out if the user navigated away while the above was loading —
-    // otherwise we'd render Home's content into a container the user has
-    // since moved on from.
+    // Bail out if the user navigated away while the above was resolving.
     if (AppState.currentRoute !== 'home') return;
 
+    // Render the shell immediately. The three genuinely slow, network/
+    // AI-backed sections (quiz card, daily devotional, daily reflection
+    // — any of which can involve an AI generation call on the first
+    // load of the day) each start as a shimmer placeholder and fill in
+    // independently, in parallel, as soon as they resolve — instead of
+    // the whole page staying blank/frozen until all of them finish
+    // (which is what made Home feel unresponsive, sometimes for several
+    // seconds, sometimes indefinitely if one call hung).
     DOM.pageContainer.innerHTML = `
         <div class="home-container" style="max-width: 768px; margin: 0 auto; padding: 16px;">
-            <!-- Daily Devotional (before the quiz card until marked done) -->
-            ${devotional && !devotional.completed ? devotionalCardHTML : ''}
+            <!-- Daily Devotional — shown here (top) while incomplete -->
+            <div id="home-devotional-slot-top">
+                <div class="skeleton" style="height: 90px; border-radius: 16px; margin-bottom: 16px;"></div>
+            </div>
 
             <!-- Weekly Bible Quiz: countdown / live / leaderboard -->
-            ${quizCardHTML}
+            <div id="home-quiz-slot">
+                <div class="skeleton" style="height: 140px; border-radius: 16px; margin-bottom: 16px;"></div>
+            </div>
             
             <!-- Quick Actions -->
             <div class="flex gap-2 mb-4" style="overflow-x: auto; padding-bottom: 8px;">
@@ -1721,14 +1737,18 @@ async function renderHomePage() {
                         </button>
                     ` : ''}
                 </div>
-                <p style="color: var(--text-slate); line-height: 1.7;">${reflection}</p>
+                <div id="home-reflection-slot">
+                    <div class="skeleton" style="height: 16px; border-radius: 4px; margin-bottom: 8px;"></div>
+                    <div class="skeleton" style="height: 16px; border-radius: 4px; margin-bottom: 8px; width: 92%;"></div>
+                    <div class="skeleton" style="height: 16px; border-radius: 4px; width: 68%;"></div>
+                </div>
                 <button class="btn btn-outline btn-sm mt-3" onclick="discussReflectionWithShepherd()">
                     <i class="fas fa-dove"></i> Discuss with Shepherd
                 </button>
             </div>
 
-            <!-- Daily Devotional (moved here once marked done) -->
-            ${devotional && devotional.completed ? devotionalCardHTML : ''}
+            <!-- Daily Devotional — shown here (bottom) once marked done -->
+            <div id="home-devotional-slot-bottom"></div>
             
             <!-- Recommended Reading -->
             <div class="card">
@@ -1740,8 +1760,89 @@ async function renderHomePage() {
         </div>
     `;
 
-    startQuizCountdownTicker(() => renderHomePage());
+    // Each of these independently fetches its own data and fills in its
+    // own slot — deliberately NOT awaited here, so they all run in
+    // parallel and none of them blocks the page from being interactive.
+    loadHomeReflectionSection();
+    loadHomeQuizSection();
+    loadHomeDevotionalSection();
+}
+
+/** Fills #home-reflection-slot once getDailyReflection() resolves
+    (possibly an AI call on the first load of the day, otherwise a
+    cached Firebase/localStorage read). See renderHomePage()'s doc
+    comment for why this is separated out. */
+async function loadHomeReflectionSection() {
+    let reflection;
+    try {
+        reflection = await getDailyReflection();
+    } catch (error) {
+        console.error('Error loading daily reflection:', error);
+        reflection = "Take a moment today to pause and reflect on God's faithfulness in your life.";
+    }
+    AppState.todayReflection = reflection;
+
+    if (AppState.currentRoute !== 'home') return; // navigated away while this loaded
+    const slot = document.getElementById('home-reflection-slot');
+    if (!slot) return;
+    slot.innerHTML = `<p style="color: var(--text-slate); line-height: 1.7;">${reflection}</p>`;
+}
+
+/** Fills #home-quiz-slot once renderHomeQuizCard() resolves, then wires
+    up the countdown ticker and carousel swipe bindings — both of which
+    need the card's actual DOM elements to exist first, so they can't
+    run until now (moved here from the old synchronous render path). */
+async function loadHomeQuizSection() {
+    let quizCardHTML;
+    try {
+        quizCardHTML = await renderHomeQuizCard();
+    } catch (error) {
+        console.error('Error loading quiz competition card:', error);
+        quizCardHTML = '';
+    }
+
+    if (AppState.currentRoute !== 'home') return; // navigated away while this loaded
+    const slot = document.getElementById('home-quiz-slot');
+    if (!slot) return;
+    slot.innerHTML = quizCardHTML;
+
+    startQuizCountdownTicker(() => loadHomeQuizSection());
     if (typeof initLeaderboardCarouselSwipe === 'function') initLeaderboardCarouselSwipe();
+}
+
+/** Fills whichever devotional slot is appropriate (top while incomplete,
+    bottom once marked done) once getTodayDevotional() resolves —
+    possibly an AI call on the first load of the day, otherwise a
+    cached Firebase read. */
+async function loadHomeDevotionalSection() {
+    let devotional = null;
+    try {
+        devotional = await getTodayDevotional();
+        AppState.todayDevotional = devotional;
+    } catch (error) {
+        console.error('Error loading daily devotional:', error);
+        devotional = null;
+    }
+
+    if (AppState.currentRoute !== 'home') return; // navigated away while this loaded
+    const topSlot = document.getElementById('home-devotional-slot-top');
+    const bottomSlot = document.getElementById('home-devotional-slot-bottom');
+    if (!topSlot || !bottomSlot) return;
+
+    if (!devotional) {
+        topSlot.innerHTML = '';
+        bottomSlot.innerHTML = '';
+        return;
+    }
+
+    const html = renderDailyDevotionalCard(devotional);
+    if (devotional.completed) {
+        topSlot.innerHTML = '';
+        bottomSlot.innerHTML = html;
+    } else {
+        topSlot.innerHTML = html;
+        bottomSlot.innerHTML = '';
+    }
 }
 
 async function getDailyVerse() {
@@ -2285,10 +2386,22 @@ async function markDevotionalDone() {
         return;
     }
 
-    // Re-render whichever of the two places that show it is currently
-    // on screen, so its state/position updates immediately.
-    if (AppState.currentRoute === 'devotional') renderDevotionalPage();
-    else if (AppState.currentRoute === 'home') renderHomePage();
+    // Update whichever of the two places that show it is currently on
+    // screen, so its state/position updates immediately.
+    if (AppState.currentRoute === 'devotional') {
+        renderDevotionalPage();
+    } else if (AppState.currentRoute === 'home') {
+        const topSlot = document.getElementById('home-devotional-slot-top');
+        const bottomSlot = document.getElementById('home-devotional-slot-bottom');
+        if (topSlot && bottomSlot) {
+            // We already have the freshly-updated devotional in memory —
+            // no need to re-fetch or re-shimmer the whole page for this.
+            topSlot.innerHTML = '';
+            bottomSlot.innerHTML = renderDailyDevotionalCard(AppState.todayDevotional);
+        } else {
+            renderHomePage();
+        }
+    }
 }
 
 /* ============================================
