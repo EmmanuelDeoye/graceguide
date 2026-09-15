@@ -2297,8 +2297,15 @@ function initEventListeners() {
     // Drawer navigation
     $$('.drawer-link').forEach(link => {
         link.addEventListener('click', (e) => {
-            e.preventDefault();
             const route = link.dataset.route;
+            // Links without a data-route (currently just Admin Dashboard,
+            // which points at admin.html in a new tab) aren't part of the
+            // in-app router — let them follow their normal href/target.
+            if (!route) {
+                if (AppState.drawerOpen) closeDrawer();
+                return;
+            }
+            e.preventDefault();
             navigateTo(route);
         });
     });

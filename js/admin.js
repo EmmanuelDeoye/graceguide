@@ -631,6 +631,15 @@ async function renderQuizTab() {
                 <h2>Area of Concentration</h2>
                 <button class="btn btn-outline btn-sm" onclick="addConcentrationRow()"><i class="fas fa-plus"></i> Add</button>
             </div>
+            <div class="admin-form-row mb-2">
+                <label>Generate with AI — pick a theme, AI stays on it</label>
+                <div style="display:flex; gap:8px;">
+                    <input type="text" id="concentration-ai-theme" class="form-input" placeholder="e.g. Faith under trial, The life of David, Forgiveness" style="flex:1;">
+                    <input type="number" id="concentration-ai-count" class="form-input" value="6" min="2" max="12" style="max-width:76px;" title="Number of items">
+                </div>
+                <button id="concentration-ai-generate-btn" class="btn btn-gold btn-sm mt-2"><i class="fas fa-wand-magic-sparkles"></i> Generate with AI</button>
+                <p class="text-muted" style="font-size:11px; margin-top:6px;">Replaces the list below with a fresh set of chapters all tied to the theme — review/edit before saving.</p>
+            </div>
             <div id="concentration-list">
                 ${concentration.map((c, i) => concentrationRowHTML(c, i)).join('') || '<p class="text-muted">No prep items yet.</p>'}
             </div>
@@ -699,16 +708,17 @@ async function renderQuizTab() {
             <p class="text-muted" style="font-size:12px; margin-bottom:12px;">Every round that's been archived — a new round is archived here automatically each time you save a new schedule date above.</p>
             <div class="admin-table-wrap">
                 <table class="admin-table">
-                    <thead><tr><th>Date</th><th>Questions</th><th>Participants</th><th></th></tr></thead>
+                    <thead><tr><th>Date</th><th>Questions</th><th>Concentration</th><th>Participants</th><th></th></tr></thead>
                     <tbody>
                         ${history.length > 0 ? history.map(round => `
                             <tr>
                                 <td>${formatDate(round.startTime)}</td>
                                 <td>${(round.questions || []).length}</td>
+                                <td>${(round.concentration || []).length}</td>
                                 <td>${Object.keys(round.participants || {}).length}</td>
                                 <td><button class="btn btn-outline btn-sm" onclick="viewQuizHistoryRound(${round.startTime})">View</button></td>
                             </tr>
-                        `).join('') : `<tr><td colspan="4" class="admin-loading-row">No past rounds yet.</td></tr>`}
+                        `).join('') : `<tr><td colspan="5" class="admin-loading-row">No past rounds yet.</td></tr>`}
                     </tbody>
                 </table>
             </div>
@@ -717,6 +727,7 @@ async function renderQuizTab() {
 
     $('#quiz-save-schedule-btn').addEventListener('click', saveQuizSchedule);
     $('#quiz-save-concentration-btn').addEventListener('click', saveConcentrationList);
+    $('#concentration-ai-generate-btn').addEventListener('click', generateConcentrationWithAI);
     $('#quiz-save-questions-btn').addEventListener('click', saveQuestionsList);
     $('#ai-generate-btn').addEventListener('click', generateQuestionsWithAI);
 
@@ -741,6 +752,76 @@ function addConcentrationRow() {
     if (list.querySelector('.text-muted')) list.innerHTML = '';
     const i = $$('[data-concentration-row]', list).length;
     list.insertAdjacentHTML('beforeend', concentrationRowHTML({}, i));
+}
+
+/** Generates a fresh Area of Concentration list, all tied to one
+    admin-supplied theme, via AI. Replaces the currently staged rows
+    (not yet saved to Firebase — same as any other manual edit, nothing
+    persists until "Save Concentration List" is clicked) so the admin
+    can review/tweak the generated set before committing it. */
+async function generateConcentrationWithAI() {
+    const theme = $('#concentration-ai-theme').value.trim();
+    if (!theme) { showAdminToast('Enter a theme first.', 'warning'); return; }
+    const count = Math.min(12, Math.max(2, parseInt($('#concentration-ai-count').value) || 6));
+
+    const btn = $('#concentration-ai-generate-btn');
+    btn.disabled = true;
+    btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> Generating…`;
+
+    const promptText = `Create a Bible study "Area of Concentration" reading list of exactly ${count} items, all staying tightly focused on one unifying theme: "${theme}".
+Every single item must clearly illustrate this theme — do not drift into unrelated topics. Choose a good spread of different Bible characters/books/testaments where possible, as long as each one still fits the theme.
+Respond with ONLY a JSON array (no markdown, no code fences, no commentary) of exactly ${count} objects, each with these exact fields:
+- "character": the key Bible character or figure central to this passage (e.g. "Moses")
+- "book": the Bible book name exactly as it appears in a standard Bible (e.g. "Exodus")
+- "chapter": the chapter NUMBER (integer) where this passage begins
+- "reference": a short human-readable reference label (e.g. "Exodus 14" or "Exodus 1-14")`;
+
+    try {
+        const response = await fetch(DEEPSEEK_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+            body: JSON.stringify({
+                model: 'deepseek-chat',
+                messages: [
+                    { role: 'system', content: 'You generate structured Bible study reading lists. You always respond with strictly valid JSON only — no markdown formatting, no code fences, no extra text before or after the JSON array.' },
+                    { role: 'user', content: promptText }
+                ],
+                temperature: 0.75,
+                max_tokens: Math.min(2000, count * 120)
+            })
+        });
+
+        if (!response.ok) throw new Error('AI request failed');
+        const data = await response.json();
+        let raw = data.choices[0].message.content.trim();
+        raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+        const arrayMatch = raw.match(/\[[\s\S]*\]/);
+        const parsed = JSON.parse(arrayMatch ? arrayMatch[0] : raw);
+
+        const clean = parsed
+            .filter(item => item && item.book && item.chapter)
+            .slice(0, count)
+            .map(item => ({
+                character: typeof item.character === 'string' ? item.character.trim() : '',
+                book: typeof item.book === 'string' ? item.book.trim() : '',
+                chapter: parseInt(item.chapter) || 1,
+                reference: (typeof item.reference === 'string' && item.reference.trim())
+                    ? item.reference.trim()
+                    : `${item.book} ${item.chapter}`.trim()
+            }));
+
+        if (clean.length === 0) throw new Error('No usable items in AI response');
+
+        const list = $('#concentration-list');
+        list.innerHTML = clean.map((c, i) => concentrationRowHTML(c, i)).join('');
+        showAdminToast(`Generated ${clean.length} items on "${theme}" — review below, then Save.`, 'success');
+    } catch (error) {
+        console.error(error);
+        showAdminToast('AI generation failed. Please try again.', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fas fa-wand-magic-sparkles"></i> Generate with AI`;
+    }
 }
 
 async function saveConcentrationList() {
@@ -872,27 +953,40 @@ async function saveQuizSchedule() {
     const newStartTime = new Date(localValue).getTime();
     const oldData = await fetchQuizData(true);
     const oldStartTime = oldData.startTime;
+    const isNewRound = oldStartTime && oldStartTime !== newStartTime;
 
     try {
-        // A genuinely new round (different start time with existing
-        // participants) gets its old participants archived first, so
-        // last round's scores don't bleed into the new leaderboard.
-        if (oldStartTime && oldStartTime !== newStartTime && oldData.participants) {
+        if (isNewRound) {
+            // Archive the OUTGOING round's full record — questions,
+            // concentration list, and whatever participants it had
+            // (even none) — before resetting current for the new round.
             await database.ref(`quizCompetition/history/${oldStartTime}`).set({
                 startTime: oldStartTime,
                 questions: oldData.questions || [],
-                participants: oldData.participants
+                concentration: oldData.concentration || [],
+                participants: oldData.participants || {}
             });
-            await database.ref('quizCompetition/current/participants').remove();
+            // .update() with null clears each field entirely — the new
+            // round starts with a clean slate rather than inheriting the
+            // previous round's prep list/questions.
+            await database.ref('quizCompetition/current').update({
+                startTime: newStartTime,
+                timerMinutes,
+                questions: null,
+                concentration: null,
+                participants: null
+            });
+        } else {
+            // Same date (e.g. just editing the timer) — not a new round,
+            // so nothing to archive or reset.
+            await database.ref('quizCompetition/current').update({
+                startTime: newStartTime,
+                timerMinutes
+            });
         }
-
-        await database.ref('quizCompetition/current').update({
-            startTime: newStartTime,
-            timerMinutes
-        });
         AdminState.quizData = null;
         AdminState.quizHistory = null; // force a refetch so the new archived round shows up
-        showAdminToast('Quiz schedule saved.', 'success');
+        showAdminToast(isNewRound ? 'New round started — previous questions and concentration list archived.' : 'Quiz schedule saved.', 'success');
         renderTab('quiz');
     } catch (error) {
         console.error(error);
@@ -907,10 +1001,11 @@ function viewQuizHistoryRound(startTime) {
     const participants = Object.entries(round.participants || {}).map(([uid, p]) => ({ uid, ...p }))
         .sort((a, b) => (b.score - a.score) || ((a.timeTakenSeconds ?? 9e9) - (b.timeTakenSeconds ?? 9e9)));
     const questions = round.questions || [];
+    const concentration = round.concentration || [];
 
     showAdminModal(`
         <h3 style="margin-bottom: 4px;">Round — ${formatDate(startTime)}</h3>
-        <p class="text-muted" style="font-size:12px; margin-bottom:16px;">${questions.length} question${questions.length === 1 ? '' : 's'} • ${participants.length} participant${participants.length === 1 ? '' : 's'}</p>
+        <p class="text-muted" style="font-size:12px; margin-bottom:16px;">${questions.length} question${questions.length === 1 ? '' : 's'} • ${concentration.length} concentration item${concentration.length === 1 ? '' : 's'} • ${participants.length} participant${participants.length === 1 ? '' : 's'}</p>
 
         <h4 style="font-size:13px; font-weight:700; margin-bottom:8px;">Leaderboard</h4>
         <div class="admin-table-wrap" style="margin-bottom:20px;">
@@ -928,6 +1023,23 @@ function viewQuizHistoryRound(startTime) {
                 </tbody>
             </table>
         </div>
+
+        ${concentration.length > 0 ? `
+            <h4 style="font-size:13px; font-weight:700; margin-bottom:8px;">Area of Concentration</h4>
+            <div class="admin-table-wrap" style="margin-bottom:20px;">
+                <table class="admin-table">
+                    <thead><tr><th>Character</th><th>Reference</th></tr></thead>
+                    <tbody>
+                        ${concentration.map(c => `
+                            <tr>
+                                <td>${escapeHtml(c.character || '—')}</td>
+                                <td>${escapeHtml(c.reference || `${c.book || ''} ${c.chapter || ''}`.trim() || '—')}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        ` : ''}
 
         <h4 style="font-size:13px; font-weight:700; margin-bottom:8px;">Questions</h4>
         ${questions.length > 0 ? questions.map((q, i) => questionCardHTML(q, i, 'history')).join('') : `<p class="text-muted">No questions were recorded for this round.</p>`}
