@@ -4,15 +4,7 @@
    Load this file FIRST — everything else depends on it.
    ============================================ */
 
-// Firebase Configuration
-// Import the functions you need from the SDKs you need
-
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
-
-// Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+// Your web app's Firebase configuration (safe to expose — this is normal)
 const firebaseConfig = {
   apiKey: "AIzaSyAYyIEAlJD8FgeE2bv73fWwKbpsDPuiB84",
   authDomain: "graceguide-8d9f5.firebaseapp.com",
@@ -23,37 +15,6 @@ const firebaseConfig = {
   appId: "1:859988308746:web:f68879be9f0d967b9040f3",
   measurementId: "G-2QKQHE2TBW"
 };
-// Initialize Firebase
-
-
-// DeepSeek AI Configuration
-// ⚠️ REPLACE WITH YOUR DEEPSEEK API KEY
-const DEEPSEEK_API_KEY = "sk-836241f5b4e749f097e2f09ca7f4a152";
-const DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions";
-
-
-// Shepherd Voice (Text-to-Speech) Configuration
-// Uses the browser's built-in, free Web Speech API (SpeechSynthesis) — no
-// API key or paid service required. Voice quality depends on the device,
-// but every modern browser ships at least one male and one female voice.
-
-// Bible API (scripture.api.bible) Configuration
-const BIBLE_API_KEY = "-In0fpKKWPFAQj_Kjidnv";
-const BIBLE_API_BASE = "https://api.scripture.api.bible/v1";
-// Bible IDs on api.bible for the supported translations
-const BIBLE_VERSIONS = {
-  KJV: "de4e12af7f28f599-02",
-  NLT: "d6e14a625393b4da-01",
-  MSG: "6f11a7de016f942e-01",
-  AMP: "a81b73293d3080c9-01"
-};
-
-// Firebase Cloud Messaging (push notifications) Configuration
-// ⚠️ REPLACE WITH YOUR OWN VAPID KEY — Firebase Console → Project settings
-// → Cloud Messaging → Web configuration → "Web Push certificates" → Generate
-// key pair. Without a real key, getToken() will fail and the "Enable
-// Notifications" button will show an error explaining this.
-const FCM_VAPID_KEY = "BBhcDhI3cU0DhE-KyF5jUEwjPLwyOoHMMrb2R--VJjkdsc0fW7hdnYzAnpD6GzJNlJO5EDrZpjFK-khTTlTqOeI";
 
 // Initialize Firebase
 firebase.initializeApp(firebaseConfig);
@@ -61,9 +22,42 @@ const auth = firebase.auth();
 const database = firebase.database();
 const storage = firebase.storage();
 
-// Firebase Cloud Messaging — only available in secure (https/localhost)
-// contexts that support service workers. Guarded so the app never breaks
-// on browsers/environments (or non-https previews) that lack support.
+// --- Secrets pulled from Realtime Database at /tokens ---
+// These start undefined and are populated once loadSecrets() resolves.
+// Any script that needs them must `await window.configReady` first.
+let DEEPSEEK_API_KEY = null;
+let DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"; // not secret, keep as const-like
+let BIBLE_API_KEY = null;
+let BIBLE_API_BASE = "https://api.scripture.api.bible/v1";
+let BIBLE_VERSIONS = {
+  KJV: "de4e12af7f28f599-02",
+  NLT: "d6e14a625393b4da-01",
+  MSG: "6f11a7de016f942e-01",
+  AMP: "a81b73293d3080c9-01"
+};
+let FCM_VAPID_KEY = null;
+
+async function loadSecrets() {
+  try {
+    const snap = await database.ref('tokens').once('value');
+    const tokens = snap.val() || {};
+
+    DEEPSEEK_API_KEY = tokens.deepseekApiKey || null;
+    BIBLE_API_KEY = tokens.bibleApiKey || null;
+    FCM_VAPID_KEY = tokens.fcmVapidKey || null;
+
+    if (!DEEPSEEK_API_KEY) console.warn('DEEPSEEK_API_KEY missing from /tokens in Realtime Database.');
+    if (!BIBLE_API_KEY) console.warn('BIBLE_API_KEY missing from /tokens in Realtime Database.');
+    if (!FCM_VAPID_KEY) console.warn('FCM_VAPID_KEY missing from /tokens in Realtime Database.');
+  } catch (e) {
+    console.error('Failed to load secrets from /tokens:', e);
+  }
+}
+
+// Other scripts can `await window.configReady` before using the keys above.
+window.configReady = loadSecrets();
+
+// Firebase Cloud Messaging — only in secure contexts that support service workers
 let messaging = null;
 if ('serviceWorker' in navigator && typeof firebase.messaging === 'function' && firebase.messaging.isSupported && firebase.messaging.isSupported()) {
   try {
