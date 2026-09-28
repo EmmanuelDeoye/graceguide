@@ -160,8 +160,8 @@ async function renderGroupChatPage() {
                 <button class="icon-btn" id="group-attach-btn" aria-label="Attach">
                     <i class="fas fa-paperclip"></i>
                 </button>
-                <input type="text" id="group-message-input" class="chat-input" placeholder="Message the group..." onkeypress="if(event.key === 'Enter') sendGroupMessage()">
-                <button class="chat-send-btn" onclick="sendGroupMessage()">
+                <textarea id="group-message-input" class="chat-input" rows="1" enterkeyhint="enter" placeholder="Message the group..." onkeydown="handleMessageInputKeydown(event, sendGroupMessage)" oninput="autoGrowTextarea(this)"></textarea>
+                <button class="chat-send-btn" onclick="sendGroupMessage()" aria-label="Send">
                     <i class="fas fa-paper-plane"></i>
                 </button>
             </div>
@@ -169,6 +169,7 @@ async function renderGroupChatPage() {
     `;
 
     $('#group-attach-btn').addEventListener('click', showGroupAttachMenu);
+    setChatThread('group', `communityGroups/${groupId}/messages`, 'group-message-input');
 
     try {
         const snapshot = await database.ref(`communityGroups/${groupId}`).once('value');
@@ -271,59 +272,14 @@ async function loadGroupMessages(groupId) {
 
     try {
         const snapshot = await database.ref(`communityGroups/${groupId}/messages`).orderByChild('timestamp').limitToLast(100).once('value');
-        const messages = snapshot.val() || {};
-        const list = Object.values(messages).sort((a, b) => a.timestamp - b.timestamp);
-
-        if (list.length === 0) {
-            container.innerHTML = `<p class="text-center text-muted" style="padding: 40px 20px;">No messages yet. Start the conversation!</p>`;
-        } else {
-            container.innerHTML = list.map(msg => renderGroupMessage(msg)).join('');
-        }
-        container.scrollTop = container.scrollHeight;
+        if (AppState.currentGroupId !== groupId || !document.body.contains(container)) return;
+        renderThreadMessages(container, snapshot.val() || {}, {
+            showAuthor: true,
+            emptyHTML: `<p class="text-center text-muted" style="padding: 40px 20px;">No messages yet. Start the conversation!</p>`
+        });
     } catch (error) {
         console.error('Error loading group messages:', error);
     }
-}
-
-function renderGroupMessage(msg) {
-    const isMe = msg.senderId === AppState.currentUser?.uid;
-    const name = escapeHtml(msg.senderName || 'Anonymous');
-
-    let bodyHTML = '';
-    if (msg.type === 'bible') {
-        bodyHTML = `
-            <div class="group-msg-bible">
-                <i class="fas fa-book-bible"></i>
-                <div>
-                    <div style="font-weight:600;">${escapeHtml(msg.reference || '')}</div>
-                    <div style="font-size:13px;">"${escapeHtml(msg.content || '')}"</div>
-                </div>
-            </div>
-        `;
-    } else if (msg.type === 'plan') {
-        bodyHTML = `
-            <div class="group-msg-plan" onclick="navigateTo('planner')">
-                <i class="fas fa-calendar-check"></i>
-                <div style="font-weight:600;">${escapeHtml(msg.content || 'Shared a study plan')}</div>
-            </div>
-        `;
-    } else if (msg.type === 'reel') {
-        bodyHTML = `
-            <div class="group-msg-reel" onclick="navigateTo('space')">
-                <i class="fas fa-compass"></i>
-                <div style="font-weight:600;">Shared a Space post</div>
-            </div>
-        `;
-    } else {
-        bodyHTML = `<p>${escapeHtml(msg.content || '')}</p>`;
-    }
-
-    return `
-        <div class="group-message ${isMe ? 'me' : ''}">
-            ${!isMe ? `<div class="group-msg-author" onclick="viewUserProfile('${msg.senderId}', '${name.replace(/'/g, "\\'")}')">${name}</div>` : ''}
-            <div class="group-msg-bubble">${bodyHTML}</div>
-        </div>
-    `;
 }
 
 async function sendGroupMessage() {
@@ -335,6 +291,12 @@ async function sendGroupMessage() {
     if (!content || !groupId) return;
 
     input.value = '';
+    autoGrowTextarea(input);
+
+    if (ChatThread.editingId) {
+        await submitThreadEdit(content);
+        return;
+    }
 
     const msg = {
         senderId: AppState.currentUser.uid,
@@ -343,6 +305,8 @@ async function sendGroupMessage() {
         content,
         timestamp: Date.now()
     };
+    const replyTo = consumeThreadReply();
+    if (replyTo) msg.replyTo = replyTo;
 
     try {
         // Sending a message also makes you a member
@@ -481,7 +445,7 @@ async function viewUserProfile(userId, displayName) {
     }
 
     AppState.viewedProfileId = userId;
-    AppState.viewedProfileName = displayName || null;
+    AppState.viewedProfileName = getDisplayName(userId, displayName || null);
     navigateTo('view-profile');
 }
 
@@ -512,6 +476,15 @@ async function renderViewProfilePage() {
     // Don't render a stale page if the user navigated away while this loaded.
     if (AppState.viewedProfileId !== userId || AppState.currentRoute !== 'view-profile') return;
 
+    // The live profile is the source of truth for the name — keep the
+    // shared name cache and the top-bar title in step with it.
+    if (profile.username) {
+        UserNameCache.names.set(userId, profile.username);
+        UserNameCache.fetchedAt.set(userId, Date.now());
+        AppState.viewedProfileName = profile.username;
+        if (DOM.topBarTitle) DOM.topBarTitle.textContent = profile.username;
+    }
+
     const name = escapeHtml(profile.username || 'User');
     const status = AppState.userConnections.get(userId) || null;
     const isBrethren = status === 'brethren';
@@ -532,7 +505,7 @@ async function renderViewProfilePage() {
     let journeyLoadFailed = false;
     if (isBrethren) {
         statsPromises.push(
-            database.ref(`users/${userId}/readingHistory`).once('value').then(s => (s.val() || []).length).catch(() => { journeyLoadFailed = true; return 0; }),
+            database.ref(`users/${userId}/readingHistory`).once('value').then(s => dedupeReadingHistory(s.val()).length).catch(() => { journeyLoadFailed = true; return 0; }),
             database.ref(`users/${userId}/bookmarks`).once('value').then(s => (s.val() || []).length).catch(() => { journeyLoadFailed = true; return 0; }),
             database.ref(`users/${userId}/notes`).once('value').then(s => (s.val() || []).length).catch(() => { journeyLoadFailed = true; return 0; })
         );
@@ -848,11 +821,11 @@ async function loadDMConversations() {
         container.innerHTML = list.map(conv => `
             <div class="conversation-item" onclick="openConversation('${conv.otherUid}', '${(conv.otherUserName || 'User').replace(/'/g, "\\'")}')">
                 <div class="post-avatar comment-avatar" style="width:44px;height:44px;">
-                    ${(conv.otherUserName || 'U')[0]?.toUpperCase() || 'U'}
+                    ${userInitialHTML(conv.otherUid, conv.otherUserName || 'User')}
                 </div>
                 <div class="conversation-item-main">
                     <div style="font-weight: 600; display:flex; align-items:center; gap:6px;">
-                        ${escapeHtml(conv.otherUserName || 'User')}
+                        ${userNameHTML(conv.otherUid, conv.otherUserName || 'User')}
                         ${conv.streak > 0 ? `<span class="streak-badge"><i class="fas fa-fire"></i> ${conv.streak}</span>` : ''}
                         ${conv.unread ? `<span class="drawer-badge-dot" style="margin-left:2px;"></span>` : ''}
                     </div>
@@ -861,6 +834,7 @@ async function loadDMConversations() {
                 <div style="font-size: 11px; color: var(--text-slate);">${conv.lastTimestamp ? formatDate(conv.lastTimestamp) : ''}</div>
             </div>
         `).join('');
+        hydrateUserNames(container);
     } catch (error) {
         console.error('Error loading conversations:', error);
     }
@@ -876,7 +850,7 @@ function openConversation(otherUid, otherUserName) {
     }
 
     AppState.currentDMUserId = otherUid;
-    AppState.currentDMUserName = otherUserName;
+    AppState.currentDMUserName = getDisplayName(otherUid, otherUserName);
     navigateTo('dm-thread');
 }
 
@@ -899,7 +873,7 @@ async function renderDMThreadPage() {
                 <button class="icon-btn" onclick="navigateTo('messages')"><i class="fas fa-arrow-left"></i></button>
                 <div style="flex:1; min-width:0; cursor:pointer;" onclick="viewUserProfile('${otherUid}', '${(AppState.currentDMUserName || 'User').replace(/'/g, "\\'")}')">
                     <div style="font-weight:700; display:flex; align-items:center; gap:8px;">
-                        <span>${escapeHtml(AppState.currentDMUserName || 'User')}</span>
+                        ${userNameHTML(otherUid, AppState.currentDMUserName || 'User')}
                         <span id="dm-streak-badge"></span>
                     </div>
                 </div>
@@ -913,8 +887,8 @@ async function renderDMThreadPage() {
                 <button class="icon-btn" id="dm-attach-btn" aria-label="Attach">
                     <i class="fas fa-paperclip"></i>
                 </button>
-                <input type="text" id="dm-message-input" class="chat-input" placeholder="Message..." onkeypress="if(event.key === 'Enter') sendDirectMessage()">
-                <button class="chat-send-btn" onclick="sendDirectMessage()">
+                <textarea id="dm-message-input" class="chat-input" rows="1" enterkeyhint="enter" placeholder="Message..." onkeydown="handleMessageInputKeydown(event, sendDirectMessage)" oninput="autoGrowTextarea(this)"></textarea>
+                <button class="chat-send-btn" onclick="sendDirectMessage()" aria-label="Send">
                     <i class="fas fa-paper-plane"></i>
                 </button>
             </div>
@@ -922,7 +896,14 @@ async function renderDMThreadPage() {
     `;
 
     if (DOM.topBarTitle) DOM.topBarTitle.textContent = AppState.currentDMUserName || 'Chats';
+    fetchUserProfileName(otherUid).then(name => {
+        if (!name || AppState.currentDMUserId !== otherUid) return;
+        AppState.currentDMUserName = name;
+        if (AppState.currentRoute === 'dm-thread' && DOM.topBarTitle) DOM.topBarTitle.textContent = name;
+        hydrateUserNames($('.group-chat-header'));
+    });
     $('#dm-attach-btn').addEventListener('click', showDMAttachMenu);
+    setChatThread('dm', `dmConversations/${getDMConversationId(AppState.currentUser.uid, otherUid)}/messages`, 'dm-message-input');
 
     await loadDMMessages();
     await refreshDMStreakBadge();
@@ -946,58 +927,6 @@ async function refreshDMStreakBadge() {
     }
 }
 
-function renderDMMessage(msg, uid) {
-    const isMe = msg.senderId === uid;
-    let bodyHTML = '';
-
-    if (msg.type === 'bible') {
-        bodyHTML = `
-            <div class="group-msg-bible">
-                <i class="fas fa-book-bible"></i>
-                <div>
-                    <div style="font-weight:600;">${escapeHtml(msg.reference || '')}</div>
-                    <div style="font-size:13px;">"${escapeHtml(msg.content || '')}"</div>
-                </div>
-            </div>
-        `;
-    } else if (msg.type === 'plan') {
-        bodyHTML = `
-            <div class="group-msg-plan" onclick="navigateTo('planner')">
-                <i class="fas fa-calendar-check"></i>
-                <div style="font-weight:600;">${escapeHtml(msg.content || 'Shared a study plan')}</div>
-            </div>
-        `;
-    } else if (msg.type === 'note') {
-        bodyHTML = `
-            <div class="group-msg-bible">
-                <i class="fas fa-sticky-note"></i>
-                <div>
-                    <div style="font-weight:600;">${escapeHtml(msg.reference || 'A note')}</div>
-                    <div style="font-size:13px;">${escapeHtml(msg.content || '')}</div>
-                </div>
-            </div>
-        `;
-    } else if (msg.type === 'reflection') {
-        bodyHTML = `
-            <div class="group-msg-bible">
-                <i class="fas fa-lightbulb"></i>
-                <div>
-                    <div style="font-weight:600;">Today's Reflection</div>
-                    <div style="font-size:13px;">${escapeHtml(msg.content || '')}</div>
-                </div>
-            </div>
-        `;
-    } else {
-        bodyHTML = `<p>${escapeHtml(msg.content || '')}</p>`;
-    }
-
-    return `
-        <div class="group-message ${isMe ? 'me' : ''}">
-            <div class="group-msg-bubble">${bodyHTML}</div>
-        </div>
-    `;
-}
-
 async function loadDMMessages() {
     const container = $('#dm-messages');
     const uid = AppState.currentUser?.uid;
@@ -1008,15 +937,11 @@ async function loadDMMessages() {
 
     try {
         const snapshot = await database.ref(`dmConversations/${conversationId}/messages`).orderByChild('timestamp').limitToLast(200).once('value');
-        const messages = snapshot.val() || {};
-        const list = Object.values(messages).sort((a, b) => a.timestamp - b.timestamp);
-
-        if (list.length === 0) {
-            container.innerHTML = `<p class="text-center text-muted" style="padding: 40px 20px;">Say hello 👋</p>`;
-        } else {
-            container.innerHTML = list.map(msg => renderDMMessage(msg, uid)).join('');
-        }
-        container.scrollTop = container.scrollHeight;
+        if (AppState.currentDMUserId !== otherUid || !document.body.contains(container)) return;
+        renderThreadMessages(container, snapshot.val() || {}, {
+            showAuthor: false,
+            emptyHTML: `<p class="text-center text-muted" style="padding: 40px 20px;">Say hello 👋</p>`
+        });
     } catch (error) {
         console.error('Error loading DM messages:', error);
     }
@@ -1031,8 +956,17 @@ async function sendDirectMessage() {
     if (!content || !otherUid) return;
 
     input.value = '';
+    autoGrowTextarea(input);
 
-    await deliverDMMessage({ type: 'text', content });
+    if (ChatThread.editingId) {
+        await submitThreadEdit(content);
+        return;
+    }
+
+    const fields = { type: 'text', content };
+    const replyTo = consumeThreadReply();
+    if (replyTo) fields.replyTo = replyTo;
+    await deliverDMMessage(fields);
 }
 
 // Message types that count toward the daily Brethren streak — sharing
@@ -1818,12 +1752,18 @@ function editProfile() {
                 username,
                 bio
             });
-            
+            // Keep the admin directory in step (best-effort).
+            database.ref(`userDirectory/${AppState.currentUser.uid}/username`).set(username).catch(() => {});
+
             AppState.userProfile = {
                 ...AppState.userProfile,
                 username,
                 bio
             };
+            // Posts/comments/messages resolve names live from the profile,
+            // so everything this user has ever written now shows the new name.
+            UserNameCache.names.set(AppState.currentUser.uid, username);
+            UserNameCache.fetchedAt.set(AppState.currentUser.uid, Date.now());
             
             closeModal();
             showToast('Profile updated!', 'success');
@@ -2084,6 +2024,9 @@ function renderSettingsPage() {
                 <h3 style="font-weight: 600; margin-bottom: 16px;">About</h3>
                 <p style="line-height: 1.6; margin-bottom: 8px;">GraceGuide v1.0.0</p>
                 <p style="font-size: 12px; color: var(--text-slate);">Your AI Christian Companion</p>
+                <button class="btn btn-outline btn-sm btn-block mt-3" onclick="navigateTo('terms')">
+                    <i class="fas fa-file-contract"></i> Terms &amp; Conditions
+                </button>
             </div>
             
             <div class="card">

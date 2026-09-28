@@ -231,8 +231,8 @@ function renderAskPage() {
             </div>
             
             <div class="chat-input-container">
-                <textarea id="chat-input" class="chat-input" placeholder="Ask your question..." rows="1" onkeydown="handleChatInputKeydown(event)" style="max-height: 120px; resize: none;"></textarea>
-                <button class="chat-send-btn" onclick="sendChatMessage()">
+                <textarea id="chat-input" class="chat-input" placeholder="Ask your question..." rows="1" enterkeyhint="enter" onkeydown="handleChatInputKeydown(event)" oninput="autoGrowTextarea(this)" style="max-height: 120px; resize: none;"></textarea>
+                <button class="chat-send-btn" onclick="sendChatMessage()" aria-label="Send">
                     <i class="fas fa-paper-plane"></i>
                 </button>
             </div>
@@ -245,6 +245,9 @@ function renderAskPage() {
 
     // Render existing chat history
     renderChatHistory();
+    // Long-press (touch) / click (desktop) a message for its actions.
+    bindShepherdMessageGestures();
+    shepherdReplyTo = null;
 
     // Scroll to bottom
     scrollChatToBottom();
@@ -256,15 +259,24 @@ function renderAskPage() {
 function renderChatHistory() {
     const chatMessages = $('#chat-messages');
     if (!chatMessages || AppState.aiChatHistory.length === 0) return;
-    
+    closeMessageActions();
+
     chatMessages.innerHTML = AppState.aiChatHistory.map((msg, index) => `
-        <div class="chat-message ${msg.role === 'user' ? 'user' : 'ai'}" id="chat-msg-${index}">
+        <div class="chat-message ${msg.role === 'user' ? 'user' : 'ai'}" id="chat-msg-${index}" data-index="${index}">
             ${msg.role === 'assistant' ? `
                 <button class="chat-listen-btn" id="listen-btn-${index}" onclick="toggleSpeakMessage(${index})" aria-label="Listen">
                     <i class="fas fa-volume-high"></i> <span>Listen</span>
                 </button>
             ` : ''}
-            <div class="chat-message-body">${msg.role === 'user' ? escapeHtml(msg.content) : linkifyBibleReferences(formatAIText(msg.content))}</div>
+            ${msg.role === 'user' && msg.replyTo ? `
+                <div class="msg-reply-quote">
+                    <div class="msg-reply-name">Shepherd</div>
+                    <div class="msg-reply-text">${escapeHtml(msg.replyTo.preview || '')}</div>
+                </div>
+            ` : ''}
+            <div class="chat-message-body">${msg.role === 'user' ? renderRichMessageText(msg.content) : linkifyBibleReferences(formatAIText(msg.content))}</div>
+            ${msg.role === 'user' ? renderVerseCardsHTML(msg.content) : ''}
+            ${msg.role === 'user' && msg.editedAt ? '<div class="msg-meta"><span class="msg-edited">edited</span></div>' : ''}
             ${msg.bibleRefs ? `
                 <div class="message-bible-ref">
                     <i class="fas fa-book-bible"></i> ${escapeHtml(msg.bibleRefs)}
@@ -281,6 +293,7 @@ function renderChatHistory() {
             ` : ''}
         </div>
     `).join('');
+    hydrateVerseCards(chatMessages);
 }
 
 function linkifyBibleReferences(html) {
@@ -395,12 +408,13 @@ function handleChatInputKeydown(event) {
     // middle of a multi-line thought fires the message early. Touch
     // devices get plain default behavior: Enter just inserts a newline,
     // and sending happens only via the send button.
-    if (event.key === 'Enter' && !event.shiftKey && !isTouchPrimaryDevice()) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !isTouchPrimaryDevice()) {
         event.preventDefault();
         sendChatMessage();
         return;
     }
-    
+    if (event.key === 'Escape' && typeof cancelShepherdReply === 'function') cancelShepherdReply();
+
     // After any input, auto-grow the textarea to fit content
     setTimeout(() => {
         textarea.style.height = 'auto';
@@ -413,26 +427,46 @@ async function sendChatMessage(override) {
 
     let displayText;
     let apiText;
+    let replyTo = null;
+    let edited = false;
 
     if (override && typeof override === 'object') {
         displayText = override.displayText;
         apiText = override.apiText || override.displayText;
+        replyTo = override.replyTo || null;
+        edited = !!override.edited;
     } else {
         displayText = apiText = (override || chatInput?.value.trim());
     }
 
-    if (chatInput) {
+    if (!displayText) return;
+    if (AppState.shepherdBusy) {
+        showToast('Please wait for Shepherd to finish replying.', 'info');
+        return;
+    }
+    if (chatInput && !(override && typeof override === 'object')) {
         chatInput.value = '';
         chatInput.style.height = 'auto';
     }
-    if (!displayText) return;
-    
+
+    // Replying to one of Shepherd's earlier messages: quote it for the AI
+    // so the follow-up is answered in that context.
+    if (!replyTo && typeof consumeShepherdReply === 'function') {
+        replyTo = consumeShepherdReply();
+        if (replyTo) apiText = `(Replying to your earlier message: "${replyTo.preview}")\n\n${apiText}`;
+    }
+
     // Add user message to chat (what the user sees)
-    AppState.aiChatHistory.push({
+    const userMessage = {
         role: 'user',
         content: displayText,
         timestamp: Date.now()
-    });
+    };
+    if (apiText !== displayText) userMessage.apiText = apiText;
+    if (replyTo) userMessage.replyTo = { preview: replyTo.preview };
+    if (edited) userMessage.editedAt = Date.now();
+    AppState.aiChatHistory.push(userMessage);
+    AppState.shepherdBusy = true;
 
     // Feed the personalization engine — what topics is the user asking about?
     extractTags(apiText).forEach(tag => recordInterestSignal('tag', tag, 1.5));
@@ -478,12 +512,14 @@ async function sendChatMessage(override) {
             timestamp: Date.now()
         });
         
+        AppState.shepherdBusy = false;
         renderChatHistory();
         scrollToMessageTop(AppState.aiChatHistory.length - 1);
-        
+
         // Save conversation to the database with a refined title
         saveCurrentConversation();
     } catch (error) {
+        AppState.shepherdBusy = false;
         // Remove typing indicator
         $(`#${typingId}`)?.remove();
         
@@ -677,10 +713,13 @@ A §CRISIS§ line can appear together with or instead of an §ACTION§ line, eac
 
     // Send recent conversation history so Shepherd has continuity within
     // this conversation, not just the latest message in isolation.
+    // (The newest entry is the prompt being sent right now — it's passed
+    // separately below, so leave it out here instead of sending it twice.)
     const recentHistory = AppState.aiChatHistory
+        .slice(0, -1)
         .slice(-12)
         .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => ({ role: m.role, content: m.content }));
+        .map(m => ({ role: m.role, content: m.apiText || m.content }));
 
     const response = await fetch(DEEPSEEK_API_URL, {
         method: 'POST',
@@ -1333,54 +1372,228 @@ function extractBibleReferences(text) {
 /* ============================================
    STUDY PLANNER
    ============================================ */
+/* ---- Active plan: the most recently used plan is always the default ---- */
+function planRecency(plan) {
+    return plan ? (plan.lastUsedAt || plan.createdAt || 0) : 0;
+}
+
+function pickDefaultPlan(plans) {
+    if (!plans || plans.length === 0) return null;
+    return plans.reduce((best, plan) => (planRecency(plan) > planRecency(best) ? plan : best), plans[0]);
+}
+
+function markPlanUsed(plan) {
+    if (plan) plan.lastUsedAt = Date.now();
+}
+
+/* ---- Study streak ----
+   Consecutive calendar days (in the user's own timezone) on which at
+   least one Study Planner entry was completed, across all plans. Logged
+   at users/{uid}/studyLog/{YYYY-MM-DD} so it survives plan deletion.
+   Today not being done YET doesn't break the streak — it only breaks
+   once a whole day passes with nothing completed. */
+function computeStudyStreak(log = AppState.studyLog) {
+    const studied = (date) => ((log || {})[localDateKey(date)] || 0) > 0;
+    const now = new Date();
+    const cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const doneToday = studied(cursor);
+    if (!doneToday) cursor.setDate(cursor.getDate() - 1);
+
+    let count = 0;
+    while (studied(cursor)) {
+        count++;
+        cursor.setDate(cursor.getDate() - 1);
+    }
+
+    let best = 0;
+    let run = 0;
+    let previous = null;
+    Object.keys(log || {}).filter(key => log[key] > 0).sort().forEach(key => {
+        const [y, m, d] = key.split('-').map(Number);
+        const date = new Date(y, m - 1, d);
+        run = previous && Math.round((date - previous) / 86400000) === 1 ? run + 1 : 1;
+        best = Math.max(best, run);
+        previous = date;
+    });
+
+    return { count, doneToday, best: Math.max(best, count) };
+}
+
+/** Keeps each plan's `streak` field (used by plan share cards/links and
+    Shepherd's context) equal to the overall study streak. */
+function syncPlanStreaks(count) {
+    AppState.plannerData.forEach(plan => { plan.streak = count; });
+}
+
+function recordStudyActivity(day, completed) {
+    const todayKey = localDateKey();
+    if (!AppState.studyLog) AppState.studyLog = {};
+
+    if (completed) {
+        day.completedAt = Date.now();
+        AppState.studyLog[todayKey] = (AppState.studyLog[todayKey] || 0) + 1;
+    } else {
+        // Un-ticking something completed today takes today's credit back;
+        // un-ticking an older completion leaves past days' history alone.
+        if (day.completedAt && localDateKey(day.completedAt) === todayKey) {
+            const remaining = (AppState.studyLog[todayKey] || 0) - 1;
+            if (remaining > 0) AppState.studyLog[todayKey] = remaining;
+            else delete AppState.studyLog[todayKey];
+        }
+        delete day.completedAt;
+    }
+
+    if (AppState.currentUser) {
+        database.ref(`users/${AppState.currentUser.uid}/studyLog/${todayKey}`)
+            .set(AppState.studyLog[todayKey] || null)
+            .catch(error => console.error('Error saving study log:', error));
+    }
+}
+
+function renderStudyStreakCard(streak) {
+    const now = new Date();
+    const week = Array.from({ length: 7 }, (_, i) => {
+        const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (6 - i));
+        return {
+            label: date.toLocaleDateString('en-US', { weekday: 'narrow' }),
+            done: ((AppState.studyLog || {})[localDateKey(date)] || 0) > 0,
+            isToday: i === 6
+        };
+    });
+
+    const title = streak.count > 0 ? `${streak.count}-day study streak` : 'Start your study streak';
+    const subtitle = streak.doneToday
+        ? "Today's study is done — see you tomorrow!"
+        : streak.count > 0
+            ? 'Complete a study entry today to keep your streak alive.'
+            : 'Complete a study entry today to begin.';
+
+    return `
+        <div class="card study-streak-card ${streak.doneToday ? 'done' : ''}">
+            <div class="study-streak-top">
+                <div class="study-streak-flame"><i class="fas fa-fire"></i></div>
+                <div class="study-streak-info">
+                    <div class="study-streak-title">${title}</div>
+                    <div class="study-streak-sub">${subtitle}</div>
+                </div>
+                <button class="btn btn-outline btn-sm study-streak-share" onclick="shareStudyStreakCard()" aria-label="Share your study streak">
+                    <i class="fas fa-share"></i> Share
+                </button>
+            </div>
+            <div class="study-streak-week" aria-label="Last 7 days">
+                ${week.map(d => `
+                    <div class="study-streak-day ${d.done ? 'done' : ''} ${d.isToday ? 'today' : ''}">
+                        <span class="study-streak-dot">${d.done ? '<i class="fas fa-check"></i>' : ''}</span>
+                        <span class="study-streak-label">${d.label}</span>
+                    </div>
+                `).join('')}
+            </div>
+            <div class="study-streak-best"><i class="fas fa-trophy"></i> Best streak: ${streak.best} day${streak.best === 1 ? '' : 's'}</div>
+        </div>
+    `;
+}
+
+/** The entry to focus on: today's, otherwise the earliest unfinished one. */
+function getPlanFocusDay(plan) {
+    const days = plan?.days || [];
+    const todayKey = localDateKey();
+    let index = days.findIndex(d => !d.completed && d.date === todayKey);
+    if (index === -1) index = days.findIndex(d => !d.completed);
+    return index === -1 ? null : { index, day: days[index] };
+}
+
+function renderPlanFocusCard(plan) {
+    const focus = getPlanFocusDay(plan);
+    if (!focus) {
+        return `
+            <div class="card plan-focus-card plan-focus-done">
+                <div class="plan-focus-label"><i class="fas fa-circle-check"></i> Plan complete</div>
+                <p class="plan-focus-topic">You've completed every entry in this plan. Well done — start a new plan to keep growing.</p>
+                <button class="btn btn-primary btn-sm mt-2" onclick="createNewPlan()"><i class="fas fa-plus"></i> New Plan</button>
+            </div>
+        `;
+    }
+    const { index, day } = focus;
+    const todayKey = localDateKey();
+    const label = day.date === todayKey ? "Today's Study" : (day.date && day.date < todayKey ? 'Catch Up' : 'Up Next');
+
+    return `
+        <div class="card plan-focus-card">
+            <div class="plan-focus-label"><i class="fas fa-sun"></i> ${label}${day.date ? ` · ${formatDate(day.date + 'T00:00:00')}` : ''}</div>
+            <div class="plan-focus-passage">${escapeHtml(day.passage || '')}</div>
+            ${day.topic ? `<div class="plan-focus-topic">${escapeHtml(day.topic)}</div>` : ''}
+            ${day.reflection_question ? `<div class="plan-focus-block"><i class="fas fa-lightbulb"></i><p>${escapeHtml(day.reflection_question)}</p></div>` : ''}
+            ${day.prayer_point ? `<div class="plan-focus-block"><i class="fas fa-hands-praying"></i><p>${escapeHtml(day.prayer_point)}</p></div>` : ''}
+            <div class="plan-focus-actions">
+                <button class="btn btn-outline" onclick="openPlannerPassage(${index})"><i class="fas fa-book-open"></i> Read Passage</button>
+                <button class="btn btn-primary" onclick="togglePlannerDay(${index})"><i class="fas fa-check"></i> Mark Complete</button>
+            </div>
+        </div>
+    `;
+}
+
 function renderPlannerPage() {
+    if (!AppState.currentPlan || !AppState.plannerData.includes(AppState.currentPlan)) {
+        AppState.currentPlan = pickDefaultPlan(AppState.plannerData);
+    }
+    const plan = AppState.currentPlan;
+    const streak = computeStudyStreak();
+    syncPlanStreaks(streak.count);
+
+    const plansByRecent = [...AppState.plannerData].sort((a, b) => planRecency(b) - planRecency(a));
+
     DOM.pageContainer.innerHTML = `
         <div class="planner-container">
-            <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center justify-between mb-3">
                 <h2 style="font-weight: 700;">Study Planner</h2>
                 <button class="btn btn-primary btn-sm" onclick="createNewPlan()">
                     <i class="fas fa-plus"></i> New Plan
                 </button>
             </div>
 
-            ${AppState.plannerData.length > 1 ? `
-                <div class="form-group" style="margin-bottom: 16px;">
-                    <select id="plan-switcher" class="form-select">
-                        ${AppState.plannerData.map(p => `<option value="${p.id}" ${p.id === AppState.currentPlan?.id ? 'selected' : ''}>${escapeHtml(p.name || 'Study Plan')}</option>`).join('')}
-                    </select>
+            ${renderStudyStreakCard(streak)}
+
+            ${plansByRecent.length > 1 ? `
+                <div class="plan-chips" role="tablist" aria-label="Your study plans">
+                    ${plansByRecent.map(p => `
+                        <button class="plan-chip ${p === plan ? 'active' : ''}" role="tab" aria-selected="${p === plan}" onclick="switchPlan('${p.id}')">
+                            <span class="plan-chip-name">${escapeHtml(p.name || 'Study Plan')}</span>
+                            <span class="plan-chip-progress">${p.progress || 0}%</span>
+                        </button>
+                    `).join('')}
                 </div>
             ` : ''}
 
-            <div class="planner-stats">
-                <div class="stat-card">
-                    <div class="stat-value">${AppState.currentPlan?.progress || 0}%</div>
-                    <div class="stat-label">Overall Progress</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${AppState.currentPlan?.streak || 0}</div>
-                    <div class="stat-label">Day Streak</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${AppState.currentPlan?.completed || 0}/${AppState.currentPlan?.total || 0}</div>
-                    <div class="stat-label">Days Completed</div>
-                </div>
-            </div>
-            
             <div id="planner-content">
-                ${AppState.plannerData.length > 0 ? `
-                    <div class="flex items-center justify-between mb-2">
-                        <h3 style="font-weight: 600;">${escapeHtml(AppState.currentPlan?.name || 'Reading')}</h3>
-                        <div style="display:flex; gap:8px;">
-                            <button class="btn btn-outline btn-sm" onclick="addPlannerDay()">
-                                <i class="fas fa-plus"></i> Add Entry
-                            </button>
-                            <button class="btn btn-outline btn-sm" onclick="sharePlanCard(AppState.currentPlan)" aria-label="Share plan">
-                                <i class="fas fa-share"></i>
-                            </button>
-                            <button class="btn btn-outline btn-sm" onclick="deleteCurrentPlan()" style="color:#f44336; border-color:rgba(244,67,54,0.4);">
-                                <i class="fas fa-trash"></i>
-                            </button>
+                ${plan ? `
+                    <div class="card plan-overview-card">
+                        <div class="plan-overview-head">
+                            <div style="min-width: 0;">
+                                <h3 class="plan-overview-title">${escapeHtml(plan.name || 'Study Plan')}</h3>
+                                <div class="plan-overview-meta">${plan.completed || 0} of ${plan.total || (plan.days || []).length} days complete</div>
+                            </div>
+                            <div class="plan-overview-actions">
+                                <button class="icon-btn" onclick="sharePlanCard(AppState.currentPlan)" aria-label="Share plan" title="Share plan">
+                                    <i class="fas fa-share"></i>
+                                </button>
+                                <button class="icon-btn" onclick="deleteCurrentPlan()" aria-label="Delete plan" title="Delete plan" style="color:#f44336;">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
                         </div>
+                        <div class="plan-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${plan.progress || 0}">
+                            <div class="plan-progress-fill" style="width: ${plan.progress || 0}%;"></div>
+                        </div>
+                        <div class="plan-progress-label">${plan.progress || 0}% complete</div>
+                    </div>
+
+                    ${renderPlanFocusCard(plan)}
+
+                    <div class="flex items-center justify-between mb-2 mt-3">
+                        <h3 style="font-weight: 600;">All Entries</h3>
+                        <button class="btn btn-outline btn-sm" onclick="addPlannerDay()">
+                            <i class="fas fa-plus"></i> Add Entry
+                        </button>
                     </div>
                     ${renderPlannerDays()}
                 ` : `
@@ -1398,32 +1611,40 @@ function renderPlannerPage() {
             </div>
         </div>
     `;
-
-    const switcher = $('#plan-switcher');
-    if (switcher) {
-        switcher.addEventListener('change', (e) => switchPlan(e.target.value));
-    }
 }
 
 function switchPlan(planId) {
     const plan = AppState.plannerData.find(p => p.id === planId);
     if (!plan) return;
     AppState.currentPlan = plan;
+    markPlanUsed(plan);
+    persistPlannerData();
     renderPlannerPage();
+}
+
+/** Opening a plan's passage counts as using that plan. */
+function openPlannerPassage(index) {
+    const plan = AppState.currentPlan;
+    const day = plan?.days?.[index];
+    if (!day) return;
+    markPlanUsed(plan);
+    persistPlannerData();
+    openPassageReference(day.passage);
 }
 
 function renderPlannerDays() {
     if (!AppState.currentPlan || !AppState.currentPlan.days) return '';
+    const todayKey = localDateKey();
 
     return AppState.currentPlan.days.map((day, index) => `
-        <div class="planner-day ${day.completed ? 'completed' : ''}">
-            <div class="planner-day-checkbox ${day.completed ? 'checked' : ''}" onclick="event.stopPropagation(); togglePlannerDay('${day.date}')">
+        <div class="planner-day ${day.completed ? 'completed' : ''} ${day.date === todayKey ? 'is-today' : ''}">
+            <div class="planner-day-checkbox ${day.completed ? 'checked' : ''}" role="checkbox" aria-checked="${!!day.completed}" aria-label="Mark ${escapeHtml(day.passage || 'entry')} complete" onclick="event.stopPropagation(); togglePlannerDay(${index})">
                 ${day.completed ? '<i class="fas fa-check"></i>' : ''}
             </div>
-            <div style="flex: 1; cursor: pointer;" onclick="openPassageReference('${escapeHtml(day.passage).replace(/'/g, "\\'")}')">
-                <div style="font-weight: 600;">${escapeHtml(day.passage)}</div>
+            <div style="flex: 1; min-width: 0; cursor: pointer;" onclick="openPlannerPassage(${index})">
+                <div style="font-weight: 600;">${escapeHtml(day.passage)}${day.date === todayKey ? ' <span class="planner-today-badge">Today</span>' : ''}</div>
                 <div style="font-size: 12px; color: var(--text-slate);">${escapeHtml(day.topic)}</div>
-                <div style="font-size: 12px; color: var(--text-slate);">${formatDate(day.date)}</div>
+                <div style="font-size: 12px; color: var(--text-slate);">${day.date ? formatDate(day.date + 'T00:00:00') : ''}</div>
             </div>
             <button class="icon-btn" aria-label="Edit entry" onclick="event.stopPropagation(); editPlannerDay(${index})">
                 <i class="fas fa-pen" style="font-size: 13px; color: var(--text-slate);"></i>
@@ -1431,7 +1652,7 @@ function renderPlannerDays() {
             <button class="icon-btn" aria-label="Delete entry" onclick="event.stopPropagation(); deletePlannerDay(${index})">
                 <i class="fas fa-trash" style="font-size: 13px; color: #f44336;"></i>
             </button>
-            <i class="fas fa-chevron-right" style="color: var(--text-slate); cursor: pointer;" onclick="openPassageReference('${escapeHtml(day.passage).replace(/'/g, "\\'")}')"></i>
+            <i class="fas fa-chevron-right" style="color: var(--text-slate); cursor: pointer;" onclick="openPlannerPassage(${index})"></i>
         </div>
     `).join('');
 }
@@ -1439,9 +1660,12 @@ function renderPlannerDays() {
 function persistPlannerData() {
     if (!AppState.currentUser) return;
     const uid = AppState.currentUser.uid;
-    const planIndex = AppState.plannerData.findIndex(p => p.id === AppState.currentPlan.id);
-    if (planIndex !== -1) AppState.plannerData[planIndex] = AppState.currentPlan;
-    database.ref(`users/${uid}/planner`).set(AppState.plannerData);
+    if (AppState.currentPlan) {
+        const planIndex = AppState.plannerData.findIndex(p => p.id === AppState.currentPlan.id);
+        if (planIndex !== -1) AppState.plannerData[planIndex] = AppState.currentPlan;
+    }
+    database.ref(`users/${uid}/planner`).set(AppState.plannerData)
+        .catch(error => console.error('Error saving study plans:', error));
 }
 
 function recalcPlanProgress() {
@@ -1468,7 +1692,7 @@ function addPlannerDay() {
         </div>
         <div class="form-group">
             <label class="form-label">Date</label>
-            <input type="date" id="entry-date" class="form-input" value="${new Date().toISOString().split('T')[0]}">
+            <input type="date" id="entry-date" class="form-input" value="${localDateKey()}">
         </div>
         <button id="save-entry-btn" class="btn btn-primary btn-block mt-3">Add Entry</button>
     `;
@@ -1483,12 +1707,13 @@ function addPlannerDay() {
         }
 
         AppState.currentPlan.days.push({
-            date: $('#entry-date').value || new Date().toISOString().split('T')[0],
+            date: $('#entry-date').value || localDateKey(),
             passage,
             topic: topic || 'Study',
             completed: false
         });
 
+        markPlanUsed(AppState.currentPlan);
         recalcPlanProgress();
         persistPlannerData();
         closeModal();
@@ -1542,6 +1767,7 @@ function editPlannerDay(index) {
             date: $('#entry-date').value || day.date
         });
 
+        markPlanUsed(AppState.currentPlan);
         persistPlannerData();
         closeModal();
         showToast('Entry updated', 'success');
@@ -1553,6 +1779,7 @@ function deletePlannerDay(index) {
     if (!AppState.currentPlan || !AppState.currentPlan.days[index]) return;
 
     AppState.currentPlan.days.splice(index, 1);
+    markPlanUsed(AppState.currentPlan);
     recalcPlanProgress();
     persistPlannerData();
     showToast('Entry deleted', 'success');
@@ -1575,7 +1802,7 @@ function deleteCurrentPlan() {
 
 function confirmDeletePlan(planId) {
     AppState.plannerData = AppState.plannerData.filter(p => p.id !== planId);
-    AppState.currentPlan = AppState.plannerData[0] || null;
+    AppState.currentPlan = pickDefaultPlan(AppState.plannerData);
 
     if (AppState.currentUser) {
         database.ref(`users/${AppState.currentUser.uid}/planner`).set(AppState.plannerData);
@@ -1726,7 +1953,7 @@ Respond with ONLY a JSON array (no markdown, no code fences, no commentary) of e
                 date.setDate(date.getDate() + days.length);
                 const topic = entry.topic || planLabel;
                 days.push({
-                    date: date.toISOString().split('T')[0],
+                    date: localDateKey(date),
                     passage: entry.passage || 'Psalm 23',
                     topic,
                     reflection_question: entry.reflection_question || `What does this passage teach you about ${topic}?`,
@@ -1741,7 +1968,7 @@ Respond with ONLY a JSON array (no markdown, no code fences, no commentary) of e
                 date.setDate(date.getDate() + days.length);
                 const topic = fallbackTopics[days.length % fallbackTopics.length];
                 days.push({
-                    date: date.toISOString().split('T')[0],
+                    date: localDateKey(date),
                     passage: fallbackPassages[days.length % fallbackPassages.length],
                     topic,
                     reflection_question: `What does this passage teach you about ${topic}?`,
@@ -1760,6 +1987,7 @@ Respond with ONLY a JSON array (no markdown, no code fences, no commentary) of e
         type: planType,
         duration,
         createdAt: Date.now(),
+        lastUsedAt: Date.now(),
         days,
         progress: 0,
         streak: 0,
@@ -1768,18 +1996,27 @@ Respond with ONLY a JSON array (no markdown, no code fences, no commentary) of e
     };
 }
 
-function togglePlannerDay(date) {
-    if (!AppState.currentPlan) return;
+function togglePlannerDay(index) {
+    const plan = AppState.currentPlan;
+    if (!plan) return;
+    // Entries are addressed by position — two entries can share a date.
+    const day = typeof index === 'number' ? plan.days[index] : plan.days.find(d => d.date === index);
+    if (!day) return;
 
-    const day = AppState.currentPlan.days.find(d => d.date === date);
-    if (day) {
-        day.completed = !day.completed;
+    const before = computeStudyStreak().count;
+    day.completed = !day.completed;
+    recordStudyActivity(day, day.completed);
+    markPlanUsed(plan);
+    recalcPlanProgress();
+    const after = computeStudyStreak();
+    syncPlanStreaks(after.count);
+    persistPlannerData();
 
-        recalcPlanProgress();
-        persistPlannerData();
-
-        renderPlannerPage();
-        showToast(day.completed ? 'Day completed!' : 'Day uncompleted', 'success');
+    renderPlannerPage();
+    if (day.completed && after.count > before && after.count > 1 && typeof STREAK_MILESTONES !== 'undefined' && STREAK_MILESTONES.includes(after.count)) {
+        showToast(`🔥 ${after.count}-day study streak! Keep going.`, 'success');
+    } else {
+        showToast(day.completed ? 'Day completed!' : 'Marked as not done', 'success');
     }
 }
 
@@ -1993,6 +2230,7 @@ function applySpaceFilters() {
             return '';
         }
     }).join('');
+    hydrateUserNames(container);
 }
 
 async function loadSpacePosts() {
@@ -2111,8 +2349,9 @@ function renderSpaceCard(post) {
     const isSaved = uid && post.saves && post.saves[uid];
     const amenCount = post.amens ? Object.keys(post.amens).length : 0;
     const commentCount = post.comments ? Object.keys(post.comments).length : 0;
-    const authorName = escapeHtml(post.authorName || 'Anonymous');
-    const safeName = authorName.replace(/'/g, "\\'");
+    // The stored authorName is only a fallback — the name shown always
+    // comes from the author's current profile (see hydrateUserNames()).
+    const authorId = escapeHtml(post.authorId || '');
 
     const typeIcon = {
         verses: 'fa-book-bible',
@@ -2148,10 +2387,10 @@ function renderSpaceCard(post) {
 
     return `
         <div class="space-card" id="space-${post.id}">
-            <div class="space-card-header" onclick="viewUserProfile('${post.authorId}', '${safeName}')">
-                <div class="post-avatar space-author-avatar">${authorName[0]?.toUpperCase() || 'U'}</div>
+            <div class="space-card-header" onclick="viewUserProfile('${authorId}')">
+                <div class="post-avatar space-author-avatar">${userInitialHTML(post.authorId, post.authorName)}</div>
                 <div style="flex:1;">
-                    <div class="space-author-name">${authorName}</div>
+                    <div class="space-author-name">${userNameHTML(post.authorId, post.authorName)}</div>
                     <div class="space-author-time">${formatDate(post.timestamp)}</div>
                 </div>
                 <i class="fas ${typeIcon}" style="color: var(--text-slate); opacity:0.6;"></i>
@@ -2257,6 +2496,7 @@ async function renderSharedSpacePostPage() {
         </div>
     `;
     initSpaceCarouselObservers();
+    hydrateUserNames(DOM.pageContainer);
 }
 
 function initSpaceCarouselObservers() {
@@ -2282,6 +2522,7 @@ function updateSpaceCardDOM(postId) {
     if (post && el) {
         el.outerHTML = renderSpaceCard(post);
         initSpaceCarouselObservers();
+        hydrateUserNames(document.getElementById(`space-${postId}`));
     }
 }
 
@@ -2494,7 +2735,8 @@ async function addSpacePlanToMyPlanner(postId) {
         streak: 0,
         completed: 0,
         total: planData.days.length,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        lastUsedAt: Date.now()
     };
 
     AppState.plannerData.push(newPlan);
@@ -2581,13 +2823,13 @@ function showSpacePostComments(postId) {
         if (list.length === 0) return `<p class="text-center text-muted" style="padding: 20px 0;">No comments yet. Be the first to respond.</p>`;
         return list.map(c => `
             <div class="comment-item">
-                <div class="post-avatar comment-avatar" style="cursor:pointer;" onclick="viewUserProfile('${c.authorId}', '${(c.authorName || 'User').replace(/'/g, "\\'")}')">${(c.authorName || 'U')[0].toUpperCase()}</div>
+                <div class="post-avatar comment-avatar" style="cursor:pointer;" onclick="viewUserProfile('${escapeHtml(c.authorId || '')}')">${userInitialHTML(c.authorId, c.authorName)}</div>
                 <div class="comment-body">
                     <div class="comment-meta">
-                        <span class="comment-author" style="cursor:pointer;" onclick="viewUserProfile('${c.authorId}', '${(c.authorName || 'User').replace(/'/g, "\\'")}')">${escapeHtml(c.authorName || 'Anonymous')}</span>
+                        <span class="comment-author" style="cursor:pointer;" onclick="viewUserProfile('${escapeHtml(c.authorId || '')}')">${userNameHTML(c.authorId, c.authorName)}</span>
                         <span class="comment-time">${formatDate(c.timestamp)}</span>
                     </div>
-                    <p>${escapeHtml(c.content || '')}</p>
+                    <p>${renderRichMessageText(c.content || '')}</p>
                 </div>
             </div>
         `).join('');
@@ -2597,10 +2839,11 @@ function showSpacePostComments(postId) {
         <h3 style="margin-bottom: 12px;">Comments</h3>
         <div id="comments-list" style="max-height: 40vh; overflow-y: auto; margin-bottom: 12px;">${renderList(post.comments)}</div>
         <div class="comment-input-row">
-            <input type="text" id="new-comment-input" class="form-input" placeholder="Write a comment..." onkeypress="if(event.key === 'Enter') submitSpacePostComment('${postId}')">
-            <button class="btn btn-primary btn-sm" onclick="submitSpacePostComment('${postId}')"><i class="fas fa-paper-plane"></i></button>
+            <textarea id="new-comment-input" class="form-input comment-textarea" rows="1" enterkeyhint="enter" placeholder="Write a comment..." onkeydown="handleMessageInputKeydown(event, () => submitSpacePostComment('${postId}'))" oninput="autoGrowTextarea(this)"></textarea>
+            <button class="btn btn-primary btn-sm" onclick="submitSpacePostComment('${postId}')" aria-label="Post comment"><i class="fas fa-paper-plane"></i></button>
         </div>
     `);
+    hydrateUserNames($('#comments-list'));
     setTimeout(() => $('#new-comment-input')?.focus(), 200);
 }
 
@@ -2676,7 +2919,7 @@ async function shareSpacePost(postId) {
     if (typeof shareSpacePostCard === 'function') {
         await shareSpacePostCard(post);
     } else {
-        let shareText = `${post.authorName}: `;
+        let shareText = `${getDisplayName(post.authorId, post.authorName)}: `;
         if (post.type === 'video') {
             shareText += post.videoUrl;
         } else {

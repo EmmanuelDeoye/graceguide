@@ -520,20 +520,22 @@ function shareSpacePostCard(post) {
     const excerpt = post.type === 'video'
         ? ''
         : (post.slides || []).map(s => s.text).filter(Boolean).join(' ');
+    // Current profile name, not the copy stored on the post.
+    const authorName = getDisplayName(post.authorId, post.authorName || null);
 
     return openShareSheet({
         kind: 'space',
         eyebrow: 'Space',
         icon: '🕊️',
-        title: post.authorName ? `${post.authorName} shared` : 'Shared on Space',
+        title: authorName ? `${authorName} shared` : 'Shared on Space',
         body: excerpt ? `"${truncate(excerpt, 150)}"` : (post.type === 'video' ? 'Shared a video reflection' : ''),
         tagline: 'Join the Community'
     }, {
         url: resolveShareUrl('space-post', { postId: post.id }),
         shareTitle: 'GraceGuide — Space',
         shareText: excerpt
-            ? `${post.authorName}: ${truncate(excerpt, 150)}`
-            : `${post.authorName || 'Someone'} shared on GraceGuide Space`
+            ? `${authorName}: ${truncate(excerpt, 150)}`
+            : `${authorName || 'Someone'} shared on GraceGuide Space`
     });
 }
 
@@ -582,26 +584,31 @@ function shareProfileCard() {
 // under plannerShares/{shareId} — never users/{uid}/planner directly.
 // shareId is deterministic (uid_planId) so re-sharing the same plan
 // reuses/refreshes the same link instead of spawning duplicates.
+/** Writes/refreshes the PUBLIC summary snapshot a plan share link resolves
+    to and returns its shareId (null for guests). Best-effort — the share
+    sheet never waits on it, and if it fails the link just won't resolve
+    yet rather than blocking the person from sharing at all. */
+function savePlanShareSnapshot(plan) {
+    if (!plan || !AppState.currentUser) return null;
+    const nextDay = (plan.days || []).find(d => !d.completed) || plan.days?.[0];
+    const shareId = `${AppState.currentUser.uid}_${plan.id}`;
+    database.ref(`plannerShares/${shareId}`).set({
+        ownerId: AppState.currentUser.uid,
+        ownerName: AppState.userProfile?.username || 'A GraceGuide user',
+        name: plan.name || 'Study Plan',
+        progress: plan.progress || 0,
+        streak: plan.streak || 0,
+        currentPassage: nextDay?.passage || '',
+        currentTopic: nextDay?.topic || '',
+        updatedAt: Date.now()
+    }).catch(error => console.error('Error saving plan share snapshot:', error));
+    return shareId;
+}
+
 function sharePlanCard(plan) {
     if (!plan) return;
     const nextDay = (plan.days || []).find(d => !d.completed) || plan.days?.[0];
-    const shareId = AppState.currentUser ? `${AppState.currentUser.uid}_${plan.id}` : null;
-
-    if (shareId) {
-        // Best-effort — the share sheet itself doesn't wait on this, and
-        // if it fails the link just won't resolve yet rather than
-        // blocking the person from sharing the image/text at all.
-        database.ref(`plannerShares/${shareId}`).set({
-            ownerId: AppState.currentUser.uid,
-            ownerName: AppState.userProfile?.username || 'A GraceGuide user',
-            name: plan.name || 'Study Plan',
-            progress: plan.progress || 0,
-            streak: plan.streak || 0,
-            currentPassage: nextDay?.passage || '',
-            currentTopic: nextDay?.topic || '',
-            updatedAt: Date.now()
-        }).catch(error => console.error('Error saving plan share snapshot:', error));
-    }
+    const shareId = savePlanShareSnapshot(plan);
 
     return openShareSheet({
         kind: 'plan',
@@ -615,6 +622,37 @@ function sharePlanCard(plan) {
         url: resolveShareUrl('plan', { shareId }),
         shareTitle: 'GraceGuide — Study Plan',
         shareText: `I'm ${plan.progress || 0}% through "${plan.name}" on GraceGuide!`
+    });
+}
+
+// 4b. Study streak — consecutive days of completed Study Planner entries.
+// Links to the active plan's public summary snapshot (which includes the
+// streak), never the private day-by-day plan.
+function shareStudyStreakCard() {
+    const streak = typeof computeStudyStreak === 'function' ? computeStudyStreak() : { count: 0, best: 0 };
+    const plan = AppState.currentPlan;
+    if (plan) plan.streak = streak.count;
+    const shareId = savePlanShareSnapshot(plan);
+    const days = (n) => `${n} day${n === 1 ? '' : 's'}`;
+
+    const body = streak.count > 0
+        ? `I've studied the Bible ${days(streak.count)} in a row${plan ? ` with "${plan.name || 'my study plan'}"` : ''}.`
+        : "I'm building a daily Bible study habit on GraceGuide.";
+
+    return openShareSheet({
+        kind: 'plan',
+        eyebrow: 'Study Streak',
+        icon: '🔥',
+        title: streak.count > 0 ? `${days(streak.count)} of study` : 'Starting My Study Streak',
+        body,
+        footer: `Best streak: ${days(streak.best || streak.count)}`,
+        tagline: 'Study Together'
+    }, {
+        url: resolveShareUrl('plan', { shareId }),
+        shareTitle: 'GraceGuide — Study Streak',
+        shareText: streak.count > 0
+            ? `🔥 I'm on a ${days(streak.count)} Bible study streak on GraceGuide! Join me.`
+            : "I'm starting a daily Bible study streak on GraceGuide — join me!"
     });
 }
 

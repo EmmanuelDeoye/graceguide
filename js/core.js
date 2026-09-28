@@ -30,6 +30,8 @@ const AppState = {
     appNavDepth: 0,
     selectedVerses: new Set(),
     plannerData: [],
+    // Study Planner streak log: { 'YYYY-MM-DD': entriesCompletedThatDay }
+    studyLog: {},
     notifications: [],
     unreadMessages: 0,
     aiChatHistory: [],
@@ -159,6 +161,91 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+/** Firebase hands back arrays with gaps (or as plain objects) once an
+    element has been removed from the middle — normalize to a clean array. */
+function toCleanArray(value) {
+    if (Array.isArray(value)) return value.filter(Boolean);
+    if (value && typeof value === 'object') return Object.values(value).filter(Boolean);
+    return [];
+}
+
+/** Calendar date in the user's own timezone (YYYY-MM-DD). */
+function localDateKey(date = new Date()) {
+    const d = new Date(date);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/* ============================================
+   LIVE USER DISPLAY NAMES
+   Posts, comments and chat messages store the author's name as it was
+   when they were written — that copy is only a fallback now. The name
+   actually shown always comes from the author's CURRENT profile
+   (users/{uid}/profile, publicly readable), so renaming yourself in
+   Profile updates every post/comment you've ever made.
+   ============================================ */
+const UserNameCache = { names: new Map(), avatars: new Map(), fetchedAt: new Map(), pending: new Map() };
+const USER_NAME_TTL_MS = 5 * 60 * 1000;
+
+function getDisplayName(uid, fallback) {
+    if (uid && AppState.currentUser && uid === AppState.currentUser.uid && AppState.userProfile?.username) {
+        return AppState.userProfile.username;
+    }
+    if (uid && UserNameCache.names.has(uid)) return UserNameCache.names.get(uid);
+    return fallback || 'Anonymous';
+}
+
+function fetchUserProfileName(uid) {
+    if (!uid) return Promise.resolve(null);
+    const fetchedAt = UserNameCache.fetchedAt.get(uid);
+    if (fetchedAt && Date.now() - fetchedAt < USER_NAME_TTL_MS) {
+        return Promise.resolve(UserNameCache.names.get(uid) || null);
+    }
+    if (UserNameCache.pending.has(uid)) return UserNameCache.pending.get(uid);
+
+    const request = database.ref(`users/${uid}/profile`).once('value')
+        .then(snap => {
+            const profile = snap.val() || {};
+            if (profile.username) UserNameCache.names.set(uid, profile.username);
+            UserNameCache.avatars.set(uid, profile.avatar || '');
+            UserNameCache.fetchedAt.set(uid, Date.now());
+            return profile.username || null;
+        })
+        .catch(() => null)
+        .finally(() => UserNameCache.pending.delete(uid));
+    UserNameCache.pending.set(uid, request);
+    return request;
+}
+
+/** Inline name that hydrateUserNames() keeps in sync with the live profile. */
+function userNameHTML(uid, fallback) {
+    return `<span data-user-name="${escapeHtml(uid || '')}">${escapeHtml(getDisplayName(uid, fallback))}</span>`;
+}
+
+function userInitialHTML(uid, fallback) {
+    const name = getDisplayName(uid, fallback);
+    return `<span data-user-initial="${escapeHtml(uid || '')}">${escapeHtml((name || 'U')[0].toUpperCase())}</span>`;
+}
+
+/** Resolves every [data-user-name]/[data-user-initial] under `root`
+    against the authors' current profiles and patches the text in place
+    (no re-render, so scroll position and open UI are untouched). */
+async function hydrateUserNames(root = document) {
+    if (!root) return;
+    const nodes = $$('[data-user-name], [data-user-initial]', root);
+    const uids = [...new Set(nodes.map(n => n.dataset.userName || n.dataset.userInitial).filter(Boolean))];
+    if (uids.length === 0) return;
+    await Promise.all(uids.map(fetchUserProfileName));
+    nodes.forEach(node => {
+        const uid = node.dataset.userName || node.dataset.userInitial;
+        const name = getDisplayName(uid, node.dataset.userName ? node.textContent : null);
+        if (node.dataset.userName) {
+            if (node.textContent !== name) node.textContent = name;
+        } else if (name) {
+            node.textContent = name[0].toUpperCase();
+        }
+    });
 }
 
 function showToast(message, type = 'info') {
@@ -381,7 +468,7 @@ function initAuth() {
     // patterns (#/profile/ID, #/bible/BOOK/CH/VS, etc) is valid too —
     // this is what makes those URLs work after a hard refresh, not just
     // when navigated to from inside the app.
-    const VALID_INITIAL_ROUTES = ['home', 'bible', 'ask', 'space', 'community', 'planner', 'messages', 'profile', 'settings', 'talk-to-someone'];
+    const VALID_INITIAL_ROUTES = ['home', 'bible', 'ask', 'space', 'community', 'planner', 'messages', 'profile', 'settings', 'talk-to-someone', 'terms'];
     const DEEP_LINK_ROUTE_MARKERS = ['deep-profile', 'deep-space-post', 'deep-planner', 'deep-bible', 'deep-quiz', 'deep-devotional'];
     const hashRoute = window.location.hash.replace(/^#\//, '');
     const bootParsedRoute = parseAppRoute(window.location.hash);
@@ -440,6 +527,8 @@ function initAuth() {
                     AppState.notes = [];
                     AppState.readingHistory = [];
                     AppState.plannerData = [];
+                    AppState.currentPlan = null;
+                    AppState.studyLog = {};
                     AppState.userConnections = new Map();
                     AppState.aiConversations = [];
                     AppState.notifications = [];
@@ -566,13 +655,31 @@ async function loadUserData() {
             database.ref(`users/${uid}/spaceStreak`).once('value')
         ]);
         
-        AppState.bookmarks = bookmarksSnap.val() || [];
-        AppState.highlights = highlightsSnap.val() || [];
-        AppState.notes = notesSnap.val() || [];
-        AppState.readingHistory = historySnap.val() || [];
-        AppState.plannerData = plannerSnap.val() || [];
-        AppState.currentPlan = AppState.plannerData[0] || null;
+        AppState.bookmarks = toCleanArray(bookmarksSnap.val());
+        AppState.highlights = toCleanArray(highlightsSnap.val());
+        AppState.notes = toCleanArray(notesSnap.val());
+        AppState.plannerData = toCleanArray(plannerSnap.val());
+        AppState.plannerData.forEach(plan => { plan.days = toCleanArray(plan.days); });
+        // The most recently used plan is always the default active one.
+        AppState.currentPlan = typeof pickDefaultPlan === 'function' ? pickDefaultPlan(AppState.plannerData) : (AppState.plannerData[0] || null);
         AppState.spaceStreak = spaceStreakSnap.val() || { count: 0, lastPostDate: null };
+
+        // Reading history only ever holds each completed chapter once.
+        // Older builds appended an entry every time a chapter was merely
+        // opened, so collapse any duplicates and persist the cleaned list.
+        const rawHistory = toCleanArray(historySnap.val());
+        AppState.readingHistory = dedupeReadingHistory(rawHistory);
+        if (AppState.readingHistory.length !== rawHistory.length) {
+            database.ref(`users/${uid}/readingHistory`).set(AppState.readingHistory).catch(() => {});
+        }
+
+        try {
+            const studyLogSnap = await database.ref(`users/${uid}/studyLog`).once('value');
+            AppState.studyLog = studyLogSnap.val() || {};
+        } catch (e) {
+            AppState.studyLog = {};
+        }
+        if (typeof syncPlanStreaks === 'function') syncPlanStreaks(computeStudyStreak().count);
 
         AppState.userConnections = new Map();
         const connections = connectionsSnap.val() || {};
@@ -798,6 +905,11 @@ function showAuthModal(options = {}) {
             <div class="text-center mt-2">
                 <button id="auth-reset" class="btn btn-sm" style="color: var(--text-slate);">Forgot Password?</button>
             </div>
+
+            <p class="auth-terms-note">
+                By continuing, you agree to GraceGuide's
+                <a href="#/terms" id="auth-terms-link">Terms &amp; Conditions</a>.
+            </p>
         </div>
     `;
 
@@ -817,6 +929,11 @@ function showAuthModal(options = {}) {
     function clearAuthError() {
         errorBanner.classList.add('hidden');
     }
+
+    $('#auth-terms-link').addEventListener('click', (e) => {
+        e.preventDefault();
+        closeModalThen(() => navigateTo('terms'));
+    });
 
     // Show/hide password toggle
     $('#auth-password-toggle').addEventListener('click', () => {
@@ -1198,6 +1315,9 @@ function navigateTo(route, options = {}) {
         AppState.selectedVerses.clear();
         clearVerseSelectionBar();
     }
+    // Reading time only counts while the chapter is actually on screen.
+    if (route !== 'bible') stopChapterReadTracking();
+    if (typeof closeMessageActions === 'function') closeMessageActions();
 
     // Leaving Home or the Quiz page: stop their live-updating countdown
     // ticker so it doesn't keep firing (and touching now-gone DOM nodes)
@@ -1216,7 +1336,8 @@ function navigateTo(route, options = {}) {
     // Password-based accounts that haven't verified their email get
     // redirected to the verification gate instead of whatever page they
     // asked for — see shouldGateForEmailVerification()'s doc comment.
-    if (typeof shouldGateForEmailVerification === 'function' && shouldGateForEmailVerification(AppState.currentUser)) {
+    // (The Terms page stays readable — it's legal text, not app usage.)
+    if (route !== 'terms' && typeof shouldGateForEmailVerification === 'function' && shouldGateForEmailVerification(AppState.currentUser)) {
         renderEmailVerificationGate();
         return;
     }
@@ -1306,6 +1427,9 @@ function navigateTo(route, options = {}) {
         case 'shared-devotional':
             renderResult = renderSharedDevotionalPage();
             break;
+        case 'terms':
+            renderResult = renderTermsPage();
+            break;
         default:
             renderResult = renderHomePage();
     }
@@ -1390,7 +1514,8 @@ function updateNavigation(route) {
         'shared-space-post': 'Shared Post',
         'shared-plan': 'Shared Plan',
         'shared-quiz': 'Shared Quiz Result',
-        'shared-devotional': 'Shared Devotional'
+        'shared-devotional': 'Shared Devotional',
+        terms: 'Terms & Conditions'
     };
     const titleText = titles[route] || 'GraceGuide';
     // The two-tone "Grace"/"Guide" treatment only makes sense for the
@@ -1614,6 +1739,49 @@ async function renderSharedDevotionalPage() {
                     <i class="fas fa-sun"></i> Get My Daily Devotional
                 </button>
             </div>
+        </div>
+    `;
+}
+
+/* ============================================
+   TERMS & CONDITIONS
+   ============================================ */
+const TERMS_LAST_UPDATED = 'September 28, 2026';
+const TERMS_CONTACT_EMAIL = 'godledtech@gmail.com';
+
+function renderTermsPage() {
+    const sections = [
+        ['1. About GraceGuide', `GraceGuide is a Christian companion app for reading Scripture, studying with an AI assistant ("Shepherd"), planning Bible study, and connecting with other believers through Space, the Forum and Chats. By creating an account or using GraceGuide, you agree to these Terms & Conditions. If you do not agree, please do not use the app.`],
+        ['2. Your Account', `You are responsible for the information you provide, for keeping your sign-in details secure, and for all activity on your account. Please use an accurate email address — some features require a verified email. You may stop using GraceGuide at any time.`],
+        ['3. Shepherd (AI Assistant)', `Shepherd's replies are generated by artificial intelligence. They can be incomplete or wrong, and they are not a substitute for Scripture itself, your local church, pastoral care, or professional medical, legal, financial or mental-health advice. Always weigh what Shepherd says against the Bible. If you are in crisis or in danger, contact local emergency services or use the "Talk to Someone" page to reach a real person.`],
+        ['4. Community Guidelines', `Space posts, comments, Forum groups and Chats are shared with other people. Please be kind, honest and respectful. You must not post content that is hateful, harassing, sexually explicit, violent, fraudulent, spam, or that infringes someone else's rights, and you must not impersonate anyone. You can report or block users from their profile. We may remove content or suspend accounts that break these guidelines.`],
+        ['5. Your Content', `You keep ownership of what you post. By posting in shared areas of GraceGuide you give us permission to store, display and distribute that content within the app so it can be shown to the people you share it with, including through share links you create. You can edit or delete your own messages and delete your own posts.`],
+        ['6. Bible Text & Third-Party Services', `Bible translations are provided through third-party services and remain the property of their respective copyright holders; they are shown for personal reading and study. GraceGuide also relies on third-party services for sign-in, data storage, notifications and AI features, and their availability is outside our control.`],
+        ['7. Privacy', `We store the information needed to run the app — such as your profile, reading history, notes, highlights, study plans and messages. Your profile name, photo, bio and public posts are visible to other users; some reading statistics are visible to your Brethren. We do not sell your personal information.`],
+        ['8. Acceptable Use', `Do not attempt to disrupt the app, access other people's accounts or data, scrape content, or use GraceGuide for any unlawful purpose.`],
+        ['9. Availability & Liability', `GraceGuide is provided "as is". We work to keep it available and accurate but cannot guarantee it will always be uninterrupted or error-free. To the fullest extent permitted by law, GraceGuide is not liable for any indirect or consequential loss arising from your use of the app.`],
+        ['10. Changes to These Terms', `We may update these Terms from time to time. When we do, we will update the date at the top of this page. Continuing to use GraceGuide after changes take effect means you accept the updated Terms.`],
+        ['11. Contact', `Questions about these Terms? Contact the GraceGuide team at <a href="mailto:${TERMS_CONTACT_EMAIL}">${TERMS_CONTACT_EMAIL}</a>.`]
+    ];
+
+    DOM.pageContainer.innerHTML = `
+        <div class="terms-container">
+            <div class="card terms-card">
+                <div class="terms-header">
+                    <div class="terms-icon"><i class="fas fa-file-contract"></i></div>
+                    <h2>Terms &amp; Conditions</h2>
+                    <p class="text-muted">Last updated: ${TERMS_LAST_UPDATED}</p>
+                </div>
+                ${sections.map(([title, body]) => `
+                    <section class="terms-section">
+                        <h3>${escapeHtml(title)}</h3>
+                        <p>${body}</p>
+                    </section>
+                `).join('')}
+            </div>
+            <button class="btn btn-outline btn-block mt-3" onclick="goBack()">
+                <i class="fas fa-arrow-left"></i> Back
+            </button>
         </div>
     `;
 }
@@ -2497,20 +2665,44 @@ function renderBiblePage() {
     clearVerseSelectionBar();
     if (AppState.bibleView === 'reader' && AppState.currentBook && AppState.currentChapter) {
         return renderBibleReaderView(AppState.currentBook, AppState.currentChapter);
+    } else if (AppState.bibleView === 'verses' && AppState.currentBook && AppState.currentChapter) {
+        return renderBibleVerseGridView(AppState.currentBook, AppState.currentChapter);
     } else if (AppState.bibleView === 'chapters' && AppState.currentBook) {
         renderBibleChapterListView(AppState.currentBook);
-    } else if (AppState.bibleView === null && AppState.readingHistory.length > 0) {
+    } else if (AppState.bibleView === null) {
         // First time opening the Bible tab this session — resume exactly
-        // where the user left off instead of forcing them back through
-        // the book list every time.
-        const lastRead = AppState.readingHistory[AppState.readingHistory.length - 1];
-        if (lastRead && lastRead.book && lastRead.chapter) {
-            return renderBibleReaderView(lastRead.book, lastRead.chapter);
-        }
+        // where the user left off (the last chapter they had open, read
+        // or not) instead of forcing them back through the book list.
+        const last = getBibleLastPosition();
+        if (last) return renderBibleReaderView(last.book, last.chapter);
         renderBibleBookListView();
     } else {
         renderBibleBookListView();
     }
+}
+
+/* ---- Last reading position (resume point) ----
+   Kept separate from readingHistory on purpose: merely OPENING a chapter
+   moves the resume point, but only genuinely READING it adds it to the
+   history/"Chapters Read" count (see the read tracker below). */
+const BIBLE_LAST_POSITION_KEY = 'graceguide_bible_last_position';
+
+function saveBibleLastPosition(book, chapter) {
+    try {
+        localStorage.setItem(BIBLE_LAST_POSITION_KEY, JSON.stringify({ book, chapter, uid: AppState.currentUser?.uid || null, ts: Date.now() }));
+    } catch (e) { /* storage unavailable — resume just falls back to history */ }
+}
+
+function getBibleLastPosition() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(BIBLE_LAST_POSITION_KEY) || 'null');
+        const sameUser = saved && (saved.uid || null) === (AppState.currentUser?.uid || null);
+        if (sameUser && BIBLE_BOOK_CHAPTERS[saved.book] && saved.chapter >= 1 && saved.chapter <= BIBLE_BOOK_CHAPTERS[saved.book]) {
+            return saved;
+        }
+    } catch (e) { /* fall through */ }
+    const lastRead = AppState.readingHistory[AppState.readingHistory.length - 1];
+    return lastRead && lastRead.book && lastRead.chapter ? lastRead : null;
 }
 
 /**
@@ -2520,11 +2712,13 @@ function renderBiblePage() {
  */
 function bibleTopBarHTML(context) {
     let backBtn = '';
+    const book = (AppState.currentBook || '').replace(/'/g, "\\'");
     if (context === 'chapters') {
         backBtn = `<button class="icon-btn bible-back-btn" onclick="renderBibleBookListView()" aria-label="Back to books"><i class="fas fa-chevron-left"></i></button>`;
-    } else if (context === 'reader') {
-        const book = (AppState.currentBook || '').replace(/'/g, "\\'");
+    } else if (context === 'verses') {
         backBtn = `<button class="icon-btn bible-back-btn" onclick="renderBibleChapterListView('${book}')" aria-label="Back to chapters"><i class="fas fa-chevron-left"></i></button>`;
+    } else if (context === 'reader') {
+        backBtn = `<button class="icon-btn bible-back-btn" onclick="renderBibleVerseGridView('${book}', ${AppState.currentChapter})" aria-label="Back to verses"><i class="fas fa-chevron-left"></i></button>`;
     }
 
     return `
@@ -2560,6 +2754,8 @@ function bindBibleTopBarEvents(context) {
         showToast(`Bible version set to ${e.target.value}`, 'success');
         if (context === 'reader' && AppState.currentBook && AppState.currentChapter) {
             loadBibleChapter(AppState.currentBook, AppState.currentChapter);
+        } else if (context === 'verses' && AppState.currentBook && AppState.currentChapter) {
+            renderBibleVerseGridView(AppState.currentBook, AppState.currentChapter);
         }
     });
 
@@ -2578,6 +2774,8 @@ function bindBibleTopBarEvents(context) {
 
 /* ---- Level 1: Book grid ---- */
 function renderBibleBookListView() {
+    stopChapterReadTracking();
+    clearVerseSelection();
     AppState.bibleView = 'books';
     AppState.currentBook = null;
     AppState.currentChapter = null;
@@ -2606,12 +2804,17 @@ function openBibleBook(book) {
 
 /* ---- Level 2: Chapter grid ---- */
 function renderBibleChapterListView(book) {
+    stopChapterReadTracking();
+    clearVerseSelection();
     AppState.bibleView = 'chapters';
     AppState.currentBook = book;
     AppState.currentChapter = null;
 
     const total = getBookChapterCount(book);
-    const chapterCard = (n) => `<button class="bible-chapter-card" onclick="openBibleChapterFromGrid('${book.replace(/'/g, "\\'")}', ${n})">${n}</button>`;
+    const chapterCard = (n) => {
+        const read = isChapterRead(book, n);
+        return `<button class="bible-chapter-card ${read ? 'is-read' : ''}" onclick="openBibleChapterFromGrid('${book.replace(/'/g, "\\'")}', ${n})" ${read ? 'aria-label="Chapter ' + n + ' (read)"' : ''}>${n}</button>`;
+    };
 
     DOM.pageContainer.innerHTML = `
         <div class="bible-reader">
@@ -2622,21 +2825,96 @@ function renderBibleChapterListView(book) {
             </div>
         </div>
     `;
+    DOM.pageContainer.scrollTop = 0;
     bindBibleTopBarEvents('chapters');
 }
 
+/** Book → chapter → VERSE grid → reader. Picking a chapter now shows its
+    verse numbers first so the reader can open straight at a verse. */
 function openBibleChapterFromGrid(book, chapter) {
-    renderBibleReaderView(book, chapter);
+    return renderBibleVerseGridView(book, chapter);
 }
 
-/* ---- Level 3: Chapter reader ---- */
-function renderBibleReaderView(book, chapter) {
-    AppState.bibleView = 'reader';
+/* ---- Level 3: Verse grid ---- */
+async function renderBibleVerseGridView(book, chapter) {
+    stopChapterReadTracking();
+    clearVerseSelection();
+    AppState.bibleView = 'verses';
     AppState.currentBook = book;
     AppState.currentChapter = chapter;
 
+    const safeBook = book.replace(/'/g, "\\'");
+    DOM.pageContainer.innerHTML = `
+        <div class="bible-reader">
+            ${bibleTopBarHTML('verses')}
+            <div class="bible-breadcrumb">
+                <button onclick="renderBibleBookListView()">Books</button>
+                <i class="fas fa-chevron-right"></i>
+                <button onclick="renderBibleChapterListView('${safeBook}')">${escapeHtml(book)}</button>
+                <i class="fas fa-chevron-right"></i>
+                <span>Chapter ${chapter}</span>
+            </div>
+            <div class="bible-verse-grid-head">
+                <h3 class="bible-chapter-list-title">${escapeHtml(book)} ${chapter}</h3>
+                <button class="btn btn-primary btn-sm" onclick="openBibleChapter('${safeBook}', ${chapter})">
+                    <i class="fas fa-book-open"></i> Read Chapter
+                </button>
+            </div>
+            <p class="bible-grid-hint">Choose a verse to start reading from.</p>
+            <div id="bible-verse-grid" class="bible-chapter-grid bible-verse-grid">
+                ${Array.from({ length: 18 }, () => '<div class="skeleton bible-verse-grid-skeleton"></div>').join('')}
+            </div>
+        </div>
+    `;
+    DOM.pageContainer.scrollTop = 0;
+    bindBibleTopBarEvents('verses');
+
+    const stillHere = () => AppState.currentRoute === 'bible' && AppState.bibleView === 'verses'
+        && AppState.currentBook === book && AppState.currentChapter === chapter;
+
+    let verses = [];
+    let loadError = null;
+    try {
+        // Cache-first — the reader reuses this exact fetch, so opening the
+        // chapter afterwards costs no extra API call.
+        verses = await fetchBibleChapter(book, chapter, AppState.bibleVersion);
+    } catch (error) {
+        loadError = error;
+    }
+    if (!stillHere()) return;
+
+    const grid = $('#bible-verse-grid');
+    if (!grid) return;
+    if (loadError || verses.length === 0) {
+        grid.outerHTML = `
+            <div class="text-center text-muted" style="padding: 40px 20px;">
+                <i class="fas fa-triangle-exclamation" style="font-size: 32px; opacity: 0.4; margin-bottom: 12px;"></i>
+                <p style="margin-bottom: 12px;">${escapeHtml(loadError?.message || "Couldn't load the verses for this chapter.")}</p>
+                <button class="btn btn-outline btn-sm" onclick="renderBibleVerseGridView('${safeBook}', ${chapter})"><i class="fas fa-rotate-right"></i> Try Again</button>
+            </div>
+        `;
+        return;
+    }
+
+    grid.innerHTML = verses.map(v => {
+        const classes = ['bible-chapter-card', 'bible-verse-card'];
+        if (isVerseHighlighted(book, chapter, v.verse)) classes.push('is-highlighted');
+        if (isVerseBookmarked(book, chapter, v.verse)) classes.push('is-bookmarked');
+        return `<button class="${classes.join(' ')}" onclick="openBibleChapter('${safeBook}', ${chapter}, ${v.verse})" aria-label="Verse ${v.verse}">${v.verse}</button>`;
+    }).join('');
+}
+
+/* ---- Level 4: Chapter reader ---- */
+function renderBibleReaderView(book, chapter) {
+    const isNewChapter = AppState.currentBook !== book || AppState.currentChapter !== chapter || AppState.bibleView !== 'reader';
+    AppState.bibleView = 'reader';
+    AppState.currentBook = book;
+    AppState.currentChapter = chapter;
+    saveBibleLastPosition(book, chapter);
+
     const total = getBookChapterCount(book);
     const safeBook = book.replace(/'/g, "\\'");
+    const alreadyRead = isChapterRead(book, chapter);
 
     DOM.pageContainer.innerHTML = `
         <div class="bible-reader">
@@ -2646,7 +2924,8 @@ function renderBibleReaderView(book, chapter) {
                 <i class="fas fa-chevron-right"></i>
                 <button onclick="renderBibleChapterListView('${safeBook}')">${escapeHtml(book)}</button>
                 <i class="fas fa-chevron-right"></i>
-                <span>${chapter}</span>
+                <button onclick="renderBibleVerseGridView('${safeBook}', ${chapter})">${chapter}</button>
+                <span id="chapter-read-badge" class="chapter-read-badge ${alreadyRead ? '' : 'hidden'}"><i class="fas fa-circle-check"></i> Read</span>
             </div>
             <div class="verse-jump-inline">
                 <input type="number" id="bible-verse-jump" min="1" placeholder="Go to verse">
@@ -2672,14 +2951,17 @@ function renderBibleReaderView(book, chapter) {
         </div>
     `;
 
+    // A different chapter starts at the top; re-rendering the same one
+    // (e.g. a version switch) leaves the reader where they were.
+    if (isNewChapter) DOM.pageContainer.scrollTop = 0;
     bindBibleTopBarEvents('reader');
 
     $('#prev-chapter-btn').addEventListener('click', () => {
-        if (AppState.currentChapter > 1) renderBibleReaderView(AppState.currentBook, AppState.currentChapter - 1);
+        if (AppState.currentChapter > 1) openBibleChapter(AppState.currentBook, AppState.currentChapter - 1);
     });
     $('#next-chapter-btn').addEventListener('click', () => {
         const totalChapters = getBookChapterCount(AppState.currentBook);
-        if (AppState.currentChapter < totalChapters) renderBibleReaderView(AppState.currentBook, AppState.currentChapter + 1);
+        if (AppState.currentChapter < totalChapters) openBibleChapter(AppState.currentBook, AppState.currentChapter + 1);
     });
 
     function jumpToVerse() {
@@ -2783,26 +3065,143 @@ async function loadBibleChapter(book, chapter) {
         }).join('')}
     `;
 
-    // Save to reading history
-    if (AppState.currentUser) {
-        const uid = AppState.currentUser.uid;
-        const historyEntry = {
-            book,
-            chapter,
-            timestamp: Date.now()
-        };
-        
-        // Avoid duplicate consecutive entries
-        const lastEntry = AppState.readingHistory[AppState.readingHistory.length - 1];
-        if (!lastEntry || lastEntry.book !== book || lastEntry.chapter !== chapter) {
-            AppState.readingHistory.push(historyEntry);
-            await database.ref(`users/${uid}/readingHistory`).set(AppState.readingHistory);
-        }
+    // Opening a chapter no longer counts as reading it — the tracker below
+    // only records it once the reader has genuinely spent time on it.
+    startChapterReadTracking(book, chapter, verses);
+}
 
-        // Feed the personalization engine (see features.js) — reading a
-        // book is a strong signal of interest in it.
-        if (typeof recordInterestSignal === 'function') recordInterestSignal('book', book, 1);
+/* ============================================
+   CHAPTER READ TRACKING
+   A chapter only counts as "read" (reading history, Chapters Read on the
+   profile, Shepherd context, the daily reading reminder) once BOTH:
+     1. the reader has reached the end of the chapter (last verse seen), and
+     2. they've spent enough active time on it — scaled to the chapter's
+        length, 20s minimum, 2 min maximum. Time only accrues while the tab
+        is visible and the reader has interacted (scroll/tap/key) within
+        the last minute, so leaving a chapter open idle doesn't count.
+   Each chapter is stored once; re-reading just refreshes its timestamp.
+   ============================================ */
+const ChapterReadTracker = {
+    key: null, book: null, chapter: null,
+    activeMs: 0, requiredMs: 0, reachedEnd: false,
+    lastInteraction: 0, timer: null, observer: null, listenersBound: false
+};
+const READ_MIN_MS = 20000;
+const READ_MAX_MS = 120000;
+const READ_IDLE_LIMIT_MS = 60000;
+
+function readingHistoryKey(book, chapter) {
+    return `${book}|${chapter}`;
+}
+
+function dedupeReadingHistory(list) {
+    const byChapter = new Map();
+    toCleanArray(list).forEach(entry => {
+        if (!entry || !entry.book || !entry.chapter) return;
+        const key = readingHistoryKey(entry.book, entry.chapter);
+        const existing = byChapter.get(key);
+        if (!existing || (entry.timestamp || 0) >= (existing.timestamp || 0)) byChapter.set(key, entry);
+    });
+    return [...byChapter.values()].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+}
+
+function isChapterRead(book, chapter) {
+    return AppState.readingHistory.some(h => h.book === book && h.chapter === chapter);
+}
+
+function noteReaderInteraction() {
+    ChapterReadTracker.lastInteraction = Date.now();
+}
+
+function startChapterReadTracking(book, chapter, verses) {
+    stopChapterReadTracking();
+    if (!AppState.currentUser) return; // guests have no reading history to save
+
+    const words = verses.reduce((sum, v) => sum + String(v.text || '').split(/\s+/).filter(Boolean).length, 0);
+    // ~60% of a 250-wpm reading pace: generous enough for real readers,
+    // far longer than a 1–2 second glance.
+    const estimatedMs = (words / 250) * 60000 * 0.6;
+
+    Object.assign(ChapterReadTracker, {
+        key: readingHistoryKey(book, chapter),
+        book, chapter,
+        activeMs: 0,
+        requiredMs: Math.round(Math.min(READ_MAX_MS, Math.max(READ_MIN_MS, estimatedMs))),
+        reachedEnd: false,
+        lastInteraction: Date.now()
+    });
+
+    if (!ChapterReadTracker.listenersBound && DOM.pageContainer) {
+        ['scroll', 'touchstart', 'pointerdown', 'keydown', 'wheel'].forEach(evt =>
+            DOM.pageContainer.addEventListener(evt, noteReaderInteraction, { passive: true }));
+        ChapterReadTracker.listenersBound = true;
     }
+
+    const verseEls = $$('#bible-content .bible-verse');
+    const lastVerse = verseEls[verseEls.length - 1];
+    if (lastVerse && 'IntersectionObserver' in window) {
+        ChapterReadTracker.observer = new IntersectionObserver((entries) => {
+            if (entries.some(e => e.isIntersecting)) {
+                ChapterReadTracker.reachedEnd = true;
+                ChapterReadTracker.observer?.disconnect();
+                ChapterReadTracker.observer = null;
+                checkChapterReadComplete();
+            }
+        }, { threshold: 0.6 });
+        ChapterReadTracker.observer.observe(lastVerse);
+    } else {
+        ChapterReadTracker.reachedEnd = true;
+    }
+
+    const TICK_MS = 1000;
+    ChapterReadTracker.timer = setInterval(() => {
+        const onChapter = AppState.currentRoute === 'bible' && AppState.bibleView === 'reader'
+            && readingHistoryKey(AppState.currentBook, AppState.currentChapter) === ChapterReadTracker.key;
+        if (!onChapter) { stopChapterReadTracking(); return; }
+        const visible = document.visibilityState === 'visible';
+        const recentlyActive = Date.now() - ChapterReadTracker.lastInteraction < READ_IDLE_LIMIT_MS;
+        if (visible && recentlyActive) {
+            ChapterReadTracker.activeMs += TICK_MS;
+            checkChapterReadComplete();
+        }
+    }, TICK_MS);
+}
+
+function stopChapterReadTracking() {
+    if (ChapterReadTracker.timer) clearInterval(ChapterReadTracker.timer);
+    if (ChapterReadTracker.observer) ChapterReadTracker.observer.disconnect();
+    ChapterReadTracker.timer = null;
+    ChapterReadTracker.observer = null;
+    ChapterReadTracker.key = null;
+}
+
+function checkChapterReadComplete() {
+    const t = ChapterReadTracker;
+    if (!t.key || !t.reachedEnd || t.activeMs < t.requiredMs) return;
+    const { book, chapter } = t;
+    stopChapterReadTracking();
+    markChapterRead(book, chapter);
+}
+
+async function markChapterRead(book, chapter) {
+    if (!AppState.currentUser) return;
+    const wasRead = isChapterRead(book, chapter);
+    AppState.readingHistory = AppState.readingHistory.filter(h => !(h.book === book && h.chapter === chapter));
+    AppState.readingHistory.push({ book, chapter, timestamp: Date.now() });
+
+    const badge = document.getElementById('chapter-read-badge');
+    if (badge && AppState.currentBook === book && AppState.currentChapter === chapter) badge.classList.remove('hidden');
+    if (!wasRead) showToast(`${book} ${chapter} added to your reading history`, 'success');
+
+    try {
+        await database.ref(`users/${AppState.currentUser.uid}/readingHistory`).set(AppState.readingHistory);
+    } catch (error) {
+        console.error('Error saving reading history:', error);
+    }
+
+    // Feed the personalization engine (see features.js) — actually
+    // reading a book is a strong signal of interest in it.
+    if (typeof recordInterestSignal === 'function') recordInterestSignal('book', book, 1);
 }
 
 /* ============================================
@@ -3076,49 +3475,75 @@ function postSelectedVersesToSpace() {
     });
 }
 
-function highlightSelectedVerses() {
-    if (AppState.selectedVerses.size === 0) return;
-    if (!requireAuth('Sign in to highlight verses.')) return;
+/** Updates a verse row's highlight/bookmark styling in place. Deliberately
+    never re-renders the chapter — re-rendering is what used to reload the
+    chapter and throw the reader back to the top after highlighting. */
+function refreshVerseMarks(book, chapter, verseNumbers) {
+    if (AppState.currentBook !== book || AppState.currentChapter !== chapter) return;
+    verseNumbers.forEach(v => {
+        const el = $(`.bible-verse[data-verse="${v}"]`);
+        if (!el) return;
+        el.classList.toggle('highlighted', isVerseHighlighted(book, chapter, v));
+        const bookmarked = isVerseBookmarked(book, chapter, v);
+        el.classList.toggle('bookmarked', bookmarked);
+        const icon = el.querySelector('.bible-verse-bookmark-icon');
+        if (bookmarked && !icon) {
+            el.insertAdjacentHTML('beforeend', '<i class="fas fa-bookmark bible-verse-bookmark-icon"></i>');
+        } else if (!bookmarked && icon) {
+            icon.remove();
+        }
+    });
+}
 
+/**
+ * Shared toggle for highlights/bookmarks on the current selection: if every
+ * selected verse already has the mark it's removed, otherwise it's added to
+ * the ones missing it. Applied optimistically (instant, no reload, reading
+ * position untouched) and rolled back if the save fails.
+ */
+function toggleMarkOnSelectedVerses(kind) {
+    const listKey = kind === 'highlight' ? 'highlights' : 'bookmarks';
+    const isMarked = kind === 'highlight' ? isVerseHighlighted : isVerseBookmarked;
     const uid = AppState.currentUser.uid;
     const book = AppState.currentBook;
     const chapter = AppState.currentChapter;
-    const verses = Array.from(AppState.selectedVerses).map(v => ({
-        book, chapter, verse: v, timestamp: Date.now()
-    }));
+    const selected = Array.from(AppState.selectedVerses).sort((a, b) => a - b);
+    const removing = selected.every(v => isMarked(book, chapter, v));
+    const previous = AppState[listKey].slice();
 
-    AppState.highlights.push(...verses);
-    database.ref(`users/${uid}/highlights`).set(AppState.highlights)
-        .then(() => {
-            showToast('Verses highlighted!', 'success');
-            clearVerseSelection();
-            // Re-render so the highlight is visible immediately.
-            if (AppState.bibleView === 'reader') renderBibleReaderView(book, chapter);
-        })
-        .catch(() => showToast('Failed to highlight. Please try again.', 'error'));
+    if (removing) {
+        AppState[listKey] = AppState[listKey].filter(item => !(item.book === book && item.chapter === chapter && selected.includes(item.verse)));
+    } else {
+        selected.filter(v => !isMarked(book, chapter, v)).forEach(v => {
+            const entry = { book, chapter, verse: v, timestamp: Date.now() };
+            if (kind === 'bookmark') entry.reference = `${book} ${chapter}:${v}`;
+            AppState[listKey].push(entry);
+        });
+    }
+
+    clearVerseSelection();
+    refreshVerseMarks(book, chapter, selected);
+
+    const noun = kind === 'highlight' ? 'Highlight' : 'Bookmark';
+    database.ref(`users/${uid}/${listKey}`).set(AppState[listKey])
+        .then(() => showToast(removing ? `${noun} removed` : `${noun} saved`, 'success'))
+        .catch(() => {
+            AppState[listKey] = previous;
+            refreshVerseMarks(book, chapter, selected);
+            showToast(`Couldn't save your ${noun.toLowerCase()}. Please try again.`, 'error');
+        });
+}
+
+function highlightSelectedVerses() {
+    if (AppState.selectedVerses.size === 0) return;
+    if (!requireAuth('Sign in to highlight verses.')) return;
+    toggleMarkOnSelectedVerses('highlight');
 }
 
 function bookmarkSelectedVerses() {
     if (AppState.selectedVerses.size === 0) return;
     if (!requireAuth('Sign in to bookmark verses.')) return;
-
-    const uid = AppState.currentUser.uid;
-    const book = AppState.currentBook;
-    const chapter = AppState.currentChapter;
-    const verses = Array.from(AppState.selectedVerses).map(v => ({
-        book, chapter, verse: v,
-        reference: `${book} ${chapter}:${v}`,
-        timestamp: Date.now()
-    }));
-
-    AppState.bookmarks.push(...verses);
-    database.ref(`users/${uid}/bookmarks`).set(AppState.bookmarks)
-        .then(() => {
-            showToast('Verses bookmarked!', 'success');
-            clearVerseSelection();
-            if (AppState.bibleView === 'reader') renderBibleReaderView(book, chapter);
-        })
-        .catch(() => showToast('Failed to bookmark. Please try again.', 'error'));
+    toggleMarkOnSelectedVerses('bookmark');
 }
 
 function addNoteToSelectedVerses() {
@@ -3264,14 +3689,6 @@ function bookmarkChapter(book, chapter) {
  * knows exactly which chapter is wanted.
  */
 function openBibleChapter(book, chapter, verse) {
-    // Set the target view before navigating so that if we're not already
-    // on the Bible tab, navigateTo()'s own call to renderBiblePage() goes
-    // straight to the right chapter instead of rendering an intermediate
-    // view that would immediately get replaced.
-    AppState.bibleView = 'reader';
-    AppState.currentBook = book;
-    AppState.currentChapter = chapter;
-
     // Phase 3: keep the address bar in sync with whatever chapter is
     // actually showing, so it's always refreshable/shareable as
     // #/bible/BOOK/CHAPTER[/VERSE] — not just when arriving via a deep
@@ -3285,6 +3702,13 @@ function openBibleChapter(book, chapter, verse) {
         // etc.) exactly as before — just now with a urlPath so the
         // pushed URL reflects the actual chapter instead of a bare
         // "#/bible".
+        // Set the target view first so navigateTo()'s own renderBiblePage()
+        // goes straight to this chapter, and open it at the top rather than
+        // at whatever scroll offset the previous Bible screen was left at.
+        AppState.bibleView = 'reader';
+        AppState.currentBook = book;
+        AppState.currentChapter = chapter;
+        AppState.scrollPositions.bible = 0;
         navigateTo('bible', { urlPath });
         loadPromise = AppState.lastRenderPromise;
     } else {
