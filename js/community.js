@@ -1926,7 +1926,25 @@ function renderTalkToSomeonePage() {
     $('#tts-proceed-btn').addEventListener('click', proceedToTalkToSomeone);
 }
 
-function proceedToTalkToSomeone() {
+/** WhatsApp line for Talk to Someone — set by admins in admin.html → App
+    Settings (appConfig/talkToSomeoneWhatsApp). */
+async function getTalkToSomeoneWhatsAppNumber() {
+    try {
+        const snap = await database.ref('appConfig/talkToSomeoneWhatsApp').once('value');
+        const digits = String(snap.val() || '').replace(/\D/g, '');
+        return digits.length >= 7 ? digits : null;
+    } catch (error) {
+        console.error('Error loading Talk to Someone number:', error);
+        return null;
+    }
+}
+
+async function proceedToTalkToSomeone() {
+    const whatsappNumber = await getTalkToSomeoneWhatsAppNumber();
+    if (!whatsappNumber) {
+        showToast("This support line isn't available right now — please email support@graceguide.com.ng.", 'warning');
+        return;
+    }
     const genderPref = $('#tts-gender-pref')?.value || 'no preference';
     const rolePref = $('#tts-role-pref')?.value || 'anyone available';
     const note = $('#tts-note')?.value.trim();
@@ -1955,7 +1973,7 @@ function proceedToTalkToSomeone() {
     }
 
     const message = lines.join('\n\n');
-    const whatsappUrl = `https://wa.me/${TALK_TO_SOMEONE_WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
+    const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
 
     window.open(whatsappUrl, '_blank');
 }
@@ -2352,6 +2370,10 @@ function initEventListeners() {
  * instead of always going to the sender's profile.
  */
 function notifClickAction(notif) {
+    // Admin announcements can target a specific screen (admin.html → Notifications).
+    if (notif.route && /^[a-z0-9\-\/]+$/i.test(notif.route)) {
+        return `closeSheetThen(() => navigateToHash('#/${notif.route}'))`;
+    }
     if (notif.postId && (notif.type === 'space_amen' || notif.type === 'space_comment')) {
         const openComments = notif.type === 'space_comment';
         return `closeSheetThen(() => openSpacePostFromNotification('${notif.postId}', ${openComments}))`;
@@ -2456,6 +2478,7 @@ async function renderNotificationPanelContent() {
                 <div class="notif-row ${notif.read ? '' : 'notif-row-unread'}" onclick="${notifClickAction(notif)}">
                     ${notif.read ? '' : '<span class="notif-unread-dot"></span>'}
                     <div style="flex: 1; min-width: 0;">
+                        ${notif.title ? `<div class="notif-row-message" style="font-weight:700;">${escapeHtml(notif.title)}</div>` : ''}
                         <div class="notif-row-message">${escapeHtml(notif.message)}</div>
                         <div style="font-size: 12px; color: var(--text-slate);">${formatDate(notif.timestamp)}</div>
                     </div>

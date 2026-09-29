@@ -231,6 +231,7 @@ const TAB_TITLES = {
     notifications: 'Notifications',
     quiz: 'Weekly Quiz',
     space: 'Space Moderation',
+    settings: 'App Settings',
     admins: 'Admin Access'
 };
 
@@ -248,6 +249,7 @@ function renderTab(tab) {
         notifications: renderNotificationsTab,
         quiz: renderQuizTab,
         space: renderSpaceTab,
+        settings: renderSettingsTab,
         admins: renderAdminsTab
     };
 
@@ -507,7 +509,7 @@ async function renderNotificationsTab() {
     $('#admin-content').innerHTML = `
         <div class="admin-panel">
             <h2>Send Notification</h2>
-            <p class="text-muted" style="margin-bottom:16px;">Delivered as an in-app notification to each recipient immediately, and as a push notification to any device where they've enabled notifications (once the Cloud Function in <code>functions/index.js</code> is deployed).</p>
+            <p class="text-muted" style="margin-bottom:16px;">Delivered as an in-app notification to each recipient immediately, and as a system notification on their phone — on the Android app it arrives under the "Announcements" category (users can turn it off there), and tapping it opens the screen you choose below. Web push delivery needs the Cloud Function in <code>functions/index.js</code> deployed.</p>
             <button id="compose-notif-btn" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Compose Notification</button>
         </div>
     `;
@@ -540,8 +542,18 @@ async function openComposeNotificationModal(presetUid = null, presetUsername = n
             </select>
         </div>
         <div class="admin-form-row">
+            <label>Title (optional)</label>
+            <input type="text" id="notif-title" class="form-input" maxlength="60" placeholder="GraceGuide">
+        </div>
+        <div class="admin-form-row">
             <label>Message</label>
             <textarea id="notif-message" class="form-textarea" rows="3" placeholder="e.g. New study plan just dropped — check it out!"></textarea>
+        </div>
+        <div class="admin-form-row">
+            <label>When tapped, open</label>
+            <select id="notif-route" class="form-select">
+                ${NOTIFICATION_ROUTES.map(r => `<option value="${r.value}">${escapeHtml(r.label)}</option>`).join('')}
+            </select>
         </div>
         <div class="flex gap-2" style="display:flex; gap:8px;">
             <button id="notif-cancel-btn" class="btn btn-outline" style="flex:1;">Cancel</button>
@@ -560,6 +572,8 @@ async function openComposeNotificationModal(presetUid = null, presetUsername = n
         if (!message) { showAdminToast('Please write a message first.', 'error'); return; }
 
         const targetType = $('#notif-target-type').value;
+        const title = $('#notif-title').value.trim();
+        const route = $('#notif-route').value;
         const btn = $('#notif-send-btn');
         btn.disabled = true;
         btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> Sending…`;
@@ -567,11 +581,11 @@ async function openComposeNotificationModal(presetUid = null, presetUsername = n
         try {
             if (targetType === 'specific') {
                 const uid = $('#notif-target-user').value;
-                await sendAdminNotification(uid, message);
+                await sendAdminNotification(uid, message, title, route);
                 showAdminToast('Notification sent.', 'success');
             } else {
                 const uids = Object.keys(userDirectory);
-                await Promise.all(uids.map(uid => sendAdminNotification(uid, message)));
+                await Promise.all(uids.map(uid => sendAdminNotification(uid, message, title, route)));
                 showAdminToast(`Notification sent to ${uids.length} users.`, 'success');
             }
             closeAdminModal();
@@ -584,14 +598,33 @@ async function openComposeNotificationModal(presetUid = null, presetUsername = n
     });
 }
 
-async function sendAdminNotification(uid, message) {
-    await database.ref(`users/${uid}/notifications`).push({
+/** Screens a notification can open (web hash routes — the Android app
+    understands the same routes, so one value works on both). */
+const NOTIFICATION_ROUTES = [
+    { value: 'home', label: 'Home' },
+    { value: 'devotional', label: 'Daily Devotional' },
+    { value: 'bible', label: 'Bible' },
+    { value: 'planner', label: 'Study Planner' },
+    { value: 'quiz', label: 'Weekly Quiz' },
+    { value: 'ask', label: 'Shepherd' },
+    { value: 'space', label: 'Space' },
+    { value: 'community', label: 'Forum' },
+    { value: 'messages', label: 'Chats' },
+    { value: 'talk-to-someone', label: 'Talk to Someone' },
+    { value: 'settings', label: 'Settings' }
+];
+
+async function sendAdminNotification(uid, message, title = '', route = 'home') {
+    const notification = {
         type: 'admin_broadcast',
         message,
+        route: route || 'home',
         fromUid: AdminState.user.uid,
         read: false,
         timestamp: Date.now()
-    });
+    };
+    if (title) notification.title = title;
+    await database.ref(`users/${uid}/notifications`).push(notification);
 }
 
 /* ============================================
@@ -1160,8 +1193,16 @@ async function addGeneratedToQuestionBank() {
 /* ============================================
    SPACE MODERATION TAB
    ============================================ */
+/** Current profile name for a uid (userDirectory is kept in sync whenever a
+    user renames themselves) — the name stored on an old post/comment is
+    only a fallback, matching how the app itself now displays names. */
+function adminDisplayName(uid, fallback) {
+    const dir = AdminState.userDirectory || {};
+    return (uid && dir[uid] && dir[uid].username) || fallback || 'Anonymous';
+}
+
 async function renderSpaceTab() {
-    const posts = await fetchAllSpacePosts();
+    const [posts] = await Promise.all([fetchAllSpacePosts(), fetchUserDirectory().catch(() => ({}))]);
     posts.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
     $('#admin-content').innerHTML = `
@@ -1246,7 +1287,10 @@ function adminRenderSpaceSlides(post) {
 function adminRenderSpaceCard(post) {
     const amenCount = post.amens ? Object.keys(post.amens).length : 0;
     const commentCount = post.comments ? Object.keys(post.comments).length : 0;
-    const authorName = escapeHtml(post.authorName || 'Anonymous');
+    const authorName = escapeHtml(adminDisplayName(post.authorId, post.authorName));
+    const comments = Object.entries(post.comments || {})
+        .map(([id, c]) => ({ id, ...c }))
+        .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
     const typeIcon = {
         verses: 'fa-book-bible',
@@ -1290,8 +1334,110 @@ function adminRenderSpaceCard(post) {
                 </span>
                 <button class="admin-icon-btn danger" title="Delete post" onclick="deleteSpacePost('${post.id}')"><i class="fas fa-trash"></i></button>
             </div>
+            ${comments.length > 0 ? `
+                <div class="admin-comment-list">
+                    ${comments.map(c => `
+                        <div class="admin-comment-row" data-comment-id="${escapeHtml(c.id)}">
+                            <div class="admin-comment-body">
+                                <span class="admin-comment-author">${escapeHtml(adminDisplayName(c.authorId, c.authorName))}</span>
+                                ${escapeHtml(c.content || '')}
+                                <div class="text-muted" style="font-size:11px;">${formatDate(c.timestamp)}</div>
+                            </div>
+                            <button class="admin-icon-btn danger" title="Delete comment" onclick="deleteSpaceComment('${post.id}', '${escapeHtml(c.id)}')"><i class="fas fa-trash"></i></button>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : ''}
         </div>
     `;
+}
+
+async function deleteSpaceComment(postId, commentId) {
+    if (!confirm('Delete this comment?')) return;
+    try {
+        await database.ref(`spacePosts/${postId}/comments/${commentId}`).remove();
+        const post = (AdminState.spacePosts || []).find(p => p.id === postId);
+        if (post && post.comments) delete post.comments[commentId];
+        document.querySelector(`[data-post-id="${postId}"] [data-comment-id="${commentId}"]`)?.remove();
+        showAdminToast('Comment deleted.', 'success');
+    } catch (error) {
+        console.error(error);
+        showAdminToast('Failed to delete comment.', 'error');
+    }
+}
+
+/* ============================================
+   APP SETTINGS TAB — /appConfig (read by the web app and the Android app)
+   ============================================ */
+async function renderSettingsTab() {
+    const snap = await database.ref('appConfig').once('value');
+    const cfg = snap.val() || {};
+
+    $('#admin-content').innerHTML = `
+        <div class="admin-panel">
+            <h2>Support &amp; Contact</h2>
+            <div class="admin-form-grid">
+                <div class="admin-form-row">
+                    <label>Support email</label>
+                    <input type="email" id="cfg-support-email" class="form-input" value="${escapeHtml(cfg.supportEmail || 'support@graceguide.com.ng')}">
+                    <p class="admin-settings-note">Shown in the Android app's Settings → Contact Support.</p>
+                </div>
+                <div class="admin-form-row">
+                    <label>"Talk to Someone" WhatsApp number</label>
+                    <input type="tel" id="cfg-whatsapp" class="form-input" placeholder="e.g. 2348012345678 (country code, digits only)" value="${escapeHtml(cfg.talkToSomeoneWhatsApp || '')}">
+                    <p class="admin-settings-note">Where the Talk to Someone page connects people (web and Android). Leave blank to hide the WhatsApp hand-off.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="admin-panel">
+            <h2>Android App Updates</h2>
+            <p class="text-muted" style="margin-bottom:12px; font-size:13px;">When the latest version code here is higher than the one installed, the Android app shows an "Update available" card in Settings linking to the download below.</p>
+            <div class="admin-form-grid">
+                <div class="admin-form-row">
+                    <label>Latest version code</label>
+                    <input type="number" id="cfg-android-code" class="form-input" min="1" value="${cfg.androidLatestVersionCode || ''}">
+                </div>
+                <div class="admin-form-row">
+                    <label>Latest version name</label>
+                    <input type="text" id="cfg-android-name" class="form-input" placeholder="e.g. 1.1.0" value="${escapeHtml(cfg.androidLatestVersionName || '')}">
+                </div>
+            </div>
+            <div class="admin-form-row">
+                <label>Download link (Play Store or APK URL)</label>
+                <input type="url" id="cfg-android-url" class="form-input" placeholder="https://play.google.com/store/apps/details?id=com.graceguide.app" value="${escapeHtml(cfg.androidDownloadUrl || '')}">
+            </div>
+            <div class="admin-form-row">
+                <label>Update message (optional)</label>
+                <input type="text" id="cfg-android-msg" class="form-input" maxlength="140" value="${escapeHtml(cfg.androidUpdateMessage || '')}">
+            </div>
+        </div>
+
+        <button id="cfg-save-btn" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save App Settings</button>
+    `;
+
+    $('#cfg-save-btn').addEventListener('click', async () => {
+        const whatsapp = $('#cfg-whatsapp').value.replace(/\D/g, '');
+        const code = parseInt($('#cfg-android-code').value, 10);
+        const update = {
+            supportEmail: $('#cfg-support-email').value.trim() || 'support@graceguide.com.ng',
+            talkToSomeoneWhatsApp: whatsapp || null,
+            androidLatestVersionCode: Number.isFinite(code) && code > 0 ? code : null,
+            androidLatestVersionName: $('#cfg-android-name').value.trim() || null,
+            androidDownloadUrl: $('#cfg-android-url').value.trim() || null,
+            androidUpdateMessage: $('#cfg-android-msg').value.trim() || null,
+            updatedAt: Date.now(),
+            updatedBy: AdminState.user.email || AdminState.user.uid
+        };
+        if (whatsapp && whatsapp.length < 7) { showAdminToast('That WhatsApp number looks too short.', 'error'); return; }
+        try {
+            await database.ref('appConfig').update(update);
+            showAdminToast('App settings saved.', 'success');
+        } catch (error) {
+            console.error(error);
+            showAdminToast('Failed to save settings — check the database rules are deployed.', 'error');
+        }
+    });
 }
 
 function spaceModListHTML(posts) {

@@ -1747,7 +1747,7 @@ async function renderSharedDevotionalPage() {
    TERMS & CONDITIONS
    ============================================ */
 const TERMS_LAST_UPDATED = 'September 28, 2026';
-const TERMS_CONTACT_EMAIL = 'godledtech@gmail.com';
+const TERMS_CONTACT_EMAIL = 'support@graceguide.com.ng';
 
 function renderTermsPage() {
     const sections = [

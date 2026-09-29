@@ -227,6 +227,55 @@ body {
     background: rgba(255,255,255,0.1);
 }
 
+/* "Back to GraceGuide" — always-visible way from the dashboard to the app */
+.admin-back-to-app {
+    margin-bottom: 14px;
+    background: var(--accent-muted-gold);
+    color: #202522;
+    text-decoration: none;
+}
+
+.admin-back-to-app:hover {
+    background: var(--gold-light, #d9bc7a);
+    color: #202522;
+}
+
+/* Space moderation: comment list inside each post card */
+.admin-comment-list {
+    border-top: 1px solid rgba(0,0,0,0.06);
+    padding: 8px 14px 12px;
+}
+
+.admin-comment-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 13px;
+}
+
+.admin-comment-row .admin-comment-body {
+    flex: 1;
+    min-width: 0;
+    word-break: break-word;
+}
+
+.admin-comment-row .admin-comment-author {
+    font-weight: 600;
+    margin-right: 6px;
+}
+
+.admin-comment-row .admin-comment-deleted {
+    font-style: italic;
+    color: var(--text-slate);
+}
+
+.admin-settings-note {
+    font-size: 12px;
+    color: var(--text-slate);
+    margin-top: 4px;
+}
+
 .admin-main {
     flex: 1;
     margin-left: var(--sidebar-width);
