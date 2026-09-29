@@ -39,7 +39,9 @@ const SHARE_CARD_COLORS = {
     goldLight: '#d9bc7a',
     terracotta: '#C87552',
     sage: '#718575',
-    cream: 'rgba(248,246,240,0.94)'
+    cream: 'rgba(248,246,240,0.94)',
+    creamSolid: '#F8F6F0',
+    goldBright: '#E3C46F'
 };
 
 // Same content-type vocabulary used throughout the builders below —
@@ -86,17 +88,17 @@ function wrapCanvasText(ctx, text, maxWidth) {
 // The Google Fonts <link> is already in index.html; this just makes
 // sure the specific weights we draw with have actually finished
 // downloading before we paint text — otherwise canvas silently falls
-// back to a system font for the first render.
+// back to a system font for the first render. Font Awesome (already
+// loaded for the UI) supplies the label-pill glyph.
 async function ensureShareCardFontsReady() {
     try {
         await Promise.all([
-            document.fonts.load('700 58px "Playfair Display"'),
-            document.fonts.load('italic 400 36px "Playfair Display"'),
-            document.fonts.load('800 40px "Inter"'),
-            document.fonts.load('700 24px "Inter"'),
+            document.fonts.load('700 92px "Playfair Display"'),
+            document.fonts.load('italic 400 46px "Playfair Display"'),
+            document.fonts.load('800 42px "Inter"'),
             document.fonts.load('600 30px "Inter"'),
-            document.fonts.load('600 26px "Inter"'),
-            document.fonts.load('400 24px "Inter"')
+            document.fonts.load('500 28px "Inter"'),
+            document.fonts.load('900 30px "Font Awesome 6 Free"', '')
         ]);
         await document.fonts.ready;
     } catch (error) {
@@ -104,186 +106,314 @@ async function ensureShareCardFontsReady() {
     }
 }
 
+// The real leaf logo for the card header (same file the app uses).
+let shareCardLogoPromise = null;
+function loadShareCardLogo() {
+    if (!shareCardLogoPromise) {
+        shareCardLogoPromise = new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = () => resolve(null);
+            img.src = 'img/logo.png';
+        });
+    }
+    return shareCardLogoPromise;
+}
+
+// Font Awesome glyph for the label pill, per card kind.
+function shareCardGlyph(config) {
+    if (/streak/i.test(config.eyebrow || '')) return ''; // fire
+    switch (config.kind) {
+        case 'verse':
+        case 'dailyVerse': return ''; // book-open
+        case 'devotional': return ''; // sun
+        case 'space': return ''; // dove
+        case 'profile': return ''; // user
+        case 'plan': return ''; // calendar-check
+        case 'quiz': return ''; // trophy
+        default: return '';
+    }
+}
+
+// Wraps into at most `max` lines, ending with an ellipsis when cut.
+function wrapCanvasTextMax(ctx, text, maxWidth, max) {
+    const all = wrapCanvasText(ctx, text, maxWidth);
+    if (all.length <= max) return all;
+    const kept = all.slice(0, max);
+    let last = kept[kept.length - 1];
+    while (last && ctx.measureText(last + '…').width > maxWidth) {
+        last = last.includes(' ') ? last.slice(0, last.lastIndexOf(' ')) : '';
+    }
+    kept[kept.length - 1] = last.replace(/[,;:.\s]+$/, '') + '…';
+    return kept;
+}
+
+// Four-point sparkle (✦) centred on (cx, cy).
+function sparklePath(ctx, cx, cy, r) {
+    const k = r * 0.16;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r);
+    ctx.quadraticCurveTo(cx + k, cy - k, cx + r, cy);
+    ctx.quadraticCurveTo(cx + k, cy + k, cx, cy + r);
+    ctx.quadraticCurveTo(cx - k, cy + k, cx - r, cy);
+    ctx.quadraticCurveTo(cx - k, cy - k, cx, cy - r);
+    ctx.closePath();
+}
+
+// Letter-spaced text drawn glyph by glyph (ctx.letterSpacing isn't
+// supported everywhere yet).
+function spacedTextWidth(ctx, text, spacing) {
+    return [...text].reduce((w, ch) => w + ctx.measureText(ch).width, 0) + spacing * Math.max(0, text.length - 1);
+}
+function drawSpacedText(ctx, text, x, y, spacing) {
+    let cx = x;
+    [...text].forEach(ch => {
+        ctx.fillText(ch, cx, y);
+        cx += ctx.measureText(ch).width + spacing;
+    });
+}
+
 /**
- * The single reusable renderer. `config` shape:
+ * The single reusable renderer (mirrors ShareCards.render() in the
+ * Android app, so a card looks the same wherever it was made). `config`:
  *   {
  *     kind: 'verse'|'dailyVerse'|'devotional'|'space'|'profile'|'plan'|'quiz',
- *     eyebrow: 'BIBLE VERSE',      // small label pill
- *     icon: '📖',                  // one emoji, optional
+ *     eyebrow: 'Bible Verse',      // label in the pill
+ *     icon: '📖',                  // (legacy; the pill glyph is chosen by kind)
  *     title: 'John 3:16',          // large headline, required
- *     body: '"For God so loved…"',  // optional supporting text/quote
- *     footer: '@username',         // optional small attribution line
- *     tagline: 'Read the Word'     // optional, replaces the default footer tagline
+ *     body: '“For God so loved…”',  // optional supporting text/quote
+ *     footer: '@username',         // optional small gold line under the body
+ *     tagline: 'Read the Word'     // bottom-left label
  *   }
  * Every field is plain text — callers are responsible for only passing
  * data that's safe to make public (see the per-type builders below).
  */
 async function renderShareCardOntoCanvas(canvas, config) {
     await ensureShareCardFontsReady();
+    const logo = await loadShareCardLogo();
 
     canvas.width = SHARE_CARD_WIDTH;
     canvas.height = SHARE_CARD_HEIGHT;
     const ctx = canvas.getContext('2d');
     const W = SHARE_CARD_WIDTH, H = SHARE_CARD_HEIGHT;
-    const accent = SHARE_CARD_ACCENTS[config.kind] || SHARE_CARD_COLORS.gold;
+    const C = SHARE_CARD_COLORS;
     const marginX = 84;
 
-    // ---- Background: richer multi-stop gradient + soft glow ----
+    // ---- Background: deep emerald with a warm gold glow in the top-right ----
     const bg = ctx.createLinearGradient(0, 0, W, H);
-    bg.addColorStop(0, SHARE_CARD_COLORS.olive);
-    bg.addColorStop(0.55, SHARE_CARD_COLORS.oliveDark);
-    bg.addColorStop(1, '#182920');
+    bg.addColorStop(0, '#1D4A36');
+    bg.addColorStop(0.5, '#123826');
+    bg.addColorStop(1, '#082418');
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
-
-    const glow = ctx.createRadialGradient(W * 0.82, H * 0.16, 40, W * 0.82, H * 0.16, 720);
-    glow.addColorStop(0, accent + '30');
-    glow.addColorStop(1, accent + '00');
+    const glow = ctx.createRadialGradient(W * 0.98, H * 0.02, 0, W * 0.98, H * 0.02, 520);
+    glow.addColorStop(0, 'rgba(201,180,86,0.55)');
+    glow.addColorStop(0.45, 'rgba(184,166,78,0.2)');
+    glow.addColorStop(1, 'rgba(184,166,78,0)');
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, W, H);
+    const glow2 = ctx.createRadialGradient(W * 0.15, H * 0.55, 0, W * 0.15, H * 0.55, 700);
+    glow2.addColorStop(0, 'rgba(95,211,165,0.10)');
+    glow2.addColorStop(1, 'rgba(95,211,165,0)');
+    ctx.fillStyle = glow2;
+    ctx.fillRect(0, 0, W, H);
 
-    // ---- Background texture: large watermark icon + faint rings, so
-    // the card reads as "designed" rather than a flat color fill.
-    // Opacity is low enough that body text drawn over it stays legible. ----
-    if (config.icon) {
-        ctx.save();
-        ctx.globalAlpha = 0.09;
-        ctx.font = '460px sans-serif';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText(config.icon, W + 60, H + 40);
-        ctx.restore();
-    }
-    ctx.save();
-    ctx.globalAlpha = 0.07;
-    ctx.strokeStyle = '#FFFFFF';
-    ctx.lineWidth = 2;
-    [[W * 0.1, H * 0.88, 150], [W * 0.92, H * 0.08, 90]].forEach(([cx, cy, r]) => {
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.stroke();
-    });
-    ctx.restore();
+    // ---- Decorative gold rings + sparkle stars ----
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(227,196,111,0.6)';
+    ctx.beginPath(); ctx.arc(W - 30, 30, 200, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(227,196,111,0.35)';
+    ctx.beginPath(); ctx.arc(46, H - 200, 190, 0, Math.PI * 2); ctx.stroke();
+    const star = ctx.createLinearGradient(W * 0.7, H * 0.65, W, H);
+    star.addColorStop(0, 'rgba(167,178,74,0.4)');
+    star.addColorStop(1, 'rgba(104,128,58,0.2)');
+    ctx.fillStyle = star;
+    sparklePath(ctx, W * 0.86, H * 0.83, 150); ctx.fill();
+    sparklePath(ctx, W * 0.745, H * 0.765, 52); ctx.fill();
 
+    // ---- Header: leaf logo + GraceGuide wordmark (top-left), spaced motto (top-right) ----
+    const headerY = 112;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-
-    // ---- Wordmark: fixed near the top, acts as a consistent header
-    // rather than part of the vertically-centered content block below. ----
-    const wordmarkY = 96;
-    ctx.font = '800 40px "Inter", sans-serif';
+    if (logo) ctx.drawImage(logo, marginX - 6, headerY - 58, 72, 72);
+    const brandX = marginX + 78;
+    ctx.font = '800 42px "Inter", sans-serif';
     ctx.fillStyle = '#FFFFFF';
-    ctx.fillText('Grace', marginX, wordmarkY);
-    const graceWidth = ctx.measureText('Grace').width;
-    ctx.fillStyle = accent;
-    ctx.fillText('Guide', marginX + graceWidth, wordmarkY);
+    ctx.fillText('Grace', brandX, headerY);
+    ctx.fillStyle = C.goldBright;
+    ctx.fillText('Guide', brandX + ctx.measureText('Grace').width, headerY);
+    ctx.font = '500 21px "Inter", sans-serif';
+    ctx.fillStyle = 'rgba(248,246,240,0.65)';
+    const motto = 'FAITH • GROWTH • LIFE';
+    drawSpacedText(ctx, motto, W - marginX - spacedTextWidth(ctx, motto, 6), headerY - 12, 6);
 
-    // ---- Bottom brand bar position (fixed) ----
-    const barY = H - 120;
-
-    // ---- Pre-measure the content block so it can be vertically
-    // centered in the space between the wordmark and the brand bar,
-    // instead of always starting right under the wordmark and leaving
-    // a dead gap below whatever text happens to fit. ----
-    const contentTop = wordmarkY + 70;
-    const contentBottom = barY - 50;
-    const maxTextWidth = W - marginX * 2;
-    const pillH = 46;
-
-    let blockHeight = 0;
-    if (config.eyebrow) blockHeight += pillH + 44;
-    if (config.icon) blockHeight += 82;
-
-    ctx.font = '700 56px "Playfair Display", serif';
-    const titleLines = wrapCanvasText(ctx, config.title || 'GraceGuide', maxTextWidth).slice(0, 4);
-    blockHeight += titleLines.length * 66 + 20;
-
-    let bodyLines = [];
-    if (config.body) {
-        ctx.font = 'italic 400 34px "Playfair Display", serif';
-        bodyLines = wrapCanvasText(ctx, config.body, maxTextWidth).slice(0, 7);
-        blockHeight += bodyLines.length * 48 + 12;
-    }
-
-    let footerLines = [];
-    if (config.footer) {
-        ctx.font = '600 30px "Inter", sans-serif';
-        footerLines = wrapCanvasText(ctx, config.footer, maxTextWidth).slice(0, 2);
-        blockHeight += footerLines.length * 40;
-    }
-
-    let y = contentTop + Math.max(0, (contentBottom - contentTop - blockHeight) / 2);
-
-    // ---- Eyebrow pill ----
-    if (config.eyebrow) {
-        const eyebrow = config.eyebrow.toUpperCase();
-        ctx.font = '700 24px "Inter", sans-serif';
-        const eyebrowWidth = ctx.measureText(eyebrow).width;
-        const pillPadX = 22;
-        ctx.fillStyle = 'rgba(255,255,255,0.14)';
-        roundRectPath(ctx, marginX, y, eyebrowWidth + pillPadX * 2, pillH, pillH / 2);
-        ctx.fill();
-        ctx.fillStyle = accent;
-        ctx.textBaseline = 'middle';
-        ctx.fillText(eyebrow, marginX + pillPadX, y + pillH / 2 + 2);
-        ctx.textBaseline = 'alphabetic';
-        y += pillH + 44;
-    }
-
-    // ---- Icon ----
-    if (config.icon) {
-        ctx.font = '60px sans-serif';
-        ctx.fillText(config.icon, marginX, y + 8);
-        y += 82;
-    }
-
-    // ---- Title ----
-    ctx.font = '700 56px "Playfair Display", serif';
-    ctx.fillStyle = '#FFFFFF';
-    titleLines.forEach(line => {
-        ctx.fillText(line, marginX, y);
-        y += 66;
-    });
-    y += 20;
-
-    // ---- Body / quote ----
-    if (bodyLines.length > 0) {
-        ctx.font = 'italic 400 34px "Playfair Display", serif';
-        ctx.fillStyle = SHARE_CARD_COLORS.cream;
-        bodyLines.forEach(line => {
-            ctx.fillText(line, marginX, y);
-            y += 48;
-        });
-        y += 12;
-    }
-
-    // ---- Footer meta line ----
-    if (footerLines.length > 0) {
-        ctx.font = '600 30px "Inter", sans-serif';
-        ctx.fillStyle = accent;
-        footerLines.forEach(line => {
-            ctx.fillText(line, marginX, y);
-            y += 40;
-        });
-    }
-
-    // ---- Bottom brand bar ----
-    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    // ---- Footer rule: label left, reference/site right ----
+    const footY = H - 150;
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
     ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(marginX, barY);
-    ctx.lineTo(W - marginX, barY);
+    ctx.beginPath(); ctx.moveTo(marginX, footY); ctx.lineTo(W - marginX, footY); ctx.stroke();
+    ctx.font = '500 28px "Inter", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.fillText(config.tagline || 'GraceGuide', marginX, footY + 52);
+    const title = config.title || 'GraceGuide';
+    const right = ((config.kind === 'verse' || config.kind === 'dailyVerse') && title.length <= 30) ? title : 'graceguide.com.ng';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText(right, W - marginX, footY + 52);
+    ctx.textAlign = 'left';
+
+    // ---- Glass card: measure its content, shrinking type until it fits ----
+    const cardL = marginX, cardR = W - marginX;
+    const pad = 66;
+    const textW = cardR - cardL - pad * 2;
+    const areaTop = headerY + 80, areaBottom = footY - 60;
+    const pillH = 76;
+    let titleSize = 92, bodySize = 46;
+    let titleLines, bodyLines, footLines, contentH;
+    for (;;) {
+        ctx.font = `700 ${titleSize}px "Playfair Display", serif`;
+        titleLines = wrapCanvasTextMax(ctx, title, textW, 3);
+        ctx.font = `italic 400 ${bodySize}px "Playfair Display", serif`;
+        bodyLines = config.body ? wrapCanvasTextMax(ctx, config.body, textW, 9) : [];
+        ctx.font = '600 30px "Inter", sans-serif';
+        footLines = config.footer ? wrapCanvasTextMax(ctx, config.footer, textW, 2) : [];
+        contentH = pillH + 48 + 56 + titleLines.length * titleSize * 1.12 + 34 + 12
+            + (bodyLines.length ? 44 + bodyLines.length * bodySize * 1.42 : 0)
+            + (footLines.length ? 30 + footLines.length * 42 : 0);
+        if (contentH + pad * 2 <= areaBottom - areaTop || (titleSize <= 56 && bodySize <= 30)) break;
+        titleSize = Math.max(56, titleSize - 6);
+        bodySize = Math.max(30, bodySize - 2);
+    }
+    const cardH = Math.min(areaBottom - areaTop, Math.max(560, contentH + pad * 2));
+    const cardT = areaTop + (areaBottom - areaTop - cardH) / 2;
+    const cardB = cardT + cardH;
+    const radius = 46;
+
+    // Soft drop shadow + frosted fill.
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.4)';
+    ctx.shadowBlur = 48;
+    ctx.shadowOffsetY = 22;
+    const fill = ctx.createLinearGradient(cardL, cardT, cardR, cardB);
+    fill.addColorStop(0, '#1F5A43');
+    fill.addColorStop(0.55, '#134230');
+    fill.addColorStop(1, '#0E3627');
+    ctx.fillStyle = fill;
+    roundRectPath(ctx, cardL, cardT, cardR - cardL, cardH, radius);
+    ctx.fill();
+    ctx.restore();
+    // The lighter teal sweep tucked into the bottom-right corner, edged in gold.
+    ctx.save();
+    roundRectPath(ctx, cardL, cardT, cardR - cardL, cardH, radius);
+    ctx.clip();
+    const sweepS = 560;
+    const sx = cardR + sweepS * 0.78, sy = cardB + sweepS * 0.78, sr = sweepS * 1.415;
+    const sweep = ctx.createLinearGradient(cardR - 200, cardB - 200, cardR, cardB);
+    sweep.addColorStop(0, 'rgba(79,199,160,0.15)');
+    sweep.addColorStop(1, 'rgba(79,199,160,0.28)');
+    ctx.fillStyle = sweep;
+    ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(227,196,111,0.7)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    const sheen = ctx.createLinearGradient(0, cardT, 0, cardT + cardH * 0.45);
+    sheen.addColorStop(0, 'rgba(255,255,255,0.08)');
+    sheen.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = sheen;
+    ctx.fillRect(cardL, cardT, cardR - cardL, cardH * 0.45);
+    ctx.restore();
+    // Gold-to-teal glowing edge.
+    const edge = ctx.createLinearGradient(cardL, cardB, cardR, cardT);
+    edge.addColorStop(0, 'rgba(232,205,122,0.95)');
+    edge.addColorStop(0.35, 'rgba(63,168,138,0.6)');
+    edge.addColorStop(0.7, 'rgba(63,168,138,0.6)');
+    edge.addColorStop(1, 'rgba(232,205,122,0.95)');
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = 3;
+    roundRectPath(ctx, cardL, cardT, cardR - cardL, cardH, radius);
     ctx.stroke();
 
-    ctx.font = '600 26px "Inter", sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.75)';
-    ctx.fillText('GraceGuide', marginX, barY + 46);
-
-    ctx.textAlign = 'right';
-    ctx.font = '400 24px "Inter", sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.fillText(config.tagline || 'Bible • Community • Growth', W - marginX, barY + 46);
-    ctx.textAlign = 'left';
+    // ---- Card content ----
+    const x = cardL + pad;
+    let y = cardT + pad + Math.max(0, cardH - pad * 2 - contentH) / 2;
+    // Label pill: glyph | EYEBROW
+    const label = (config.eyebrow || 'GraceGuide').toUpperCase();
+    const glyph = shareCardGlyph(config);
+    ctx.font = '900 30px "Font Awesome 6 Free"';
+    const glyphW = ctx.measureText(glyph).width;
+    ctx.font = '600 25px "Inter", sans-serif';
+    const pillW = 34 + glyphW + 56 + spacedTextWidth(ctx, label, 5) + 38;
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    roundRectPath(ctx, x, y, pillW, pillH, pillH / 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(95,211,165,0.4)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    const mid = y + pillH / 2;
+    ctx.font = '900 30px "Font Awesome 6 Free"';
+    ctx.fillStyle = C.goldBright;
+    ctx.fillText(glyph, x + 34, mid + 11);
+    const divX = x + 34 + glyphW + 28;
+    ctx.strokeStyle = C.goldBright;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(divX, mid - 18); ctx.lineTo(divX, mid + 18); ctx.stroke();
+    ctx.font = '600 25px "Inter", sans-serif';
+    ctx.fillStyle = C.creamSolid;
+    drawSpacedText(ctx, label, divX + 28, mid + 9, 5);
+    y += pillH + 48;
+    // Sparkles above the title.
+    const spark = ctx.createLinearGradient(x, y, x + 50, y + 56);
+    spark.addColorStop(0, '#FFE08A');
+    spark.addColorStop(1, '#E0A93A');
+    ctx.fillStyle = spark;
+    sparklePath(ctx, x + 22, y + 32, 24); ctx.fill();
+    sparklePath(ctx, x + 50, y + 10, 11); ctx.fill();
+    y += 56;
+    // Title
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetY = 4;
+    ctx.font = `700 ${titleSize}px "Playfair Display", serif`;
+    ctx.fillStyle = '#FFFFFF';
+    titleLines.forEach(line => {
+        ctx.fillText(line, x, y + titleSize * 0.92);
+        y += titleSize * 1.12;
+    });
+    ctx.restore();
+    // Gold underline
+    y += 22;
+    const bar = ctx.createLinearGradient(x, y, x + 116, y);
+    bar.addColorStop(0, '#FFD66B');
+    bar.addColorStop(1, C.gold);
+    ctx.fillStyle = bar;
+    roundRectPath(ctx, x, y, 116, 11, 5.5);
+    ctx.fill();
+    y += 12;
+    // Body (italic serif quote)
+    if (bodyLines.length) {
+        y += 44;
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.3)';
+        ctx.shadowBlur = 8;
+        ctx.shadowOffsetY = 3;
+        ctx.font = `italic 400 ${bodySize}px "Playfair Display", serif`;
+        ctx.fillStyle = C.creamSolid;
+        bodyLines.forEach(line => {
+            ctx.fillText(line, x, y + bodySize * 0.95);
+            y += bodySize * 1.42;
+        });
+        ctx.restore();
+    }
+    if (footLines.length) {
+        y += 30;
+        ctx.font = '600 30px "Inter", sans-serif';
+        ctx.fillStyle = C.goldBright;
+        footLines.forEach(line => {
+            ctx.fillText(line, x, y + 30);
+            y += 42;
+        });
+    }
 }
 
 /* ============================================
@@ -506,8 +636,8 @@ function shareVerseCard(reference, text) {
         eyebrow: 'Bible Verse',
         icon: '📖',
         title: reference || 'Bible Verse',
-        body: text ? `"${text}"` : '',
-        tagline: 'Read the Word'
+        body: text ? `“${text}”` : '',
+        tagline: 'Bible Verse'
     }, {
         url: resolveShareUrl('verse', parseReferenceForDeepLink(reference) || {}),
         shareTitle: 'GraceGuide — Bible Verse',
@@ -528,7 +658,7 @@ function shareSpacePostCard(post) {
         eyebrow: 'Space',
         icon: '🕊️',
         title: authorName ? `${authorName} shared` : 'Shared on Space',
-        body: excerpt ? `"${truncate(excerpt, 150)}"` : (post.type === 'video' ? 'Shared a video reflection' : ''),
+        body: excerpt ? `“${truncate(excerpt, 150)}”` : (post.type === 'video' ? 'Shared a video reflection' : ''),
         tagline: 'Join the Community'
     }, {
         url: resolveShareUrl('space-post', { postId: post.id }),
@@ -710,7 +840,7 @@ function shareDailyVerseCard(verse) {
         eyebrow: "Today's Verse",
         icon: '✨',
         title: verse.reference || 'Verse of the Day',
-        body: verse.text ? `"${verse.text}"` : '',
+        body: verse.text ? `“${verse.text}”` : '',
         tagline: 'Daily Verse'
     }, {
         url: resolveShareUrl('dailyVerse', parseReferenceForDeepLink(verse.reference) || {}),
@@ -732,7 +862,7 @@ function shareDailyVerseCard(verse) {
 function shareDevotionalCard(devotional) {
     if (!devotional) return;
     const bodyLine = devotional.verseText
-        ? `"${devotional.verseText}"`
+        ? `“${devotional.verseText}”`
         : (devotional.prayerPrompt || '');
     const shareId = (AppState.currentUser && devotional.date) ? `${AppState.currentUser.uid}_${devotional.date}` : null;
 
