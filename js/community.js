@@ -2097,7 +2097,8 @@ async function loadNotifications() {
 }
 
 function updateNotificationBadge() {
-    const unreadNotifs = AppState.notifications.filter(n => !n.read).length;
+    // Request notifications aren't counted twice — the pending request itself is.
+    const unreadNotifs = AppState.notifications.filter(n => !n.read && n.type !== 'connection_request').length;
     const pendingRequests = Array.from(AppState.userConnections.values()).filter(s => s === 'pending_received').length;
     const unreadCount = unreadNotifs + pendingRequests;
     if (unreadCount > 0) {
@@ -2470,12 +2471,16 @@ async function renderNotificationPanelContent() {
     const unreadKeys = generalNotifs.filter(n => !n.read && n.key).map(n => n.key);
 
     const sheetContent = `
-        <h3 style="margin-bottom: 16px;">Notifications</h3>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom: 16px;">
+            <h3 style="margin:0;">Notifications</h3>
+            ${unreadKeys.length ? `<span class="notif-new-pill">${unreadKeys.length} new</span>
+            <button class="btn btn-sm notif-mark-all" style="margin-left:auto;" onclick="markAllNotificationsRead()">Mark all read</button>` : ''}
+        </div>
         ${requestsHTML}
         ${generalNotifs.length > 0 ? `
             ${pendingRequests.length > 0 ? `<h4 style="font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-slate); margin-bottom: 8px;">Recent</h4>` : ''}
             ${generalNotifs.slice(-15).reverse().map(notif => `
-                <div class="notif-row ${notif.read ? '' : 'notif-row-unread'}" onclick="${notifClickAction(notif)}">
+                <div class="notif-row ${notif.read ? '' : 'notif-row-unread'}" onclick="markNotificationsRead(['${notif.key}']); ${notifClickAction(notif)}">
                     ${notif.read ? '' : '<span class="notif-unread-dot"></span>'}
                     <div style="flex: 1; min-width: 0;">
                         ${notif.title ? `<div class="notif-row-message" style="font-weight:700;">${escapeHtml(notif.title)}</div>` : ''}
@@ -2487,27 +2492,34 @@ async function renderNotificationPanelContent() {
         ` : (pendingRequests.length === 0 ? `<p class="text-center text-muted">No notifications</p>` : '')}
     `;
 
+    // Opening the panel no longer marks anything read: an item is read once
+    // it's tapped, or via "Mark all read" (the inbox is shared with the
+    // Android app, so silently clearing it here also hid it there).
     showSheet(sheetContent);
-
-    // Mark general notifications as read the moment the panel is opened.
-    // Updated in AppState (and the badge recomputed) IMMEDIATELY/
-    // optimistically rather than waiting on the DB round trip — the
-    // badge previously only updated once the live listener re-fired
-    // after the write landed, which could lag or, if that write failed
-    // silently for any reason, never visibly update at all.
-    if (unreadKeys.length > 0) {
-        AppState.notifications = AppState.notifications.map(n =>
-            unreadKeys.includes(n.key) ? { ...n, read: true } : n
-        );
-        updateNotificationBadge();
-
-        const updates = {};
-        unreadKeys.forEach(key => { updates[`${key}/read`] = true; });
-        database.ref(`users/${uid}/notifications`).update(updates).catch(error => {
-            console.error('Error marking notifications read:', error);
-        });
-    }
 }
+
+/** Marks inbox entries read — optimistically in AppState (badge updates at
+    once), then in the database. */
+function markNotificationsRead(keys) {
+    const uid = AppState.currentUser && AppState.currentUser.uid;
+    keys = (keys || []).filter(Boolean);
+    if (!uid || keys.length === 0) return Promise.resolve();
+    AppState.notifications = AppState.notifications.map(n => keys.includes(n.key) ? { ...n, read: true } : n);
+    updateNotificationBadge();
+    const updates = {};
+    keys.forEach(key => { updates[`${key}/read`] = true; });
+    return database.ref(`users/${uid}/notifications`).update(updates).catch(error => {
+        console.error('Error marking notifications read:', error);
+    });
+}
+
+function markAllNotificationsRead() {
+    const keys = AppState.notifications.filter(n => !n.read && n.type !== 'connection_request').map(n => n.key);
+    markNotificationsRead(keys);
+    renderNotificationPanelContent().catch(() => {});
+}
+window.markNotificationsRead = markNotificationsRead;
+window.markAllNotificationsRead = markAllNotificationsRead;
 
 /* ============================================
    INITIALIZATION

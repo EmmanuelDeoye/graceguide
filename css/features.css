@@ -1998,3 +1998,20 @@
 
 [data-theme="dark"] .chat-message.user.editing { background: var(--dark-card); color: var(--dark-text); }
 [data-theme="dark"] .msg-edit-cancel { color: var(--dark-text); border-color: var(--dark-border); }
+/* Notification panel header: unread count + Mark all read */
+.notif-new-pill {
+    background: var(--accent-terracotta, #C87552);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+}
+.notif-mark-all {
+    background: transparent;
+    color: var(--primary-deep-olive, #30483A);
+    font-weight: 600;
+    border: none;
+    padding: 6px 8px;
+}
+[data-theme="dark"] .notif-mark-all { color: var(--accent-muted-gold, #C7A65A); }

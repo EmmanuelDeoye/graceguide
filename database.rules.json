@@ -39,7 +39,7 @@
         },
 
         "fcmTokens": {
-          ".read": "auth != null && auth.uid == $uid"
+          ".read": "auth != null && (auth.uid == $uid || root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com')"
         }
       }
     },

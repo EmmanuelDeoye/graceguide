@@ -161,6 +161,8 @@ exports.sendPushOnNotification = functions
     const dead = [];
     dead.push(...await sendAndCollectDead({
       notification: { title, body },
+      // Same tag as the admin page's direct push, so a browser shows it once.
+      webpush: { notification: { tag: notifId } },
       data: stringData({ type: notification.type || '', fromUid: notification.fromUid || '', url })
     }, web));
 

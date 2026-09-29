@@ -711,3 +711,19 @@ body {
     text-align: center;
     color: var(--text-slate);
 }
+
+/* Compose notification: 'Pop up on phones' option */
+.admin-push-toggle {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    margin: 4px 0 16px;
+    padding: 12px;
+    border-radius: 12px;
+    background: rgba(199, 166, 90, 0.1);
+    border: 1px solid rgba(199, 166, 90, 0.35);
+    font-size: 13px;
+    line-height: 1.45;
+    cursor: pointer;
+}
+.admin-push-toggle input { margin-top: 3px; accent-color: #30483A; }

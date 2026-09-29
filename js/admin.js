@@ -509,7 +509,7 @@ async function renderNotificationsTab() {
     $('#admin-content').innerHTML = `
         <div class="admin-panel">
             <h2>Send Notification</h2>
-            <p class="text-muted" style="margin-bottom:16px;">Delivered as an in-app notification to each recipient immediately, and as a system notification on their phone — on the Android app it arrives under the "Announcements" category (users can turn it off there), and tapping it opens the screen you choose below. Web push delivery needs the Cloud Function in <code>functions/index.js</code> deployed.</p>
+            <p class="text-muted" style="margin-bottom:16px;">Delivered to each recipient's in-app notifications, and — with "Pop up on phones" ticked — as a pop-up notification on their Android phone and browsers straight away, even when GraceGuide is closed. On Android it uses the "Important Updates" category (users can turn it off there); tapping it opens the screen you choose.</p>
             <button id="compose-notif-btn" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Compose Notification</button>
         </div>
     `;
@@ -555,6 +555,11 @@ async function openComposeNotificationModal(presetUid = null, presetUsername = n
                 ${NOTIFICATION_ROUTES.map(r => `<option value="${r.value}">${escapeHtml(r.label)}</option>`).join('')}
             </select>
         </div>
+        <label class="admin-push-toggle">
+            <input type="checkbox" id="notif-push" checked>
+            <span><strong>Pop up on phones</strong> — also send it as a push notification, so it appears on screen even when GraceGuide is closed.
+            ${hasPushAccess() ? '' : 'You\'ll confirm with the Google account that owns the Firebase project (once an hour).'}</span>
+        </label>
         <div class="flex gap-2" style="display:flex; gap:8px;">
             <button id="notif-cancel-btn" class="btn btn-outline" style="flex:1;">Cancel</button>
             <button id="notif-send-btn" class="btn btn-primary" style="flex:1;"><i class="fas fa-paper-plane"></i> Send</button>
@@ -574,26 +579,35 @@ async function openComposeNotificationModal(presetUid = null, presetUsername = n
         const targetType = $('#notif-target-type').value;
         const title = $('#notif-title').value.trim();
         const route = $('#notif-route').value;
+        const wantPush = $('#notif-push').checked;
         const btn = $('#notif-send-btn');
         btn.disabled = true;
         btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> Sending…`;
+        const resetBtn = () => { btn.disabled = false; btn.innerHTML = `<i class="fas fa-paper-plane"></i> Send`; };
+
+        // Google's confirmation popup must open straight from this click, before anything else is awaited.
+        let pushToken = null;
+        if (wantPush) {
+            try {
+                pushToken = await getPushAccessToken();
+            } catch (error) {
+                console.warn('Push access not granted:', error);
+                const cancelled = /popup-closed|cancelled-popup|user-cancelled/.test(error && error.code || '');
+                if (!confirm(`${cancelled ? 'Google confirmation was cancelled' : 'Could not get permission to send pop-ups'}.\n\nSend as an in-app notification only?`)) { resetBtn(); return; }
+            }
+        }
 
         try {
-            if (targetType === 'specific') {
-                const uid = $('#notif-target-user').value;
-                await sendAdminNotification(uid, message, title, route);
-                showAdminToast('Notification sent.', 'success');
-            } else {
-                const uids = Object.keys(userDirectory);
-                await Promise.all(uids.map(uid => sendAdminNotification(uid, message, title, route)));
-                showAdminToast(`Notification sent to ${uids.length} users.`, 'success');
-            }
+            const uids = targetType === 'specific' ? [$('#notif-target-user').value] : Object.keys(userDirectory);
+            const results = await runLimited(uids, 8, uid => sendAdminNotification(uid, message, title, route, pushToken));
+            const devices = results.reduce((sum, r) => sum + (r ? r.pushed : 0), 0);
+            const who = uids.length === 1 ? 'Notification sent' : `Notification sent to ${uids.length} users`;
+            showAdminToast(pushToken ? `${who} · popped up on ${devices} device${devices === 1 ? '' : 's'}.` : `${who} (in-app).`, 'success');
             closeAdminModal();
         } catch (error) {
             console.error('Error sending notification:', error);
-            showAdminToast('Failed to send notification.', 'error');
-            btn.disabled = false;
-            btn.innerHTML = `<i class="fas fa-paper-plane"></i> Send`;
+            showAdminToast(error instanceof PushPermissionError ? error.message : 'Failed to send notification.', 'error');
+            resetBtn();
         }
     });
 }
@@ -614,7 +628,10 @@ const NOTIFICATION_ROUTES = [
     { value: 'settings', label: 'Settings' }
 ];
 
-async function sendAdminNotification(uid, message, title = '', route = 'home') {
+/** Writes the in-app notification; with `pushToken`, also pops it up on the
+    user's phones/browsers right away. Returns { key, pushed } where pushed is
+    the number of devices FCM accepted the push for. */
+async function sendAdminNotification(uid, message, title = '', route = 'home', pushToken = null) {
     const notification = {
         type: 'admin_broadcast',
         message,
@@ -624,7 +641,105 @@ async function sendAdminNotification(uid, message, title = '', route = 'home') {
         timestamp: Date.now()
     };
     if (title) notification.title = title;
-    await database.ref(`users/${uid}/notifications`).push(notification);
+    const ref = await database.ref(`users/${uid}/notifications`).push(notification);
+    let pushed = 0;
+    if (pushToken) pushed = await deliverPush(uid, ref.key, notification, pushToken);
+    return { key: ref.key, pushed };
+}
+
+/* ============================================
+   PHONE PUSH (Firebase Cloud Messaging HTTP v1)
+   Sends admin notifications as real pop-ups straight from this page, so
+   they arrive even when the app is closed — no Cloud Function or paid
+   plan needed. Sending requires a Google account with permission on the
+   Firebase project (Owner/Editor, or the "Firebase Cloud Messaging Admin"
+   role): the admin confirms it with Google once an hour. The Android app
+   de-duplicates by notification key, so if the Cloud Function is also
+   deployed users still see each notification only once.
+   ============================================ */
+const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
+let pushAuth = { token: null, expiresAt: 0 };
+
+function hasPushAccess() { return !!pushAuth.token && Date.now() < pushAuth.expiresAt; }
+
+/** Google sign-in in a separate Firebase app instance, so the admin's own
+    session on this page is untouched. Must be called straight from a click. */
+async function getPushAccessToken() {
+    if (hasPushAccess()) return pushAuth.token;
+    const app = firebase.apps.find(a => a.name === 'push-sender') || firebase.initializeApp(firebaseConfig, 'push-sender');
+    const provider = new firebase.auth.GoogleAuthProvider();
+    provider.addScope(FCM_SCOPE);
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const result = await app.auth().signInWithPopup(provider);
+    const token = result.credential && result.credential.accessToken;
+    app.auth().signOut().catch(() => {});
+    if (!token) throw new Error('Google did not grant messaging access.');
+    pushAuth = { token, expiresAt: Date.now() + 50 * 60 * 1000 };
+    return token;
+}
+
+class PushPermissionError extends Error {}
+
+/** Pushes one inbox entry to every device registered under users/{uid}/fcmTokens. */
+async function deliverPush(uid, key, n, accessToken) {
+    let tokens = {};
+    try {
+        tokens = (await database.ref(`users/${uid}/fcmTokens`).once('value')).val() || {};
+    } catch (e) {
+        console.warn('Cannot read push tokens (publish the updated database.rules.json):', e);
+        return 0;
+    }
+    const title = n.title || 'GraceGuide';
+    const route = (n.route || 'home').replace(/^\/?#?\/?/, '');
+    const webLink = `${location.origin}${location.pathname.replace(/admin\.html$/, '')}#/${route}`;
+    let pushed = 0;
+    for (const [token, meta] of Object.entries(tokens)) {
+        const android = meta && typeof meta === 'object' && meta.platform === 'android';
+        const message = android ? {
+            token,
+            // Data-only + high priority: the app wakes up (even when swiped away) and
+            // shows it as a heads-up notification on its "Important Updates" channel.
+            android: { priority: 'HIGH', ttl: '86400s' },
+            data: {
+                notifKey: key, type: n.type, title, body: n.message, route,
+                fromUid: n.fromUid || '', timestamp: String(n.timestamp)
+            }
+        } : {
+            token,
+            notification: { title, body: n.message },
+            webpush: {
+                notification: { icon: '/img/icons/icon-192.png', tag: key },
+                fcm_options: { link: webLink }
+            },
+            data: { type: n.type, url: `/#/${route}` }
+        };
+        const res = await fetch(`https://fcm.googleapis.com/v1/projects/${firebaseConfig.projectId}/messages:send`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message })
+        });
+        if (res.ok) { pushed++; continue; }
+        if (res.status === 401 || res.status === 403) {
+            pushAuth = { token: null, expiresAt: 0 };
+            throw new PushPermissionError('That Google account can\'t send notifications for this Firebase project. Use an Owner/Editor account of graceguide-8d9f5.');
+        }
+        // 404 / UNREGISTERED: an uninstalled app or expired browser token — skip it.
+    }
+    return pushed;
+}
+
+/** Runs `fn` over `items` with limited parallelism (large broadcasts). */
+async function runLimited(items, limit, fn) {
+    const results = [];
+    let i = 0;
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while (i < items.length) {
+            const idx = i++;
+            results[idx] = await fn(items[idx]);
+        }
+    });
+    await Promise.all(workers);
+    return results;
 }
 
 /* ============================================

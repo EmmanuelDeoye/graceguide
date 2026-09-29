@@ -98,7 +98,7 @@ async function ensureShareCardFontsReady() {
             document.fonts.load('800 42px "Inter"'),
             document.fonts.load('600 30px "Inter"'),
             document.fonts.load('500 28px "Inter"'),
-            document.fonts.load('900 30px "Font Awesome 6 Free"', '')
+            document.fonts.load('900 46px "Font Awesome 6 Free"', '\uf518\uf059\uf0c0\uf007\uf274\uf091\uf06d\uf647\uf185\uf4ba\uf684')
         ]);
         await document.fonts.ready;
     } catch (error) {
@@ -120,21 +120,32 @@ function loadShareCardLogo() {
     return shareCardLogoPromise;
 }
 
-// Font Awesome glyph for the label pill, per card kind.
+function isStreakCard(config) { return /streak/i.test(config.eyebrow || ''); }
+
+// Small Font Awesome glyph in the label pill (the category).
 function shareCardGlyph(config) {
-    if (/streak/i.test(config.eyebrow || '')) return ''; // fire
+    if (isStreakCard(config)) return '\uf274'; // calendar-check
     switch (config.kind) {
-        case 'verse':
-        case 'dailyVerse': return ''; // book-open
-        case 'devotional': return ''; // sun
-        case 'space': return ''; // dove
-        case 'profile': return ''; // user
-        case 'plan': return ''; // calendar-check
-        case 'quiz': return ''; // trophy
-        default: return '';
+        case 'quiz': return '\uf059'; // circle-question
+        case 'space': return '\uf0c0'; // users
+        case 'profile': return '\uf007'; // user
+        default: return '\uf518'; // book-open: verses, devotionals, plans
     }
 }
 
+// Large icon above the title (the card's subject); null = the gold sparkles.
+function shareCardHeroGlyph(config) {
+    if (isStreakCard(config)) return '\uf06d'; // fire
+    switch (config.kind) {
+        case 'quiz': return '\uf091'; // trophy
+        case 'verse': return '\uf647'; // book-bible
+        case 'devotional': return '\uf185'; // sun
+        case 'space': return '\uf4ba'; // dove
+        case 'profile': return '\uf684'; // hands-praying
+        case 'plan': return '\uf274'; // calendar-check
+        default: return null; // today's verse keeps the sparkles
+    }
+}
 // Wraps into at most `max` lines, ending with an ellipsis when cut.
 function wrapCanvasTextMax(ctx, text, maxWidth, max) {
     const all = wrapCanvasText(ctx, text, maxWidth);
@@ -366,8 +377,14 @@ async function renderShareCardOntoCanvas(canvas, config) {
     spark.addColorStop(0, '#FFE08A');
     spark.addColorStop(1, '#E0A93A');
     ctx.fillStyle = spark;
-    sparklePath(ctx, x + 22, y + 32, 24); ctx.fill();
-    sparklePath(ctx, x + 50, y + 10, 11); ctx.fill();
+    const hero = shareCardHeroGlyph(config);
+    if (hero) {
+        ctx.font = '900 46px "Font Awesome 6 Free"';
+        ctx.fillText(hero, x, y + 48);
+    } else {
+        sparklePath(ctx, x + 22, y + 32, 24); ctx.fill();
+        sparklePath(ctx, x + 50, y + 10, 11); ctx.fill();
+    }
     y += 56;
     // Title
     ctx.save();
