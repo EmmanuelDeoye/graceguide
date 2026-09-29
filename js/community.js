@@ -2132,6 +2132,27 @@ let _dmIndexRef = null;
 let _groupsListRef = null;
 let _groupMsgRefs = {};
 let _notifKnownKeys = new Set();
+let _spacePostsRef = null;
+const _shownSpacePosts = new Set();
+
+/** Pop-up for someone else's new Space post (once per post, also de-duped with the push). */
+function announceNewSpacePost(postId, post) {
+    if (!postId || _shownSpacePosts.has(postId)) return;
+    _shownSpacePosts.add(postId);
+    const me = AppState.currentUser && AppState.currentUser.uid;
+    if (!post || !post.authorId || post.authorId === me) return;
+    if (AppState.blockedUsers && AppState.blockedUsers.has && AppState.blockedUsers.has(post.authorId)) return;
+    if (Date.now() - (post.timestamp || 0) > 30 * 60 * 1000) return;
+    if (AppState.currentRoute === 'space') return; // they're already looking at the feed
+    const name = getDisplayName(post.authorId, post.authorName || 'Someone');
+    const slides = Array.isArray(post.slides) ? post.slides : Object.values(post.slides || {});
+    const text = post.type === 'video' ? 'Shared a video — tap to watch.'
+        : (slides.map(s => (s && (s.text || s.content)) || '').join(' ').replace(/\s+/g, ' ').trim() || 'Shared something new.');
+    if (typeof showInAppNotificationPopup === 'function') {
+        showInAppNotificationPopup(`${name} posted in Space`, truncate(text, 140), { url: `/#/space/post/${postId}`, type: 'space_post', postId });
+    }
+}
+window.announceNewSpacePost = announceNewSpacePost;
 
 function startRealtimeListeners() {
     if (!AppState.currentUser) return;
@@ -2140,6 +2161,9 @@ function startRealtimeListeners() {
 
     // --- Notifications (space amens/comments, connection requests, etc.) ---
     _notifKnownKeys = new Set(AppState.notifications.map(n => n.key));
+    // The first snapshot is the existing inbox; only later arrivals are "new"
+    // (keying this off an empty inbox used to swallow a new user's first one).
+    let notifInitial = true;
     _notifRef = database.ref(`users/${uid}/notifications`);
     _notifRef.on('value', (snapshot) => {
         const raw = snapshot.val() || {};
@@ -2149,18 +2173,30 @@ function startRealtimeListeners() {
 
         // Toast for genuinely new, unread notifications that arrive while
         // the app is open (not the initial batch on first load).
-        if (_notifKnownKeys.size > 0 || AppState.notifications.length > 0) {
+        if (!notifInitial) {
             next.forEach(n => {
                 if (!n.read && !_notifKnownKeys.has(n.key)) {
                     showToast(n.message || 'You have a new notification', 'info');
                 }
             });
         }
+        notifInitial = false;
         _notifKnownKeys = new Set(next.map(n => n.key));
 
         AppState.notifications = next;
         updateNotificationBadge();
     });
+
+    // --- New Space posts by others → in-app pop-up (the push server covers closed tabs) ---
+    let spaceInitial = true;
+    _spacePostsRef = database.ref('spacePosts').orderByChild('timestamp').limitToLast(3);
+    _spacePostsRef.on('child_added', (snap) => {
+        const post = snap.val() || {};
+        if (spaceInitial) { _shownSpacePosts.add(snap.key); return; }
+        announceNewSpacePost(snap.key, post);
+    });
+    // child_added fires the existing posts synchronously-ish on attach; anything after this tick is new.
+    database.ref('spacePosts').orderByChild('timestamp').limitToLast(3).once('value').then(() => { spaceInitial = false; });
 
     // --- Unread direct messages ---
     _dmIndexRef = database.ref(`users/${uid}/dmIndex`);
@@ -2190,6 +2226,7 @@ function startRealtimeListeners() {
 
 function stopRealtimeListeners() {
     if (_notifRef) { _notifRef.off(); _notifRef = null; }
+    if (_spacePostsRef) { _spacePostsRef.off(); _spacePostsRef = null; }
     if (_dmIndexRef) { _dmIndexRef.off(); _dmIndexRef = null; }
     if (_groupsListRef) { _groupsListRef.off(); _groupsListRef = null; }
     Object.values(_groupMsgRefs).forEach(ref => ref.off());

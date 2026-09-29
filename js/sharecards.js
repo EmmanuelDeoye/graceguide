@@ -239,8 +239,25 @@ async function renderShareCardOntoCanvas(canvas, config) {
     star.addColorStop(0, 'rgba(167,178,74,0.4)');
     star.addColorStop(1, 'rgba(104,128,58,0.2)');
     ctx.fillStyle = star;
-    sparklePath(ctx, W * 0.86, H * 0.83, 150); ctx.fill();
-    sparklePath(ctx, W * 0.745, H * 0.765, 52); ctx.fill();
+    const bgGlyph = shareCardHeroGlyph(config);
+    if (bgGlyph) {
+        // Same subject icon as above the title, large and faint, bleeding off the corner.
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.translate(W * 0.86, H * 0.86);
+        ctx.rotate(-12 * Math.PI / 180);
+        ctx.font = '900 330px "Font Awesome 6 Free"';
+        ctx.fillText(bgGlyph, 0, 115);
+        ctx.restore();
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.font = '900 96px "Font Awesome 6 Free"';
+        ctx.fillText(bgGlyph, W * 0.70, H * 0.775 + 34);
+        ctx.restore();
+    } else {
+        sparklePath(ctx, W * 0.86, H * 0.83, 150); ctx.fill();
+        sparklePath(ctx, W * 0.745, H * 0.765, 52); ctx.fill();
+    }
 
     // ---- Header: leaf logo + GraceGuide wordmark (top-left), spaced motto (top-right) ----
     const headerY = 112;

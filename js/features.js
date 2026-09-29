@@ -210,23 +210,7 @@ function renderAskPage() {
 
             <div class="chat-messages" id="chat-messages">
                 ${AppState.aiChatHistory.length === 0 ? `
-                    <div class="text-center text-muted" style="padding: 40px 20px;">
-                        <i class="fas fa-dove" style="font-size: 48px; opacity: 0.3; margin-bottom: 16px;"></i>
-                        <h3 style="margin-bottom: 8px;">Ask Shepherd</h3>
-                        <p>Ask me anything about faith, the Bible, or life. I'm here to help.</p>
-                        
-                        <div style="display: grid; gap: 8px; margin-top: 24px;">
-                            <button class="btn btn-outline btn-sm" onclick="askSuggestedQuestion('What does the Bible say about anxiety?')">
-                                What does the Bible say about anxiety?
-                            </button>
-                            <button class="btn btn-outline btn-sm" onclick="askSuggestedQuestion('How can I strengthen my faith?')">
-                                How can I strengthen my faith?
-                            </button>
-                            <button class="btn btn-outline btn-sm" onclick="askSuggestedQuestion('Explain forgiveness in the Bible')">
-                                Explain forgiveness in the Bible
-                            </button>
-                        </div>
-                    </div>
+                    ${renderShepherdGreeting()}
                 ` : ''}
             </div>
             
@@ -2999,3 +2983,102 @@ async function moderateContent(content) {
     const flagged = bannedWords.some(word => content.toLowerCase().includes(word));
     return flagged ? { flagged: true, action: 'hide' } : { flagged: false, action: 'approve' };
 }
+
+/* ============================================
+   SHEPHERD GREETING (new chat welcome)
+   30 templates — 10 each for morning (5:00–11:59), afternoon (12:00–16:59)
+   and evening/night (17:00–4:59). Some only apply in a context (Sunday,
+   Saturday, very early, late night) and are favoured when they do. A
+   greeting stays for a random 1–2 hours and changes straight away when the
+   time of day moves into the next frame. Kept identical to
+   ShepherdGreetings.kt in the Android app.
+   ============================================ */
+const SHEPHERD_GREETINGS = [
+    // Morning
+    { frame: 'morning', title: 'Good morning, {name} ☀️', line: 'His mercies are new this morning. What would you like to bring before God today?' },
+    { frame: 'morning', title: 'Morning, {name}', line: 'Before the day gets busy, shall we sit with the Word for a moment?' },
+    { frame: 'morning', title: 'Rise and shine, {name}', line: 'This is the day the Lord has made. How can I walk with you today?' },
+    { frame: 'morning', title: 'Good morning, {name}', line: "What's one thing you'd like God's wisdom for today?" },
+    { frame: 'morning', title: 'Peace to you this morning, {name}', line: "I'm here to pray, study, or simply listen. Where shall we begin?" },
+    { frame: 'morning', title: 'A new day, {name}', line: "Great is His faithfulness, morning by morning. What's on your heart?" },
+    { frame: 'morning', title: 'Good morning, {name} 🕊️', line: "Let's start the day anchored in Him. Is there a question or a burden you'd like to share?" },
+    { frame: 'morning', title: 'Blessed morning, {name}', line: "Would you like a verse to carry with you today, or something on your heart to talk through?" },
+    { frame: 'morning', title: "Happy Lord's Day, {name}", line: 'A beautiful morning to rest in Him and worship. What would you like to reflect on?', context: 'sunday' },
+    { frame: 'morning', title: "You're up early, {name}", line: "Jesus often rose before dawn to pray. Let's begin this quiet hour together.", context: 'early' },
+    // Afternoon
+    { frame: 'afternoon', title: 'Good afternoon, {name}', line: "How is your day unfolding? I'm here whenever you'd like to pause with God." },
+    { frame: 'afternoon', title: 'Hello, {name} 👋', line: "Taking a midday breather? Let's refresh your soul in the Word." },
+    { frame: 'afternoon', title: 'Good afternoon, {name}', line: "Whatever today has held so far, He is still with you. What's on your heart?" },
+    { frame: 'afternoon', title: 'Grace and peace, {name}', line: "Is there a question, a passage, or a prayer you'd like to explore together?" },
+    { frame: 'afternoon', title: 'Welcome back, {name}', line: '"Come to me, all who are weary." Jesus\' invitation still stands. How can I help?' },
+    { frame: 'afternoon', title: 'Good afternoon, {name} 🌿', line: 'A lovely moment to reflect. What has God been teaching you lately?' },
+    { frame: 'afternoon', title: 'Hi {name}', line: "Halfway through the day. Let's make a little room for stillness." },
+    { frame: 'afternoon', title: 'Peace be with you, {name}', line: "Bring me anything: a verse, a struggle, or a question you've been carrying." },
+    { frame: 'afternoon', title: 'Blessed Sunday afternoon, {name}', line: "Was there a word in today's service you'd like to go deeper into?", context: 'sunday' },
+    { frame: 'afternoon', title: 'Happy weekend, {name}', line: 'Some rest and some reflection. What would you like to talk about today?', context: 'saturday' },
+    // Evening & night
+    { frame: 'evening', title: 'Good evening, {name} 🌙', line: "As the day winds down, let's lay it before the Lord. How did today go?" },
+    { frame: 'evening', title: 'Good evening, {name}', line: 'Would you like to reflect on today, or rest in a promise from Scripture?' },
+    { frame: 'evening', title: 'Welcome, {name}', line: '"In peace I will lie down and sleep." What\'s on your heart this evening?' },
+    { frame: 'evening', title: 'Evening, {name}', line: "Whatever today carried, you don't have to carry it alone. Let's talk." },
+    { frame: 'evening', title: 'Good evening, {name} ✨', line: 'A quiet evening is a good time to listen. What would you like to explore?' },
+    { frame: 'evening', title: 'Peace to you tonight, {name}', line: "Shall we pray, read, or simply reflect on God's faithfulness today?" },
+    { frame: 'evening', title: 'Hello again, {name}', line: 'The day is done, but His love is steady. How can I walk with you this evening?' },
+    { frame: 'evening', title: 'Good evening, {name}', line: "Is there anything you'd like to give thanks for, or hand over to God tonight?" },
+    { frame: 'evening', title: 'Still awake, {name}?', line: "He who watches over you will not slumber. I'm here if something is on your mind.", context: 'late' },
+    { frame: 'evening', title: 'Blessed Sunday evening, {name}', line: "A new week is near. Let's commit it to the Lord together.", context: 'sunday' }
+];
+
+function greetingFrame(hour) {
+    if (hour >= 5 && hour <= 11) return 'morning';
+    if (hour >= 12 && hour <= 16) return 'afternoon';
+    return 'evening';
+}
+
+function greetingContextApplies(context, now) {
+    const h = now.getHours();
+    switch (context) {
+        case 'sunday': return now.getDay() === 0;
+        case 'saturday': return now.getDay() === 6;
+        case 'early': return h >= 4 && h <= 6;
+        case 'late': return h >= 22 || h < 5;
+        default: return true;
+    }
+}
+
+/** The greeting to show now (sticky for 1–2 hours within the same frame). */
+function currentShepherdGreeting(now = new Date()) {
+    const frame = greetingFrame(now.getHours());
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem('graceguide_shepherd_greeting') || 'null'); } catch (e) { saved = null; }
+    if (saved && saved.frame === frame && Date.now() < saved.expiresAt) {
+        const g = SHEPHERD_GREETINGS[saved.index];
+        if (g && g.frame === frame && greetingContextApplies(g.context, now)) return g;
+    }
+    const eligible = SHEPHERD_GREETINGS.map((g, index) => ({ g, index }))
+        .filter(({ g }) => g.frame === frame && greetingContextApplies(g.context, now));
+    const fresh = eligible.filter(({ index }) => !saved || index !== saved.index);
+    const contextual = fresh.filter(({ g }) => g.context);
+    const pool = fresh.length ? fresh : eligible;
+    // A greeting made for this moment (Sunday, late night…) is chosen half the time.
+    const pick = (contextual.length && Math.random() < 0.5)
+        ? contextual[Math.floor(Math.random() * contextual.length)]
+        : pool[Math.floor(Math.random() * pool.length)];
+    const expiresAt = Date.now() + (60 + Math.floor(Math.random() * 61)) * 60 * 1000;
+    try { localStorage.setItem('graceguide_shepherd_greeting', JSON.stringify({ frame, index: pick.index, expiresAt })); } catch (e) { /* private mode */ }
+    return pick.g;
+}
+
+function renderShepherdGreeting() {
+    const username = AppState.currentUser && AppState.userProfile && AppState.userProfile.username;
+    const name = (username || '').trim().split(/\s+/)[0] || 'friend';
+    const g = currentShepherdGreeting();
+    return `
+        <div class="shepherd-greeting">
+            <div class="shepherd-greeting-icon"><i class="fas fa-dove"></i></div>
+            <h2 class="shepherd-greeting-title">${escapeHtml(g.title.replace('{name}', name))}</h2>
+            <p class="shepherd-greeting-line">${escapeHtml(g.line)}</p>
+        </div>
+    `;
+}
+window.renderShepherdGreeting = renderShepherdGreeting;

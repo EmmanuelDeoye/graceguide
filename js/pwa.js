@@ -228,6 +228,11 @@ function initForegroundMessageHandler() {
         const body = payload?.notification?.body || '';
         const data = payload?.data || {};
 
+        // New Space posts: the live listener may already have shown this one.
+        if (data.type === 'space_post' && data.postId && typeof announceNewSpacePost === 'function') {
+            announceNewSpacePost(data.postId, { authorId: data.fromUid || 'server', timestamp: Date.now(), slides: [{ text: body }], authorName: title.replace(/ posted in Space$/, '') });
+            return;
+        }
         showInAppNotificationPopup(title, body, data);
 
         if (typeof AppState !== 'undefined' && AppState.currentUser && typeof loadNotifications === 'function') {
@@ -277,8 +282,11 @@ function showInAppNotificationPopup(title, body, data = {}) {
     popup.addEventListener('click', () => {
         clearTimeout(autoDismissTimer);
         dismiss();
-        if (data.url && typeof navigateTo === 'function') {
-            navigateTo(data.url.replace('/#/', '').replace(/^\//, '') || 'home');
+        const path = (data.url || '').replace(/^\/?#?\/?/, '');
+        if (path.includes('/') && typeof navigateToHash === 'function') {
+            navigateToHash('#/' + path); // deep links like space/post/ID
+        } else if (data.url && typeof navigateTo === 'function') {
+            navigateTo(path || 'home');
         }
     });
 }

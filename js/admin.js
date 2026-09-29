@@ -522,7 +522,7 @@ async function renderNotificationsTab() {
     form with no way to back out. Pass a uid/username to pre-target a
     specific user (used by the Users tab's quick "notify" action). */
 async function openComposeNotificationModal(presetUid = null, presetUsername = null) {
-    const userDirectory = await fetchUserDirectory();
+    const [userDirectory, serverPush] = await Promise.all([fetchUserDirectory(), isServerPushActive()]);
     const users = Object.entries(userDirectory).map(([uid, u]) => ({ uid, ...u }))
         .sort((a, b) => (a.username || '').localeCompare(b.username || ''));
 
@@ -555,11 +555,16 @@ async function openComposeNotificationModal(presetUid = null, presetUsername = n
                 ${NOTIFICATION_ROUTES.map(r => `<option value="${r.value}">${escapeHtml(r.label)}</option>`).join('')}
             </select>
         </div>
+        ${serverPush ? `
+        <div class="admin-push-toggle" style="cursor:default;">
+            <i class="fas fa-circle-check" style="color:#30483A; margin-top:3px;"></i>
+            <span><strong>Pops up on phones automatically</strong> — the GraceGuide server delivers it as a push notification, even when the app is closed.</span>
+        </div>` : `
         <label class="admin-push-toggle">
             <input type="checkbox" id="notif-push" checked>
             <span><strong>Pop up on phones</strong> — also send it as a push notification, so it appears on screen even when GraceGuide is closed.
-            ${hasPushAccess() ? '' : 'You\'ll confirm with the Google account that owns the Firebase project (once an hour).'}</span>
-        </label>
+            ${hasPushAccess() ? '' : 'Google will confirm it\'s you (the project owner) — after the first time this closes by itself. Deploy the push server (deploy-firebase.ps1) to skip this step entirely.'}</span>
+        </label>`}
         <div class="flex gap-2" style="display:flex; gap:8px;">
             <button id="notif-cancel-btn" class="btn btn-outline" style="flex:1;">Cancel</button>
             <button id="notif-send-btn" class="btn btn-primary" style="flex:1;"><i class="fas fa-paper-plane"></i> Send</button>
@@ -579,7 +584,8 @@ async function openComposeNotificationModal(presetUid = null, presetUsername = n
         const targetType = $('#notif-target-type').value;
         const title = $('#notif-title').value.trim();
         const route = $('#notif-route').value;
-        const wantPush = $('#notif-push').checked;
+        // With the push server deployed it sends the pop-ups; otherwise this page does.
+        const wantPush = !serverPush && $('#notif-push') && $('#notif-push').checked;
         const btn = $('#notif-send-btn');
         btn.disabled = true;
         btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> Sending…`;
@@ -602,7 +608,7 @@ async function openComposeNotificationModal(presetUid = null, presetUsername = n
             const results = await runLimited(uids, 8, uid => sendAdminNotification(uid, message, title, route, pushToken));
             const devices = results.reduce((sum, r) => sum + (r ? r.pushed : 0), 0);
             const who = uids.length === 1 ? 'Notification sent' : `Notification sent to ${uids.length} users`;
-            showAdminToast(pushToken ? `${who} · popped up on ${devices} device${devices === 1 ? '' : 's'}.` : `${who} (in-app).`, 'success');
+            showAdminToast(serverPush ? `${who} · pop-ups sent by the server.` : pushToken ? `${who} · popped up on ${devices} device${devices === 1 ? '' : 's'}.` : `${who} (in-app).`, 'success');
             closeAdminModal();
         } catch (error) {
             console.error('Error sending notification:', error);
@@ -662,6 +668,18 @@ let pushAuth = { token: null, expiresAt: 0 };
 
 function hasPushAccess() { return !!pushAuth.token && Date.now() < pushAuth.expiresAt; }
 
+/** True once the Cloud Function (functions/index.js) is delivering pushes — it
+    stamps appConfig/serverPushLastSeen on every send (deploy-firebase.ps1 sets
+    it at deploy time too). Then the page never needs a Google sign-in. */
+async function isServerPushActive() {
+    try {
+        const seen = (await database.ref('appConfig/serverPushLastSeen').once('value')).val();
+        return typeof seen === 'number' && Date.now() - seen < 14 * 24 * 60 * 60 * 1000;
+    } catch (e) {
+        return false;
+    }
+}
+
 /** Google sign-in in a separate Firebase app instance, so the admin's own
     session on this page is untouched. Must be called straight from a click. */
 async function getPushAccessToken() {
@@ -669,7 +687,8 @@ async function getPushAccessToken() {
     const app = firebase.apps.find(a => a.name === 'push-sender') || firebase.initializeApp(firebaseConfig, 'push-sender');
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.addScope(FCM_SCOPE);
-    provider.setCustomParameters({ prompt: 'select_account' });
+    // No forced account picker: after the first consent Google completes the
+    // popup by itself, so the hourly refresh is just a brief flash.
     const result = await app.auth().signInWithPopup(provider);
     const token = result.credential && result.credential.accessToken;
     app.auth().signOut().catch(() => {});

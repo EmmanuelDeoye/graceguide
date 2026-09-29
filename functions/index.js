@@ -183,6 +183,10 @@ exports.sendPushOnNotification = functions
       android: { priority: 'high', ttl: 24 * 60 * 60 * 1000 }
     }, android));
 
+    // Heartbeat: the admin page sees the server is delivering pushes and
+    // stops asking admins for a Google sign-in to send pop-ups itself.
+    await admin.database().ref('/appConfig/serverPushLastSeen').set(Date.now()).catch(() => {});
+
     // Prune tokens that are no longer valid (app uninstalled, token
     // expired, etc.) so future sends don't keep retrying dead devices.
     if (dead.length > 0) {
@@ -193,6 +197,71 @@ exports.sendPushOnNotification = functions
 
     return null;
   });
+
+/** Short, plain summary of a Space post for a notification body. */
+function spacePostExcerpt(post) {
+  if (post.type === 'video') return 'Shared a video — tap to watch.';
+  const slides = Array.isArray(post.slides) ? post.slides : Object.values(post.slides || {});
+  const text = slides.map((s) => (s && (s.text || s.content)) || '').join(' ').replace(/\s+/g, ' ').trim();
+  if (!text) return post.type === 'plan' ? 'Shared a study plan.' : 'Shared something new.';
+  return text.length > 140 ? `${text.slice(0, 137)}…` : text;
+}
+
+/**
+ * Every new Space post pops up for every other user (web + Android), so the
+ * community sees it right away. Respects each user's "New Space posts"
+ * switch (notificationPrefs.space_posts). Not written to each inbox — it's a
+ * live alert, not a personal notification.
+ */
+exports.pushNewSpacePost = functions
+  .region(REGION)
+  .database.ref('/spacePosts/{postId}')
+  .onCreate(async (snapshot, context) => {
+    const { postId } = context.params;
+    const post = snapshot.val();
+    if (!post || !post.authorId) return null;
+
+    const [dirSnap, nameSnap] = await Promise.all([
+      admin.database().ref('/userDirectory').once('value'),
+      admin.database().ref(`/users/${post.authorId}/profile/username`).once('value')
+    ]);
+    const authorName = nameSnap.val() || post.authorName || 'Someone';
+    const title = `${authorName} posted in Space`;
+    const body = spacePostExcerpt(post);
+    const route = `space/post/${postId}`;
+    const notifKey = `space_post_${postId}`;
+    const uids = Object.keys(dirSnap.val() || {}).filter((u) => u !== post.authorId);
+
+    const android = [];
+    const web = [];
+    await Promise.all(uids.map(async (uid) => {
+      const [tokSnap, prefSnap] = await Promise.all([
+        admin.database().ref(`/users/${uid}/fcmTokens`).once('value'),
+        admin.database().ref(`/users/${uid}/notificationPrefs/space_posts`).once('value')
+      ]);
+      if (prefSnap.val() === false) return;
+      const split = splitTokens(tokSnap.val());
+      android.push(...split.android);
+      web.push(...split.web);
+    }));
+
+    const chunks = (arr) => Array.from({ length: Math.ceil(arr.length / 500) }, (_, i) => arr.slice(i * 500, i * 500 + 500));
+    for (const tokens of chunks(android)) {
+      await sendAndCollectDead({
+        data: stringData({ notifKey, type: 'space_post', title, body, route, fromUid: post.authorId, fromName: authorName, postId, timestamp: post.timestamp || Date.now() }),
+        android: { priority: 'high', ttl: 6 * 60 * 60 * 1000 }
+      }, tokens).catch((e) => console.error('space post push (android) failed', e));
+    }
+    for (const tokens of chunks(web)) {
+      await sendAndCollectDead({
+        notification: { title, body },
+        webpush: { notification: { tag: notifKey } },
+        data: stringData({ type: 'space_post', url: `/#/${route}`, postId, fromUid: post.authorId })
+      }, tokens).catch((e) => console.error('space post push (web) failed', e));
+    }
+    return null;
+  });
+
 /**
  * Runs once a day. Anyone with notifications enabled who hasn't logged
  * any Bible reading yet today gets a gentle nudge so they don't lose

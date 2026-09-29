@@ -2015,3 +2015,17 @@
     padding: 6px 8px;
 }
 [data-theme="dark"] .notif-mark-all { color: var(--accent-muted-gold, #C7A65A); }
+
+/* Shepherd new-chat greeting */
+.shepherd-greeting { text-align: center; padding: 48px 24px; }
+.shepherd-greeting-icon {
+    width: 72px; height: 72px; margin: 0 auto 20px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(48, 72, 58, 0.1); color: var(--primary-deep-olive, #30483A); font-size: 30px;
+}
+[data-theme="dark"] .shepherd-greeting-icon { color: var(--accent-muted-gold, #C7A65A); }
+.shepherd-greeting-title {
+    font-family: 'Playfair Display', serif; font-weight: 700; font-size: 26px; line-height: 1.25;
+    color: var(--text-dark, inherit); margin: 0 0 10px;
+}
+.shepherd-greeting-line { color: var(--text-slate, #64748b); max-width: 420px; margin: 0 auto; line-height: 1.6; }
