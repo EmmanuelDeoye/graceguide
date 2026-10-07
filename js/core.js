@@ -469,7 +469,7 @@ function initAuth() {
     // this is what makes those URLs work after a hard refresh, not just
     // when navigated to from inside the app.
     const VALID_INITIAL_ROUTES = ['home', 'bible', 'ask', 'space', 'community', 'planner', 'messages', 'profile', 'settings', 'talk-to-someone', 'terms'];
-    const DEEP_LINK_ROUTE_MARKERS = ['deep-profile', 'deep-space-post', 'deep-planner', 'deep-bible', 'deep-quiz', 'deep-devotional'];
+    const DEEP_LINK_ROUTE_MARKERS = ['deep-profile', 'deep-space-post', 'deep-planner', 'deep-bible', 'deep-quiz', 'deep-devotional', 'deep-play'];
     const hashRoute = window.location.hash.replace(/^#\//, '');
     const bootParsedRoute = parseAppRoute(window.location.hash);
     // hashRoute.length check preserves the original behavior for an
@@ -520,6 +520,7 @@ function initAuth() {
                     await loadUserData();
                 } else {
                     if (typeof stopRealtimeListeners === 'function') stopRealtimeListeners();
+                    if (window.GamesUI) GamesUI.onSignedOut();
                     AppState.currentUser = null;
                     AppState.userProfile = null;
                     AppState.bookmarks = [];
@@ -698,6 +699,8 @@ async function loadUserData() {
     // Start realtime listeners (notifications, chat unread, forum unread) —
     // these update live via Firebase's .on('value'), no refresh needed.
     if (typeof startRealtimeListeners === 'function') startRealtimeListeners();
+    // Game invitations (Play & Learn) pop up on whatever page the user is on.
+    if (window.GamesUI) GamesUI.onSignedIn();
     // Load the personalization profile (books/tags of interest)
     if (typeof loadInterestProfile === 'function') loadInterestProfile();
 }
@@ -1233,6 +1236,10 @@ function parseAppRoute(hash) {
     if (first === 'devotional' && second) {
         return { route: 'deep-devotional', params: { shareId: second }, urlPath: path };
     }
+    // Play & Learn: #/play, #/play/battle, #/play/room/ID, #/play/join/CODE …
+    if (first === 'play') {
+        return { route: 'deep-play', params: { sub: second || null, arg: third || null }, urlPath: path };
+    }
 
     // Not a dynamic pattern — plain existing static route (#/home,
     // #/bible, #/quiz, #/profile alone, etc), same as always.
@@ -1297,13 +1304,19 @@ function navigateToHash(hash, options = {}) {
             navigateTo('shared-devotional', navOptions);
             return;
 
+        case 'deep-play':
+            AppState.playRoute = parsed.params;
+            navigateTo('play', navOptions);
+            return;
+
         default:
             navigateTo(parsed.route, options);
     }
 }
 
 function navigateTo(route, options = {}) {
-    const { fromPopstate = false, replace = false, urlPath = null } = options;
+    const { fromPopstate = false, replace = false } = options;
+    let { urlPath = null } = options;
 
     // Stop any Shepherd voice playback before leaving/changing pages
     if (typeof stopSpeaking === 'function') stopSpeaking();
@@ -1348,6 +1361,20 @@ function navigateTo(route, options = {}) {
     if (DOM.pageContainer && AppState.currentRoute) {
         AppState.scrollPositions[AppState.currentRoute] = DOM.pageContainer.scrollTop;
     }
+
+    // Play & Learn: plain navigateTo('play') (drawer link) means the hub;
+    // a game in progress keeps running behind a "return to game" pill.
+    // A same-page refresh (e.g. right after signing in from an invite link)
+    // keeps the Play screen the user was on.
+    if (route === 'play' && !urlPath) {
+        const pr = AppState.playRoute;
+        if (replace && AppState.currentRoute === 'play' && pr && pr.sub) {
+            urlPath = 'play/' + [pr.sub, pr.arg].filter(Boolean).map(encodeURIComponent).join('/');
+        } else {
+            AppState.playRoute = null;
+        }
+    }
+    if (window.GamesUI) GamesUI.onNavigate(route);
 
     AppState.currentRoute = route;
     updateNavigation(route);
@@ -1429,6 +1456,9 @@ function navigateTo(route, options = {}) {
             break;
         case 'terms':
             renderResult = renderTermsPage();
+            break;
+        case 'play':
+            renderResult = typeof renderPlayPage === 'function' ? renderPlayPage() : renderHomePage();
             break;
         default:
             renderResult = renderHomePage();
@@ -1515,7 +1545,8 @@ function updateNavigation(route) {
         'shared-plan': 'Shared Plan',
         'shared-quiz': 'Shared Quiz Result',
         'shared-devotional': 'Shared Devotional',
-        terms: 'Terms & Conditions'
+        terms: 'Terms & Conditions',
+        play: 'Play & Learn'
     };
     const titleText = titles[route] || 'GraceGuide';
     // The two-tone "Grace"/"Guide" treatment only makes sense for the
@@ -1617,6 +1648,11 @@ async function renderSharedPlanPage() {
         return;
     }
 
+    // Shares made since plans became adoptable carry the readings themselves.
+    const planDays = typeof normalizeSharedPlanDays === 'function' ? normalizeSharedPlanDays(share.days) : [];
+    const hasDays = planDays.length > 0;
+    const isOwner = !!AppState.currentUser && share.ownerId === AppState.currentUser.uid;
+
     DOM.pageContainer.innerHTML = `
         <div class="planner-container">
             <div class="card mb-3">
@@ -1642,14 +1678,33 @@ async function renderSharedPlanPage() {
                     </div>
                 ` : ''}
             </div>
-            <div class="shared-content-cta">
-                <p>Build your own personalized Bible reading plan on GraceGuide.</p>
-                <button class="btn btn-primary btn-block" onclick="navigateTo('planner', { replace: true })">
-                    <i class="fas fa-calendar-check"></i> Start Your Own Plan
-                </button>
-            </div>
+            ${hasDays ? `
+                <div class="card mb-3">
+                    <button id="adopt-plan-btn" class="btn btn-primary btn-block">
+                        <i class="fas ${isOwner ? 'fa-calendar-check' : 'fa-plus'}"></i> ${isOwner ? 'Open in My Study Planner' : 'Adopt Plan'}
+                    </button>
+                    ${isOwner ? '' : '<p class="text-muted" style="font-size: 12px; text-align: center; margin-top: 8px;">Adds a fresh copy to your Study Planner, starting today.</p>'}
+                    <h4 style="font-weight: 700; margin: 16px 0 8px;">${planDays.length} day${planDays.length === 1 ? '' : 's'} in this plan</h4>
+                    <div class="planner-days">${sharedPlanDaysHTML(planDays)}</div>
+                </div>
+            ` : `
+                <div class="shared-content-cta">
+                    <p>${isOwner ? 'This is your plan.' : 'Build your own personalized Bible reading plan on GraceGuide.'}</p>
+                    <button class="btn btn-primary btn-block" onclick="navigateTo('planner', { replace: true })">
+                        <i class="fas fa-calendar-check"></i> ${isOwner ? 'Open My Study Planner' : 'Start Your Own Plan'}
+                    </button>
+                </div>
+            `}
         </div>
     `;
+
+    const adoptBtn = document.getElementById('adopt-plan-btn');
+    if (adoptBtn) {
+        adoptBtn.onclick = () => {
+            if (isOwner) navigateTo('planner');
+            else adoptSharedPlan(share.name, planDays, `share_${shareId}`);
+        };
+    }
 }
 
 /** #/devotional/SHARE_ID — reads the PUBLIC devotionalShares/{shareId}
@@ -1870,14 +1925,18 @@ async function renderHomePage() {
             
             <!-- Quick Actions -->
             <div class="flex gap-2 mb-4" style="overflow-x: auto; padding-bottom: 8px;">
-                <button class="btn btn-secondary btn-sm" onclick="navigateTo('bible')">
+                <button class="btn btn-secondary btn-sm" onclick="navigateTo('bible')" style="white-space: nowrap; flex-shrink: 0;">
                     <i class="fas fa-book-bible"></i> Read Bible
                 </button>
-                
-                <button class="btn btn-gold btn-sm" onclick="navigateTo('planner')">
+
+                <button class="btn btn-gold btn-sm" onclick="navigateTo('planner')" style="white-space: nowrap; flex-shrink: 0;">
                     <i class="fas fa-calendar-check"></i> Study Planner
                 </button>
-                
+
+                <button class="btn btn-outline btn-sm" onclick="navigateTo('play')" style="white-space: nowrap; flex-shrink: 0;">
+                    <i class="fas fa-gamepad"></i> Play &amp; Learn
+                </button>
+
             </div>
 
             <!-- Meet Shepherd -->
@@ -1917,6 +1976,9 @@ async function renderHomePage() {
 
             <!-- Daily Devotional — shown here (bottom) once marked done -->
             <div id="home-devotional-slot-bottom"></div>
+
+            <!-- Play & Learn (Bible games) — below the reading/devotional content on purpose -->
+            ${window.GamesUI ? GamesUI.homeCardHtml() : ''}
             
             <!-- Recommended Reading -->
             <div class="card">

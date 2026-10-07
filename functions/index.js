@@ -45,7 +45,8 @@ const NOTIFICATION_TITLES = {
   dm_message: 'New Message',
   group_message: 'New Group Message',
   daily_reminder: 'Time to read 📖',
-  admin_broadcast: 'GraceGuide'
+  admin_broadcast: 'GraceGuide',
+  game_invite: 'Game invite'
 };
 
 // Mirrors NotifCategory.fromServerType in the Android app, so a user who
@@ -62,6 +63,7 @@ function channelForType(type) {
     case 'daily_reminder': return 'reading_reminders';
     case 'quiz_reminder': return 'quiz';
     case 'study_reminder': return 'study_planner';
+    case 'game_invite': return 'game_invites';
     default: return 'announcements';
   }
 }
@@ -158,11 +160,18 @@ exports.sendPushOnNotification = functions
     const body = notification.message || 'You have a new notification';
     const url = routeForNotification(notification);
 
+    // A game invitation is only worth delivering while it can still be accepted.
+    const isInvite = notification.type === 'game_invite';
+    const inviteMsLeft = isInvite ? Number(notification.expiresAt || 0) - Date.now() : 0;
+    if (isInvite && inviteMsLeft < 5000) return null;
+
     const dead = [];
     dead.push(...await sendAndCollectDead({
       notification: { title, body },
       // Same tag as the admin page's direct push, so a browser shows it once.
-      webpush: { notification: { tag: notifId } },
+      webpush: isInvite
+        ? { headers: { TTL: String(Math.ceil(inviteMsLeft / 1000)), Urgency: 'high' }, notification: { tag: notifId, requireInteraction: true, actions: [{ action: 'accept', title: 'Accept' }, { action: 'decline', title: 'Decline' }] } }
+        : { notification: { tag: notifId } },
       data: stringData({ type: notification.type || '', fromUid: notification.fromUid || '', url })
     }, web));
 
@@ -178,9 +187,14 @@ exports.sendPushOnNotification = functions
         postId: notification.postId,
         groupId: notification.groupId,
         conversationId: notification.conversationId,
+        // Game invitations (Play & Learn): what the app needs for Accept / Decline.
+        inviteId: notification.inviteId,
+        game: notification.game,
+        code: notification.code,
+        expiresAt: notification.expiresAt,
         timestamp: notification.timestamp || Date.now()
       }),
-      android: { priority: 'high', ttl: 24 * 60 * 60 * 1000 }
+      android: { priority: 'high', ttl: isInvite ? Math.max(5000, inviteMsLeft) : 24 * 60 * 60 * 1000 }
     }, android));
 
     // Heartbeat: the admin page sees the server is delivering pushes and
@@ -306,3 +320,6 @@ exports.dailyReadingReminder = functions
     await Promise.all(sends);
     return null;
   });
+
+// Play & Learn: the game referee (XP, streaks and badges decided by the server).
+Object.assign(exports, require('./games'));

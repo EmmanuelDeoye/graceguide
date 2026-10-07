@@ -48,6 +48,8 @@ messaging.onBackgroundMessage((payload) => {
 // on the relevant screen if the payload included a route/url.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  // Game invitation → "Decline": just dismiss it (the invite expires by itself).
+  if (event.action === 'decline') return;
   const targetUrl = event.notification.data?.url || '/';
 
   event.waitUntil(

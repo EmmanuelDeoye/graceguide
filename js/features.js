@@ -2363,8 +2363,8 @@ function renderSpaceCard(post) {
             <i class="fas fa-calendar-check"></i> View Study Plan
         </button>
     ` : (post.planData?.days?.length > 0 ? `
-        <button class="space-chapter-btn" onclick="addSpacePlanToMyPlanner('${post.id}')">
-            <i class="fas fa-plus"></i> Add to My Study Plan
+        <button class="space-chapter-btn" onclick="previewSpacePlan('${post.id}')">
+            <i class="fas fa-calendar-check"></i> View &amp; Adopt Plan
         </button>
     ` : '')
     ) : '');
@@ -2691,7 +2691,7 @@ function submitPlanSpacePost(index) {
         // their own Study Planner straight from Space, not just view the name.
         planData: {
             name,
-            days: (plan.days || []).map(d => ({ passage: d.passage, topic: d.topic, date: d.date }))
+            days: planDaysForSharing(plan)
         },
         tags: extractTags(name)
     });
@@ -2702,38 +2702,157 @@ function submitPlanSpacePost(index) {
  * own Study Planner. Resets completion/progress so it starts fresh for them.
  */
 async function addSpacePlanToMyPlanner(postId) {
-    if (!requireAuth('Sign in to add this study plan.', () => addSpacePlanToMyPlanner(postId))) return;
-
-    const post = AppState.spacePosts.find(p => p.id === postId) || AppState.spacePosts.find(p => p.id === postId);
+    const post = AppState.spacePosts.find(p => p.id === postId);
     const planData = post?.planData;
     if (!planData || !Array.isArray(planData.days) || planData.days.length === 0) {
         showToast("This study plan doesn't have day-by-day content to copy.", 'warning');
         return;
     }
+    return adoptSharedPlan(planData.name, planData.days, `space_${postId}`);
+}
 
+/* ---- Shared study plans: look through it, then "Adopt Plan" ----
+   A plan shared in a chat, the Forum, Space or by link can be opened by
+   anyone it was shared with: they see every day of it and can copy it into
+   their own Study Planner. Only the reading content travels (passage, topic,
+   reflection, prayer) — never the owner's dates ticked off or progress. */
+
+/** The day-by-day content of a plan in its shareable form. `offset` is the
+    number of days after the plan's first day, so the pacing survives. */
+function planDaysForSharing(plan) {
+    return normalizeSharedPlanDays(plan?.days).map(d => {
+        const out = { passage: d.passage, topic: d.topic, offset: d.offset };
+        if (d.reflection_question) out.reflection_question = d.reflection_question;
+        if (d.prayer_point) out.prayer_point = d.prayer_point;
+        return out;
+    });
+}
+
+/** Accepts days as stored in a plan, a Space post or a share snapshot. */
+function normalizeSharedPlanDays(days) {
+    const list = toCleanArray(days).filter(d => d && d.passage).slice(0, 400);
+    const dayNumber = (key) => {
+        const t = typeof key === 'string' ? Date.parse(key + 'T00:00:00Z') : NaN;
+        return isNaN(t) ? null : Math.round(t / 86400000);
+    };
+    const first = list.map(d => dayNumber(d.date)).find(n => n !== null);
+    let last = -1;
+    return list.map((d, i) => {
+        let offset = Number.isInteger(d.offset) ? d.offset : null;
+        if (offset === null && first != null && dayNumber(d.date) !== null) offset = dayNumber(d.date) - first;
+        if (offset === null || offset < 0 || offset > 3650) offset = Math.max(i, last + 1);
+        last = Math.max(last, offset);
+        return {
+            passage: String(d.passage).slice(0, 200),
+            topic: String(d.topic || 'Study').slice(0, 300),
+            offset,
+            reflection_question: d.reflection_question ? String(d.reflection_question).slice(0, 600) : '',
+            prayer_point: d.prayer_point ? String(d.prayer_point).slice(0, 600) : ''
+        };
+    });
+}
+
+/** The read-only list of a shared plan's days (tap a passage to read it). */
+function sharedPlanDaysHTML(days) {
+    return normalizeSharedPlanDays(days).map((d, i) => `
+        <div class="planner-day" style="cursor: pointer;" onclick="openPassageReference('${escapeHtml(d.passage).replace(/'/g, "\\'")}')">
+            <div class="planner-day-checkbox" style="font-size: 12px; font-weight: 700; color: var(--text-slate);">${i + 1}</div>
+            <div style="flex: 1; min-width: 0;">
+                <div style="font-weight: 600;">${escapeHtml(d.passage)}</div>
+                <div style="font-size: 12px; color: var(--text-slate);">${escapeHtml(d.topic)}</div>
+                ${d.reflection_question ? `<div style="font-size: 12px; color: var(--text-slate); margin-top: 4px;"><i class="fas fa-lightbulb"></i> ${escapeHtml(d.reflection_question)}</div>` : ''}
+            </div>
+            <i class="fas fa-book-bible" style="color: var(--text-slate); font-size: 13px;"></i>
+        </div>
+    `).join('');
+}
+
+/** Copies a shared plan into the signed-in user's Study Planner, starting
+    today and unticked. `sourceId` identifies where it came from so the same
+    plan isn't added twice. */
+async function adoptSharedPlan(name, days, sourceId) {
+    if (!requireAuth('Sign in to adopt this study plan.', () => adoptSharedPlan(name, days, sourceId))) return;
+
+    const content = normalizeSharedPlanDays(days);
+    if (content.length === 0) {
+        showToast("This study plan doesn't have day-by-day content to copy.", 'warning');
+        return;
+    }
+
+    const existing = sourceId ? AppState.plannerData.find(p => p.adoptedFrom === sourceId) : null;
+    if (existing) {
+        AppState.currentPlan = existing;
+        showToast('This plan is already in your Study Planner.', 'info');
+        navigateTo('planner');
+        return;
+    }
+
+    const dateFor = (offset) => { const d = new Date(); d.setDate(d.getDate() + offset); return localDateKey(d); };
     const newPlan = {
         id: generateId(),
-        name: planData.name || 'Study Plan',
-        days: planData.days.map(d => ({ ...d, completed: false })),
+        name: String(name || 'Study Plan').slice(0, 120),
+        days: content.map(d => {
+            const day = { date: dateFor(d.offset), passage: d.passage, topic: d.topic, completed: false };
+            if (d.reflection_question) day.reflection_question = d.reflection_question;
+            if (d.prayer_point) day.prayer_point = d.prayer_point;
+            return day;
+        }),
         progress: 0,
         streak: 0,
         completed: 0,
-        total: planData.days.length,
+        total: content.length,
         createdAt: Date.now(),
         lastUsedAt: Date.now()
     };
+    if (sourceId) newPlan.adoptedFrom = sourceId;
 
     AppState.plannerData.push(newPlan);
+    const previousPlan = AppState.currentPlan;
     AppState.currentPlan = newPlan;
 
     try {
         const uid = AppState.currentUser.uid;
         await database.ref(`users/${uid}/planner`).set(AppState.plannerData);
-        showToast('Added to your Study Planner!', 'success');
+        if (AppState.sheetOpen) closeSheet();
+        showToast('Plan adopted — it’s in your Study Planner!', 'success');
         navigateTo('planner');
     } catch (error) {
+        // Not saved: don't leave a plan on screen that will vanish on reload.
+        AppState.plannerData = AppState.plannerData.filter(p => p !== newPlan);
+        AppState.currentPlan = previousPlan;
         showToast('Failed to add study plan', 'error');
         console.error(error);
+    }
+}
+
+/** Space: look through a posted plan before adopting it. */
+function previewSpacePlan(postId) {
+    const post = AppState.spacePosts.find(p => p.id === postId);
+    const planData = post?.planData;
+    if (!planData || !Array.isArray(planData.days) || planData.days.length === 0) {
+        showToast("This study plan doesn't have day-by-day content to view.", 'warning');
+        return;
+    }
+    const count = normalizeSharedPlanDays(planData.days).length;
+    showSheet(`
+        <h3 style="margin-bottom: 4px;">${escapeHtml(planData.name || 'Study Plan')}</h3>
+        <p class="text-muted" style="font-size: 13px; margin-bottom: 12px;">Shared by ${escapeHtml(getDisplayName(post.authorId, post.authorName || 'a GraceGuide user'))} · ${count} day${count === 1 ? '' : 's'}</p>
+        <button class="btn btn-primary btn-block" style="margin-bottom: 12px;" onclick="addSpacePlanToMyPlanner('${postId}')">
+            <i class="fas fa-plus"></i> Adopt Plan
+        </button>
+        <div class="planner-days">${sharedPlanDaysHTML(planData.days)}</div>
+    `);
+}
+
+/** Chat / Forum: open a plan someone shared in a message. */
+function openSharedPlanMessage(shareId, isMine) {
+    if (shareId && /^[\w-]+$/.test(shareId)) {
+        navigateToHash(`#/planner/${shareId}`);
+    } else if (isMine) {
+        navigateTo('planner');
+    } else {
+        // Shared before plans could be opened from a message.
+        showToast('Ask them to share this plan again so you can open and adopt it.', 'info');
     }
 }
 

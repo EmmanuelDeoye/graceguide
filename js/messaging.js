@@ -409,9 +409,12 @@ function renderSharedContentBody(msg) {
     }
     if (msg.type === 'plan') {
         return `
-            <div class="group-msg-plan" onclick="navigateTo('planner')">
+            <div class="group-msg-plan" onclick="openSharedPlanMessage('${escapeHtml(msg.planShareId || '').replace(/'/g, '')}', ${!!(AppState.currentUser && msg.senderId === AppState.currentUser.uid)})">
                 <i class="fas fa-calendar-check"></i>
-                <div style="font-weight:600;">${escapeHtml(msg.content || 'Shared a study plan')}</div>
+                <div>
+                    <div style="font-weight:600;">${escapeHtml(msg.content || 'Shared a study plan')}</div>
+                    <div style="font-size:12px; opacity:0.8;">Study plan · tap to view</div>
+                </div>
             </div>
         `;
     }

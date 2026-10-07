@@ -425,6 +425,9 @@ async function submitSharePlanToGroup(planIndex) {
         content: plan.name || plan.title || plan.planType || 'Study Plan',
         timestamp: Date.now()
     };
+    // Lets the people it's shared with open the plan and adopt it.
+    const planShareId = typeof savePlanShareSnapshot === 'function' ? savePlanShareSnapshot(plan) : null;
+    if (planShareId) msg.planShareId = planShareId;
 
     try {
         await database.ref(`communityGroups/${groupId}/messages/${generateId()}`).set(msg);
@@ -1157,7 +1160,11 @@ async function submitSharePlanToDM(planIndex) {
     const plan = AppState.plannerData[planIndex];
     if (!plan) return;
 
-    await deliverDMMessage({ type: 'plan', content: plan.name || plan.title || plan.planType || 'Study Plan' });
+    const fields = { type: 'plan', content: plan.name || plan.title || plan.planType || 'Study Plan' };
+    // Lets the other person open the plan and adopt it.
+    const planShareId = typeof savePlanShareSnapshot === 'function' ? savePlanShareSnapshot(plan) : null;
+    if (planShareId) fields.planShareId = planShareId;
+    await deliverDMMessage(fields);
     closeModal();
 }
 
@@ -2175,7 +2182,8 @@ function startRealtimeListeners() {
         // the app is open (not the initial batch on first load).
         if (!notifInitial) {
             next.forEach(n => {
-                if (!n.read && !_notifKnownKeys.has(n.key)) {
+                // Game invites show their own Accept / Decline card (js/games.js) — no second toast.
+                if (!n.read && !_notifKnownKeys.has(n.key) && n.type !== 'game_invite') {
                     showToast(n.message || 'You have a new notification', 'info');
                 }
             });

@@ -739,10 +739,11 @@ function shareProfileCard() {
         .catch(() => buildAndOpen(null));
 }
 
-// 4. Reading plan — deliberately shares only a SUMMARY (name, overall
-// progress, and the single next/current day's passage+topic), never
-// the full multi-day schedule with every date/completion status. That
-// full itinerary is personal planning data, not something to publish.
+// 4. Reading plan — the share CARD shows only a summary (name, overall
+// progress, and the next/current day's passage+topic). The snapshot
+// behind the link also carries the plan's readings (passage, topic,
+// reflection, prayer) so the people it is shared with can look through
+// it and adopt it — but never the owner's dates or which days are ticked.
 //
 // The share link (#/planner/SHARE_ID) resolves to a PUBLIC snapshot
 // under plannerShares/{shareId} — never users/{uid}/planner directly.
@@ -754,6 +755,11 @@ function shareProfileCard() {
     yet rather than blocking the person from sharing at all. */
 function savePlanShareSnapshot(plan) {
     if (!plan || !AppState.currentUser) return null;
+    // Very old plans have no id; give one so the link is stable.
+    if (!plan.id) {
+        plan.id = generateId();
+        if (typeof persistPlannerData === 'function') persistPlannerData();
+    }
     const nextDay = (plan.days || []).find(d => !d.completed) || plan.days?.[0];
     const shareId = `${AppState.currentUser.uid}_${plan.id}`;
     database.ref(`plannerShares/${shareId}`).set({
@@ -764,6 +770,10 @@ function savePlanShareSnapshot(plan) {
         streak: plan.streak || 0,
         currentPassage: nextDay?.passage || '',
         currentTopic: nextDay?.topic || '',
+        // The readings themselves (passage/topic/reflection — no dates, no
+        // ticks), so whoever opens the share can look through the plan and
+        // adopt it into their own Study Planner.
+        days: typeof planDaysForSharing === 'function' ? planDaysForSharing(plan) : [],
         updatedAt: Date.now()
     }).catch(error => console.error('Error saving plan share snapshot:', error));
     return shareId;
