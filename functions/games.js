@@ -27,6 +27,7 @@ const BANK = require('./games-bank.json');
 
 const REGION = 'europe-west1';
 const DAY_MS = 86400000;
+const KEEP_MS = 3 * DAY_MS; // rooms, their codes and their results are kept for three days
 const db = () => admin.database();
 const beat = () => db().ref('/games/server/seen').set(admin.database.ServerValue.TIMESTAMP).catch(() => {});
 
@@ -112,7 +113,8 @@ exports.gamesRefereeRun = functions
     const q = Array.isArray(run.q) ? run.q : Object.values(run.q || {});
     const a = Array.isArray(run.a) ? run.a : Object.values(run.a || {});
     if (!cfg || q.length !== cfg.rounds || new Set(q).size !== q.length) return null;
-    const questions = q.map((id) => Core.questionById(BANK, run.game, id));
+    // AI-written questions travel with the run (run.qs); the engine re-validates each one.
+    const questions = q.map((id, r) => Core.roomQuestion(BANK, run.game, { q, qs: run.qs }, r));
     if (questions.some((x) => !x)) return null;
     if (run.e - run.s < 3000 || run.e - run.s > 2 * 3600000) return null;
     if (!(await firstTime(`runs/${uid}/${runId}`))) return null;
@@ -152,7 +154,8 @@ exports.gamesRefereeDaily = functions
 
 /**
  * Twice a day: refresh the heartbeat (so the rules keep trusting the referee) and sweep
- * what games leave behind — old rooms, their codes, stale quick-match entries, expired invites.
+ * what games leave behind — rooms older than three days (with their codes and everyone's
+ * "my games" entries for them), stale quick-match entries, expired invites.
  */
 exports.gamesHousekeeping = functions
   .region(REGION)
@@ -162,21 +165,23 @@ exports.gamesHousekeeping = functions
     const now = Date.now();
     const updates = {};
     const [rooms, codes, match, invites, awarded] = await Promise.all([
-      db().ref('/games/rooms').orderByChild('meta/createdAt').endAt(now - DAY_MS).limitToFirst(500).once('value'),
+      db().ref('/games/rooms').orderByChild('meta/createdAt').endAt(now - KEEP_MS).limitToFirst(500).once('value'),
       db().ref('/games/codes').once('value'),
       db().ref('/games/match').once('value'),
       db().ref('/games/invites').once('value'),
       db().ref('/games/awarded/rooms').once('value'),
     ]);
     rooms.forEach((r) => { updates[`/games/rooms/${r.key}`] = null; updates[`/games/awarded/rooms/${r.key}`] = null; });
-    codes.forEach((c) => { if (now - ((c.val() || {}).t || 0) > DAY_MS) updates[`/games/codes/${c.key}`] = null; });
+    codes.forEach((c) => { if (now - ((c.val() || {}).t || 0) > KEEP_MS) updates[`/games/codes/${c.key}`] = null; });
     match.forEach((g) => { g.forEach((e) => { if (now - ((e.val() || {}).t || 0) > 3600000) updates[`/games/match/${g.key}/${e.key}`] = null; }); });
     invites.forEach((u) => { u.forEach((i) => { if (now - ((i.val() || {}).exp || 0) > 3600000) updates[`/games/invites/${u.key}/${i.key}`] = null; }); });
-    awarded.forEach((r) => { const first = Object.values(r.val() || {})[0]; if (now - (first || 0) > 2 * DAY_MS) updates[`/games/awarded/rooms/${r.key}`] = null; });
+    awarded.forEach((r) => { const first = Object.values(r.val() || {})[0]; if (now - (first || 0) > KEEP_MS + DAY_MS) updates[`/games/awarded/rooms/${r.key}`] = null; });
     // Solo-run records and yesterday's award markers are only needed briefly.
     const [runs, dailyMarks] = await Promise.all([db().ref('/games/runs').once('value'), db().ref('/games/awarded/daily').once('value')]);
     runs.forEach((u) => { u.forEach((r) => { if (now - ((r.val() || {}).s || 0) > DAY_MS) { updates[`/games/runs/${u.key}/${r.key}`] = null; updates[`/games/awarded/runs/${u.key}/${r.key}`] = null; } }); });
     dailyMarks.forEach((d) => { if (now - Date.parse(d.key + 'T00:00:00Z') > 3 * DAY_MS) updates[`/games/awarded/daily/${d.key}`] = null; });
+    const mine = await db().ref('/games/mine').once('value');
+    mine.forEach((u) => { u.forEach((g) => { if (now - ((g.val() || {}).t || 0) > KEEP_MS) updates[`/games/mine/${u.key}/${g.key}`] = null; }); });
     if (Object.keys(updates).length) await db().ref().update(updates);
     return null;
   });

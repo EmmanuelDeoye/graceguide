@@ -11,7 +11,7 @@
 
 // Bump this whenever the shell list below changes so old caches get
 // cleaned up and clients pick up the new files.
-const CACHE_VERSION = 'graceguide-shell-v8';
+const CACHE_VERSION = 'graceguide-shell-v9';
 
 const APP_SHELL = [
   '/',
@@ -23,11 +23,13 @@ const APP_SHELL = [
   '/js/config.js',
   '/js/core.js',
   '/js/features.js',
+  '/js/streaks.js',
   '/js/community.js',
   '/js/messaging.js',
   '/css/games.css',
   '/js/games-bank.js',
   '/js/games-core.js',
+  '/js/games-ai.js',
   '/js/games-net.js',
   '/js/games-play.js',
   '/js/games.js',

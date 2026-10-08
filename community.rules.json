@@ -1,0 +1,28 @@
+{
+  "publicProfiles": {
+    ".read": "auth != null",
+    ".indexOn": [
+      "username",
+      "lastActiveAt"
+    ],
+    "$uid": {
+      ".write": "auth != null && (auth.uid == $uid || root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com')",
+      ".validate": "newData.hasChildren(['username']) && newData.child('username').isString() && newData.child('username').val().length >= 1 && newData.child('username').val().length <= 60",
+      "avatar": {
+        ".validate": "newData.isString() && newData.val().length <= 600"
+      },
+      "bio": {
+        ".validate": "newData.isString() && newData.val().length <= 140"
+      },
+      "createdAt": {
+        ".validate": "newData.isNumber()"
+      },
+      "lastActiveAt": {
+        ".validate": "newData.isNumber()"
+      },
+      "$other": {
+        ".validate": "$other == 'username'"
+      }
+    }
+  }
+}

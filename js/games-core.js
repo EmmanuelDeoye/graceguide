@@ -105,6 +105,62 @@
         return null;
     }
 
+    // ---------- custom (AI-written) questions ----------
+    // A game may carry its own questions in plan.qs = { id: question } (written once by the host
+    // with the plan). They are untrusted input from another player's device, so every client —
+    // and the referee — passes them through cleanQuestion() and uses only the cleaned result.
+
+    function text(v, max) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : ''; }
+    function list(v) {
+        if (Array.isArray(v)) return v;
+        if (!v || typeof v !== 'object') return [];
+        var out = [];
+        for (var i = 0; i < 8 && Object.prototype.hasOwnProperty.call(v, String(i)); i++) out.push(v[String(i)]);
+        return out;
+    }
+    /** A well-formed question for `game` built from `raw`, or null. Never trusts `raw`. */
+    function cleanQuestion(game, raw, id) {
+        if (!raw || typeof raw !== 'object' || !GAMES[game]) return null;
+        var q = { id: String(id), ref: text(raw.ref, 40), x: text(raw.x, 300) };
+        if (!q.ref || !q.x) return null;
+        if (GAMES[game].type === 'wordle') {
+            var w = text(raw.w, 6).toUpperCase(); // 6: a longer word must fail, not be cut down to five letters
+            if (!/^[A-Z]{5}$/.test(w)) return null;
+            q.w = w; q.hint = text(raw.hint, 80);
+            return q.hint ? q : null;
+        }
+        var c = raw.c;
+        if (typeof c !== 'number' || c % 1 !== 0) return null;
+        if (game === 'bibleornot') {
+            q.q = text(raw.q, 220);
+            if (!q.q || c < 0 || c > 1) return null;
+            q.c = c;
+            return q;
+        }
+        var o = list(raw.o).map(function (s) { return text(s, 80); });
+        if (o.length !== 4 || c < 0 || c > 3) return null;
+        for (var i = 0; i < 4; i++) { if (!o[i]) return null; for (var j = 0; j < i; j++) if (o[j] === o[i]) return null; }
+        q.o = o; q.c = c;
+        if (game === 'emoji') { q.e = text(raw.e, 40); if (!q.e) return null; }
+        else if (game === 'whoami') {
+            var clues = list(raw.clues).map(function (s) { return text(s, 160); });
+            if (clues.length !== 3 || !clues[0] || !clues[1] || !clues[2]) return null;
+            q.clues = clues;
+        } else {
+            q.q = text(raw.q, 220);
+            if (!q.q) return null;
+            var cat = text(raw.cat, 30);
+            if (cat) q.cat = cat;
+        }
+        return q;
+    }
+    /** The question for round `r` of a game: the plan's own question if it carries one, else the bank's. */
+    function roomQuestion(bank, game, plan, r) {
+        var id = plan && plan.q ? plan.q[r] : null;
+        var custom = plan && plan.qs && typeof plan.qs === 'object' ? plan.qs[id] : null;
+        return custom ? cleanQuestion(game, custom, id) : questionById(bank, game, id);
+    }
+
     /** `n` random question ids for a game, avoiding `exclude` (recently seen) when it can. */
     function pickQuestions(bank, game, n, exclude, random) {
         var rnd = random || Math.random;
@@ -260,7 +316,7 @@
         uids.forEach(function (uid) {
             var score = 0, correct = 0, units = 0, streak = 0, best = 0, rounds = [], minGuesses = 0;
             for (var r = 0; r <= last; r++) {
-                var rd = tl.rounds[r], q = questionById(bank, game, plan.q[r]);
+                var rd = tl.rounds[r], q = roomQuestion(bank, game, plan, r);
                 var ans = answers[r] && answers[r][uid];
                 var valid = !!ans && typeof ans.t === 'number' && ans.t >= rd.start && ans.t <= rd.end;
                 var judged = valid ? judge(game, q, ans.a) : { ok: false, guesses: 0 };
@@ -392,7 +448,7 @@
         MAX_PLAYERS: MAX_PLAYERS, GAMES: GAMES, GAME_IDS: GAME_IDS, BADGES: BADGES, LEVEL_TITLES: LEVEL_TITLES,
         WORDLE_MAX_GUESSES: WORDLE_MAX_GUESSES, WORDLE_UNITS: WORDLE_UNITS, DAILY_SLOTS: DAILY_SLOTS, DAILY_LIMIT_MS: DAILY_LIMIT_MS,
         hash: hash, previousDay: previousDay, isDayString: isDayString, makeCode: makeCode, parseCode: parseCode, cleanName: cleanName,
-        questionById: questionById, pickQuestions: pickQuestions, dailyQuestions: dailyQuestions,
+        questionById: questionById, cleanQuestion: cleanQuestion, roomQuestion: roomQuestion, pickQuestions: pickQuestions, dailyQuestions: dailyQuestions,
         parseGuesses: parseGuesses, wordleFeedback: wordleFeedback, judge: judge,
         timeline: timeline, phaseAt: phaseAt, pointsFor: pointsFor, seatedPlayers: seatedPlayers, scoreRoom: scoreRoom, scoreDaily: scoreDaily,
         xpFor: xpFor, level: level, xpForLevel: xpForLevel, levelTitle: levelTitle, emptyProfile: emptyProfile, applyResult: applyResult

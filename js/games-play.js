@@ -23,7 +23,7 @@
      * A one-player "room" that lives in memory. Because it reuses the multiplayer
      * timeline and scoring, solo scores mean exactly what online scores mean.
      */
-    function LocalSession(game, uid, name, questionIds) {
+    function LocalSession(game, uid, name, questionIds, custom) {
         var cfg = Core.GAMES[game];
         this.game = game;
         this.uid = uid;
@@ -36,6 +36,7 @@
             plan: { startedAt: Date.now() - Core.COUNTDOWN_MS + 1200, q: questionIds, secs: cfg.secs, rounds: questionIds.length },
             players: {}, answers: {}, answered: {}
         };
+        if (custom) this.room.plan.qs = custom; // AI-written questions (js/games-ai.js)
         this.room.players[uid] = { name: name, joinedAt: 1, online: true };
         this.onUpdate = null;
     }
@@ -86,7 +87,7 @@
     // ---------- shared stage ----------
 
     var esc = function (s) { return window.escapeHtml(String(s == null ? '' : s)); };
-    function question(view) { return Core.questionById(BANK, view.game, view.room.plan.q[view.round]); }
+    function question(view) { return Core.roomQuestion(BANK, view.game, view.room.plan, view.round); }
     function refChip(ref) {
         return '<span class="pl-ref"><i class="fas fa-book-bible"></i> ' + esc(ref) + '</span>';
     }

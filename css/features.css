@@ -785,7 +785,7 @@
    ============================================ */
 .group-chat-container {
     position: fixed;
-    top: var(--top-bar-height);
+    top: var(--top-offset);
     bottom: var(--bottom-nav-height);
     left: 0;
     right: 0;
@@ -2029,3 +2029,58 @@
     color: var(--text-dark, inherit); margin: 0 0 10px;
 }
 .shepherd-greeting-line { color: var(--text-slate, #64748b); max-width: 420px; margin: 0 auto; line-height: 1.6; }
+
+/* ============================================
+   COMMUNITY: Forums | Users tabs
+   ============================================ */
+.community-tabs { display: flex; gap: 6px; padding: 4px; margin-bottom: 16px; border-radius: var(--radius-full); background: rgba(48,72,58,0.08); }
+[data-theme="dark"] .community-tabs { background: rgba(255,255,255,0.06); }
+.community-tab { flex: 1; padding: 10px 12px; border: none; border-radius: var(--radius-full); background: transparent; color: var(--text-slate); font-family: inherit; font-size: var(--text-sm); font-weight: 700; cursor: pointer; }
+.community-tab.active { background: var(--card-white); color: var(--text-charcoal); box-shadow: var(--shadow-sm); }
+.community-users-tools { margin-bottom: 12px; }
+.community-users-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.community-chips { display: flex; gap: 6px; overflow-x: auto; flex: 1; min-width: 0; padding-bottom: 2px; scrollbar-width: none; }
+.community-chips::-webkit-scrollbar { display: none; }
+.community-chip { white-space: nowrap; padding: 7px 12px; border-radius: var(--radius-full); border: 1px solid rgba(0,0,0,0.1); background: var(--card-white); color: var(--text-slate); font-family: inherit; font-size: var(--text-xs); font-weight: 700; cursor: pointer; }
+[data-theme="dark"] .community-chip { border-color: var(--dark-border); }
+.community-chip.active { background: var(--primary-deep-olive); border-color: var(--primary-deep-olive); color: #f8f6f0; }
+.community-sort { width: auto; flex-shrink: 0; padding: 7px 10px; font-size: var(--text-xs); font-weight: 600; }
+.community-users-count { font-size: var(--text-xs); color: var(--text-slate); margin-bottom: 8px; }
+.community-user-avatar { width: 44px; height: 44px; flex-shrink: 0; overflow: hidden; }
+.community-user-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.community-user-tag { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: var(--radius-full); background: rgba(199,166,90,0.2); color: var(--gold-dark); white-space: nowrap; }
+
+/* ============================================
+   STREAKS: devotion streak + Faithfulness card
+   ============================================ */
+.devotion-streak { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 6px 12px; border-radius: var(--radius-full); background: rgba(245,124,0,0.14); color: #c76400; font-size: var(--text-sm); font-weight: 700; }
+.devotion-streak small { font-weight: 600; opacity: 0.8; }
+.devotion-streak-none { background: rgba(0,0,0,0.05); color: var(--text-slate); font-weight: 600; }
+[data-theme="dark"] .devotion-streak { color: #ffb261; }
+[data-theme="dark"] .devotion-streak-none { background: rgba(255,255,255,0.06); color: var(--text-slate); }
+.faith-card:hover { transform: none; }
+.faith-head { display: flex; align-items: center; gap: 12px; }
+.faith-badge { width: 48px; height: 48px; flex-shrink: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--accent-muted-gold); color: #202522; font-weight: 800; font-size: 20px; }
+.faith-head-main { flex: 1; min-width: 0; }
+.faith-title { font-weight: 800; font-size: 18px; }
+.faith-sub { font-size: 12px; color: var(--text-slate); }
+.faith-bar { height: 8px; border-radius: 99px; background: rgba(0,0,0,0.07); overflow: hidden; margin-top: 12px; }
+[data-theme="dark"] .faith-bar { background: rgba(255,255,255,0.08); }
+.faith-bar div { height: 100%; border-radius: 99px; background: var(--accent-muted-gold); }
+.faith-next { font-size: 12px; color: var(--text-slate); margin: 6px 0 10px; }
+.faith-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid rgba(0,0,0,0.06); }
+[data-theme="dark"] .faith-row { border-top-color: var(--dark-border); }
+.faith-row-icon { width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: rgba(48,72,58,0.08); color: var(--primary-deep-olive); }
+[data-theme="dark"] .faith-row-icon { background: rgba(255,255,255,0.07); color: var(--gold-light); }
+.faith-row-label { flex: 1; font-weight: 700; font-size: 14px; display: flex; flex-direction: column; }
+.faith-row-label small { font-weight: 500; font-size: 12px; color: var(--text-slate); }
+.faith-row-value { font-weight: 800; color: #c76400; white-space: nowrap; }
+.faith-line { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 5px 12px; border-radius: var(--radius-full); background: rgba(199,166,90,0.2); color: var(--gold-dark); font-size: 13px; font-weight: 700; cursor: pointer; }
+[data-theme="dark"] .faith-line { color: var(--gold-light); }
+.faith-level { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; margin-bottom: 6px; border: 1px solid rgba(0,0,0,0.07); }
+[data-theme="dark"] .faith-level { border-color: var(--dark-border); }
+.faith-level-on { background: rgba(199,166,90,0.16); border-color: rgba(199,166,90,0.6); }
+.faith-level-num { width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: rgba(48,72,58,0.1); font-weight: 800; font-size: 13px; }
+.faith-level-main { flex: 1; display: flex; flex-direction: column; font-size: 14px; }
+.faith-level-main small { font-size: 12px; color: var(--text-slate); }
+.faith-level-at { font-size: 12px; font-weight: 700; color: var(--text-slate); white-space: nowrap; }

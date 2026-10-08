@@ -10,26 +10,200 @@
 /* ============================================
    COMMUNITY (Groups)
    ============================================ */
+/** Community = Forums (groups) + Users (find other GraceGuide members). */
 async function renderCommunityPage() {
+    const tab = AppState.communityTab === 'users' ? 'users' : 'forums';
     DOM.pageContainer.innerHTML = `
         <div class="community-container">
             <div class="flex items-center justify-between mb-4">
-                <h2 style="font-weight: 700;">Forum</h2>
-                <button class="btn btn-primary btn-sm" onclick="showCreateGroupModal()">
-                    <i class="fas fa-plus"></i> New Group
-                </button>
+                <h2 style="font-weight: 700;">Community</h2>
+                ${tab === 'forums' ? `
+                    <button class="btn btn-primary btn-sm" onclick="showCreateGroupModal()">
+                        <i class="fas fa-plus"></i> New Group
+                    </button>` : ''}
             </div>
-            
-            <div id="groups-list">
-                <div class="skeleton" style="height: 80px; margin-bottom: 12px;"></div>
-                <div class="skeleton" style="height: 80px; margin-bottom: 12px;"></div>
+
+            <div class="community-tabs" role="tablist">
+                <button class="community-tab ${tab === 'forums' ? 'active' : ''}" role="tab" aria-selected="${tab === 'forums'}" onclick="switchCommunityTab('forums')"><i class="fas fa-comments"></i> Forums</button>
+                <button class="community-tab ${tab === 'users' ? 'active' : ''}" role="tab" aria-selected="${tab === 'users'}" onclick="switchCommunityTab('users')"><i class="fas fa-user-group"></i> Users</button>
             </div>
+
+            ${tab === 'forums' ? `
+                <div id="groups-list">
+                    <div class="skeleton" style="height: 80px; margin-bottom: 12px;"></div>
+                    <div class="skeleton" style="height: 80px; margin-bottom: 12px;"></div>
+                </div>
+            ` : `
+                <div class="community-users-tools">
+                    <input type="search" id="community-user-search" class="form-input" placeholder="Search people by name" autocomplete="off" value="${escapeHtml(CommunityUsers.query)}">
+                    <div class="community-users-row">
+                        <div class="community-chips" id="community-user-filters">
+                            ${[['all', 'All'], ['brethren', 'Brethren'], ['new', 'Not connected'], ['active', 'Active this week']].map(([key, label]) =>
+                                `<button class="community-chip ${CommunityUsers.filter === key ? 'active' : ''}" onclick="setCommunityUserFilter('${key}')">${label}</button>`).join('')}
+                        </div>
+                        <select id="community-user-sort" class="form-input community-sort" aria-label="Sort people" onchange="setCommunityUserSort(this.value)">
+                            ${[['name', 'Name A–Z'], ['newest', 'Newest members'], ['active', 'Recently active']].map(([key, label]) =>
+                                `<option value="${key}" ${CommunityUsers.sort === key ? 'selected' : ''}>${label}</option>`).join('')}
+                        </select>
+                    </div>
+                </div>
+                <div id="community-users-list">
+                    <div class="skeleton" style="height: 64px; margin-bottom: 8px;"></div>
+                    <div class="skeleton" style="height: 64px; margin-bottom: 8px;"></div>
+                    <div class="skeleton" style="height: 64px; margin-bottom: 8px;"></div>
+                </div>
+            `}
         </div>
     `;
 
-    await loadCommunityGroups();
+    if (tab === 'forums') { await loadCommunityGroups(); return; }
+
+    const search = document.getElementById('community-user-search');
+    search.addEventListener('input', () => { CommunityUsers.query = search.value; renderCommunityUsersList(); });
+    await loadCommunityUsers();
 }
 
+function switchCommunityTab(tab) {
+    AppState.communityTab = tab;
+    AppState.scrollPositions.community = 0;
+    renderCommunityPage();
+}
+
+/* ---- Users tab ----
+   People are listed from publicProfiles/{uid} — a small public card (name,
+   photo, when they joined, when they were last active) each account keeps up
+   to date itself. It never contains an email address; the admin-only
+   userDirectory does, which is why that is not what is listed here. */
+const CommunityUsers = { all: null, loadedAt: 0, query: '', filter: 'all', sort: 'name', shown: 40 };
+
+function setCommunityUserFilter(key) {
+    CommunityUsers.filter = key; CommunityUsers.shown = 40;
+    document.querySelectorAll('#community-user-filters .community-chip').forEach((chip, i) => chip.classList.toggle('active', ['all', 'brethren', 'new', 'active'][i] === key));
+    renderCommunityUsersList();
+}
+function setCommunityUserSort(key) { CommunityUsers.sort = key; renderCommunityUsersList(); }
+function showMoreCommunityUsers() { CommunityUsers.shown += 40; renderCommunityUsersList(); }
+
+async function loadCommunityUsers() {
+    const list = document.getElementById('community-users-list');
+    if (!list) return;
+    if (!AppState.currentUser) {
+        list.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon"><i class="fas fa-user-group"></i></div>
+                <h3 style="margin-bottom: 8px;">Find people on GraceGuide</h3>
+                <p style="color: var(--text-slate); margin-bottom: 16px;">Sign in to search for other members and connect as Brethren.</p>
+                <button class="btn btn-primary" onclick="showAuthModal({ message: 'Sign in to find people on GraceGuide.' })">Sign in</button>
+            </div>`;
+        return;
+    }
+    try {
+        if (!CommunityUsers.all || Date.now() - CommunityUsers.loadedAt > 60000) {
+            const snap = await database.ref('publicProfiles').once('value');
+            const raw = snap.val() || {};
+            CommunityUsers.all = Object.entries(raw)
+                .filter(([, p]) => p && typeof p.username === 'string' && p.username.trim())
+                .map(([uid, p]) => ({ uid, username: p.username.trim(), avatar: p.avatar || '', bio: p.bio || '', createdAt: p.createdAt || 0, lastActiveAt: p.lastActiveAt || 0 }));
+            CommunityUsers.loadedAt = Date.now();
+            backfillPublicProfilesIfAdmin(raw);
+        }
+        renderCommunityUsersList();
+    } catch (error) {
+        console.error('Error loading people:', error);
+        if (document.getElementById('community-users-list')) {
+            list.innerHTML = `<div class="error-state"><h3>Couldn't load people</h3><p style="color: var(--text-slate);">Please check your connection and try again.</p></div>`;
+        }
+    }
+}
+
+/** Members who haven't opened the app since the Users tab was added have no
+    public card yet. When an admin opens this tab, the missing cards are filled
+    in from the admin-only directory (name + dates only — never the email). */
+async function backfillPublicProfilesIfAdmin(existing) {
+    const adminLink = document.getElementById('drawer-link-admin');
+    if (!adminLink || adminLink.classList.contains('hidden') || CommunityUsers.backfilled) return;
+    CommunityUsers.backfilled = true;
+    try {
+        const dir = (await database.ref('userDirectory').once('value')).val() || {};
+        const updates = {};
+        Object.entries(dir).forEach(([uid, d]) => {
+            if (existing[uid] || !d || !d.username) return;
+            updates[`publicProfiles/${uid}`] = { username: String(d.username).slice(0, 60), avatar: '', bio: '', createdAt: d.createdAt || 0, lastActiveAt: d.lastActiveAt || 0 };
+        });
+        const count = Object.keys(updates).length;
+        if (count === 0) return;
+        await database.ref().update(updates);
+        CommunityUsers.all = null;
+        showToast(`Added ${count} existing member${count === 1 ? '' : 's'} to the Users list.`, 'success');
+        loadCommunityUsers();
+    } catch (error) {
+        console.warn('Could not backfill public profiles:', error);
+    }
+}
+
+/** Applies search + filter + sort to the loaded people (pure, so it can be tested). */
+function filterCommunityUsers(all, { query, filter, sort, myUid, connections, blocked, now }) {
+    const q = (query || '').trim().toLowerCase();
+    const weekAgo = now - 7 * 86400000;
+    const list = (all || []).filter(u => {
+        if (u.uid === myUid || (blocked && blocked.has(u.uid))) return false;
+        if (q && !u.username.toLowerCase().includes(q)) return false;
+        const status = connections ? connections.get(u.uid) : undefined;
+        if (filter === 'brethren') return status === 'brethren';
+        if (filter === 'new') return !status;
+        if (filter === 'active') return u.lastActiveAt >= weekAgo;
+        return true;
+    });
+    const byName = (a, b) => a.username.localeCompare(b.username, undefined, { sensitivity: 'base' });
+    if (sort === 'newest') list.sort((a, b) => (b.createdAt - a.createdAt) || byName(a, b));
+    else if (sort === 'active') list.sort((a, b) => (b.lastActiveAt - a.lastActiveAt) || byName(a, b));
+    else list.sort(byName);
+    return list;
+}
+
+function renderCommunityUsersList() {
+    const list = document.getElementById('community-users-list');
+    if (!list || !CommunityUsers.all) return;
+    const people = filterCommunityUsers(CommunityUsers.all, {
+        query: CommunityUsers.query, filter: CommunityUsers.filter, sort: CommunityUsers.sort,
+        myUid: AppState.currentUser?.uid, connections: AppState.userConnections, blocked: AppState.blockedUsers instanceof Set ? AppState.blockedUsers : null, now: Date.now()
+    });
+    if (people.length === 0) {
+        list.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon"><i class="fas fa-magnifying-glass"></i></div>
+                <h3 style="margin-bottom: 8px;">No one found</h3>
+                <p style="color: var(--text-slate);">${CommunityUsers.query.trim() ? 'Try a different name or clear the filters.' : 'Nobody matches this filter yet.'}</p>
+            </div>`;
+        return;
+    }
+    const activeLabel = (ts) => {
+        if (!ts) return '';
+        const days = Math.floor((Date.now() - ts) / 86400000);
+        return days <= 0 ? 'Active today' : days === 1 ? 'Active yesterday' : days < 7 ? `Active ${days} days ago` : days < 30 ? `Active ${Math.floor(days / 7)} week${days < 14 ? '' : 's'} ago` : '';
+    };
+    const tag = (status) => status === 'brethren' ? '<span class="badge-joined">Brethren</span>'
+        : status === 'pending_sent' ? '<span class="community-user-tag">Request sent</span>'
+        : status === 'pending_received' ? '<span class="community-user-tag">Wants to connect</span>' : '';
+    list.innerHTML = `
+        <p class="community-users-count">${people.length} ${people.length === 1 ? 'person' : 'people'}</p>
+        ${people.slice(0, CommunityUsers.shown).map(u => {
+            const joined = u.createdAt ? `Joined ${new Date(u.createdAt).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}` : '';
+            const meta = [joined, activeLabel(u.lastActiveAt)].filter(Boolean).join(' · ');
+            return `
+                <div class="group-card community-user" onclick="viewUserProfile('${escapeHtml(u.uid)}', '${escapeHtml(u.username).replace(/'/g, "\\'")}')">
+                    <div class="post-avatar community-user-avatar">${u.avatar ? `<img src="${escapeHtml(u.avatar)}" alt="" loading="lazy">` : escapeHtml(u.username.charAt(0).toUpperCase())}</div>
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(u.username)}</div>
+                        ${u.bio ? `<div style="font-size: 12px; color: var(--text-slate); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(u.bio)}</div>` : ''}
+                        ${meta ? `<div style="font-size: 11px; color: var(--text-slate); margin-top: 2px;">${meta}</div>` : ''}
+                    </div>
+                    ${tag(AppState.userConnections.get(u.uid))}
+                </div>`;
+        }).join('')}
+        ${people.length > CommunityUsers.shown ? `<button class="btn btn-outline btn-block mt-2" onclick="showMoreCommunityUsers()">Show more</button>` : ''}
+    `;
+}
 async function loadCommunityGroups() {
     const container = $('#groups-list');
     if (!container) return;
@@ -552,6 +726,7 @@ async function renderViewProfilePage() {
                 </div>
                 <h2 style="font-weight: 700; margin-top: 8px;">${name}</h2>
                 <p style="color: var(--text-slate);">${escapeHtml(profile.bio || 'No bio yet')}</p>
+                ${typeof faithLineHTML === 'function' ? faithLineHTML(profile) : ''}
                 ${status === 'pending_received' ? `<p style="font-size: 12px; color: var(--text-slate); margin-top: 4px;">Sent you a connection request</p>` : ''}
             </div>
 
@@ -1296,6 +1471,9 @@ function renderProfilePage() {
                 </button>
             </div>
 
+            <!-- Faithfulness: the three daily streaks averaged into points and a title -->
+            ${typeof faithCardHTML === 'function' ? faithCardHTML() : ''}
+
             <!-- Your Journey (moved from Home — sits just before Recent Activity) -->
             <div class="card mb-3">
                 <h3 style="font-weight: 700; margin-bottom: 16px;">Your Journey</h3>
@@ -1761,6 +1939,7 @@ function editProfile() {
             });
             // Keep the admin directory in step (best-effort).
             database.ref(`userDirectory/${AppState.currentUser.uid}/username`).set(username).catch(() => {});
+            setTimeout(() => { if (typeof syncPublicProfile === 'function') syncPublicProfile(); }, 0);
 
             AppState.userProfile = {
                 ...AppState.userProfile,

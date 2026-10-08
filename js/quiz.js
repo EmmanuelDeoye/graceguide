@@ -219,6 +219,21 @@ function resolveVerseReferenceLink(reference) {
     return parsed ? { book: parsed.book, chapter: parsed.chapter } : null;
 }
 
+/** Quiz XP for one attempt: 20 for taking part + 1 per percentage point scored (20–120). */
+function quizXpForAttempt(score, total) {
+    return 20 + (total > 0 ? Math.round((score / total) * 100) : 0);
+}
+
+/** A player's all-time Quiz XP. Entries saved before XP existed are worked out from
+    their totals (every quiz at the player's average percentage). */
+function quizXpOf(entry) {
+    if (!entry) return 0;
+    if (typeof entry.xp === 'number') return entry.xp;
+    const quizzes = entry.totalQuizzes || 0;
+    const pct = entry.totalPossible > 0 ? (entry.totalScore / entry.totalPossible) * 100 : 0;
+    return Math.round(quizzes * (20 + pct));
+}
+
 async function fetchAllTimeLeaderboard() {
     try {
         const snap = await database.ref('quizLeaderboardAllTime').once('value');
@@ -228,7 +243,11 @@ async function fetchAllTimeLeaderboard() {
         // accumulated percentage first, and when two people are tied on
         // that, the one who has spent LESS total time across all their
         // attempts ranks higher.
-        entries.sort((a, b) => (b.accumulatedPercentage - a.accumulatedPercentage) || ((a.totalTimeTakenSeconds ?? 9e9) - (b.totalTimeTakenSeconds ?? 9e9)));
+        // Ranked by Quiz XP, which grows with every quiz taken AND with how well it went
+        // (see quizXpForAttempt) — so taking part week after week counts, not just one
+        // high percentage. Ties: higher accumulated percentage, then less total time.
+        entries.forEach(e => { e.xp = quizXpOf(e); });
+        entries.sort((a, b) => (b.xp - a.xp) || ((b.accumulatedPercentage || 0) - (a.accumulatedPercentage || 0)) || ((a.totalTimeTakenSeconds ?? 9e9) - (b.totalTimeTakenSeconds ?? 9e9)));
         return entries;
     } catch (e) {
         console.error('Error loading all-time leaderboard:', e);
@@ -271,6 +290,7 @@ async function recordQuizCompletion(uid, name, result, roundStartTime) {
 
         await allTimeRef.set({
             name,
+            xp: quizXpOf(existing) + quizXpForAttempt(result.score, result.total),
             totalQuizzes,
             totalScore,
             totalPossible,
@@ -346,53 +366,35 @@ async function renderHomeQuizCard() {
         `;
     }
 
-    // 'countdown' (next round hasn't started) or 'ended' (current round's
-    // 24h window closed). Either way: show a countdown card if there's a
-    // genuinely future date to count down to, and — importantly — never
-    // show a blank "0 participants" leaderboard. If the CURRENT round has
-    // no participants yet (either because it hasn't started, or because
-    // it closed with nobody taking part), fall back to the most recent
-    // archived round that actually has participants, so last week's
-    // results stay visible on Home right up until the next D-Day.
-    const currentParticipants = getSortedParticipants(data);
-    let displayParticipants = currentParticipants;
-    let displayLabel = "This Week's Leaderboard";
-
-    if (currentParticipants.length === 0) {
-        try {
-            const history = await fetchQuizHistory();
-            const lastRoundWithData = history.find(r => Object.keys(r.participants || {}).length > 0);
-            if (lastRoundWithData) {
-                displayParticipants = getSortedParticipants(lastRoundWithData);
-                displayLabel = 'Last Session Leaderboard';
-            }
-        } catch (e) {
-            console.error('Error loading previous round for leaderboard fallback:', e);
-        }
+    // 'countdown' (next round hasn't started) or 'ended' (this round's window
+    // closed). Home only shows a card that leads to the Quiz page — the
+    // leaderboards (this week's and all-time) live there.
+    if (state === 'countdown') {
+        return `
+            <div class="card mb-4 quiz-home-card quiz-home-countdown" onclick="navigateTo('quiz')">
+                <div class="quiz-home-header">
+                    <span class="quiz-home-label"><i class="fas fa-trophy"></i> Weekly Bible Quiz</span>
+                    <span class="quiz-home-tag">Starts soon</span>
+                </div>
+                <p class="quiz-home-sub">Time until the next quiz opens:</p>
+                <div class="quiz-home-countdown-number" id="home-quiz-countdown" data-start="${data.startTime}">${formatBigCountdown(data.startTime - Date.now())}</div>
+                <button class="btn btn-outline btn-sm mt-2" onclick="event.stopPropagation(); shareUpcomingQuizCard(${data.startTime})">
+                    <i class="fas fa-share"></i> Invite Others
+                </button>
+            </div>
+        `;
     }
 
-    const countdownHTML = state === 'countdown' ? `
-        <div class="card mb-4 quiz-home-card quiz-home-countdown" onclick="navigateTo('quiz')">
+    return `
+        <div class="card mb-4 quiz-home-card quiz-home-none" onclick="navigateTo('quiz')">
             <div class="quiz-home-header">
                 <span class="quiz-home-label"><i class="fas fa-trophy"></i> Weekly Bible Quiz</span>
-                <span class="quiz-home-tag">Starts soon</span>
+                <span class="quiz-home-tag">View results</span>
             </div>
-            <p class="quiz-home-sub">Time until the next quiz opens:</p>
-            <div class="quiz-home-countdown-number" id="home-quiz-countdown" data-start="${data.startTime}">${formatBigCountdown(data.startTime - Date.now())}</div>
-            <button class="btn btn-outline btn-sm mt-2" onclick="event.stopPropagation(); shareUpcomingQuizCard(${data.startTime})">
-                <i class="fas fa-share"></i> Invite Others
-            </button>
+            <p class="quiz-home-sub">This week's quiz has closed — see the results and the leaderboard.</p>
         </div>
-    ` : '';
-
-    lastLeaderboardParticipants = displayParticipants;
-    const leaderboardHTML = renderHomeLeaderboardCard(displayParticipants, displayLabel);
-    // Load all-time data asynchronously so it doesn't block the page render
-    setTimeout(loadAllTimeLeaderboardCarousel, 0);
-    setTimeout(() => syncLeaderboardCarouselHeight(0), 0);
-    return countdownHTML + leaderboardHTML;
+    `;
 }
-
 function renderHomeLeaderboardCard(participants, label = "This Week's Leaderboard") {
     const top5 = participants.slice(0, 5);
     return `
@@ -453,8 +455,8 @@ async function loadAllTimeLeaderboardCarousel() {
             ${top5.map((p, i) => `
                 <div class="quiz-leaderboard-row" onclick="event.stopPropagation(); viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
                     <span class="quiz-leaderboard-rank">#${i + 1}</span>
-                    <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}<span class="quiz-leaderboard-subtext"> · ${p.totalQuizzes} quiz${p.totalQuizzes === 1 ? '' : 'zes'}</span></span>
-                    <span class="quiz-leaderboard-score">${p.accumulatedPercentage}%</span>
+                    <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}<span class="quiz-leaderboard-subtext"> · ${p.totalQuizzes} quiz${p.totalQuizzes === 1 ? '' : 'zes'} · ${p.accumulatedPercentage}%</span></span>
+                    <span class="quiz-leaderboard-score">${quizXpOf(p)} XP</span>
                 </div>
             `).join('')}
         </div>
@@ -594,8 +596,8 @@ async function showFullAllTimeLeaderboardModal() {
     body.innerHTML = entries.length > 0 ? entries.map((p, i) => `
         <div class="quiz-leaderboard-row" onclick="viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
             <span class="quiz-leaderboard-rank">#${i + 1}</span>
-            <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}<span class="quiz-leaderboard-subtext"> · ${p.totalQuizzes} quiz${p.totalQuizzes === 1 ? '' : 'zes'}</span></span>
-            <span class="quiz-leaderboard-score">${p.accumulatedPercentage}%</span>
+            <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}<span class="quiz-leaderboard-subtext"> · ${p.totalQuizzes} quiz${p.totalQuizzes === 1 ? '' : 'zes'} · ${p.accumulatedPercentage}%</span></span>
+            <span class="quiz-leaderboard-score">${quizXpOf(p)} XP</span>
         </div>
     `).join('') : `<p class="text-center text-muted">No accumulated scores yet.</p>`;
 }
@@ -789,8 +791,8 @@ async function renderQuizPageAllTimeSection() {
     list.innerHTML = entries.length > 0 ? entries.map((p, i) => `
         <div class="quiz-leaderboard-row" onclick="viewUserProfile('${p.uid}', '${escapeHtml(p.name || 'Anonymous').replace(/'/g, "\\'")}')">
             <span class="quiz-leaderboard-rank">#${i + 1}</span>
-            <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}<span class="quiz-leaderboard-subtext"> · ${p.totalQuizzes} quiz${p.totalQuizzes === 1 ? '' : 'zes'}</span></span>
-            <span class="quiz-leaderboard-score">${p.accumulatedPercentage}%</span>
+            <span class="quiz-leaderboard-name">${escapeHtml(p.name || 'Anonymous')}<span class="quiz-leaderboard-subtext"> · ${p.totalQuizzes} quiz${p.totalQuizzes === 1 ? '' : 'zes'} · ${p.accumulatedPercentage}%</span></span>
+            <span class="quiz-leaderboard-score">${quizXpOf(p)} XP</span>
         </div>
     `).join('') : `<p class="text-center text-muted">No accumulated scores yet.</p>`;
 }

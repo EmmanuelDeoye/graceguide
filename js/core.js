@@ -617,6 +617,24 @@ async function syncUserDirectoryAndActivity(user) {
     } catch (error) {
         console.error('Error syncing user directory/activity:', error);
     }
+    syncPublicProfile();
+}
+
+/** Keeps this account's public card (Community → Users) up to date:
+    publicProfiles/{uid} = name, photo, short bio, joined, last active — and
+    nothing private (no email). Best-effort and separate from the writes
+    above, so it can never hold them up. */
+function syncPublicProfile() {
+    const user = AppState.currentUser;
+    if (!user) return;
+    const profile = AppState.userProfile || {};
+    database.ref(`publicProfiles/${user.uid}`).set({
+        username: String(profile.username || user.email?.split('@')[0] || 'User').slice(0, 60),
+        avatar: profile.avatar || '',
+        bio: String(profile.bio || '').slice(0, 140),
+        createdAt: profile.createdAt || Date.now(),
+        lastActiveAt: Date.now()
+    }).catch(() => {});
 }
 
 /**
@@ -699,6 +717,8 @@ async function loadUserData() {
     // Start realtime listeners (notifications, chat unread, forum unread) —
     // these update live via Firebase's .on('value'), no refresh needed.
     if (typeof startRealtimeListeners === 'function') startRealtimeListeners();
+    // Keep my public Faithfulness title current (devotion + study + games streaks).
+    if (typeof publishFaith === 'function') setTimeout(publishFaith, 4000);
     // Game invitations (Play & Learn) pop up on whatever page the user is on.
     if (window.GamesUI) GamesUI.onSignedIn();
     // Load the personalization profile (books/tags of interest)
@@ -1532,7 +1552,7 @@ function updateNavigation(route) {
         bible: 'Bible',
         ask: 'Shepherd',
         space: 'Space',
-        community: 'Forum',
+        community: 'Community',
         planner: 'Study Planner',
         messages: 'Chats',
         profile: 'My Profile',
@@ -2549,6 +2569,7 @@ async function renderDevotionalPage() {
                 <div class="devotional-hero-label">Daily Devotional</div>
                 <h2 class="devotional-hero-title">${escapeHtml(devotional.title || "Today's Devotional")}</h2>
                 <div class="devotional-hero-date">${formatDate(devotional.generatedAt || Date.now())}</div>
+                <div id="devotion-streak-slot">${typeof devotionStreakHTML === 'function' ? devotionStreakHTML() : ''}</div>
             </div>
 
             <div class="card mb-3">
@@ -2594,6 +2615,14 @@ async function renderDevotionalPage() {
             </div>
         </div>
     `;
+
+    // The streak is read fresh (it may have moved on another device).
+    if (typeof loadDevotionStreak === 'function') {
+        loadDevotionStreak().then(() => {
+            const slot = document.getElementById('devotion-streak-slot');
+            if (slot) slot.innerHTML = devotionStreakHTML();
+        });
+    }
 }
 
 async function markDevotionalDone() {
@@ -2607,7 +2636,9 @@ async function markDevotionalDone() {
 
     try {
         await database.ref(`users/${uid}/devotionals/${todayKey}`).update({ completed: true, completedAt });
-        showToast('Devotional marked as done', 'success');
+        // Devotion streak: one more day (or day one).
+        const streak = typeof recordDevotionStreak === 'function' ? await recordDevotionStreak() : null;
+        showToast(streak && streak.c > 1 ? `Devotional done — ${streak.c}-day devotion streak 🔥` : 'Devotional marked as done', 'success');
     } catch (error) {
         console.error('Error marking devotional done:', error);
         showToast('Could not save — please try again.', 'error');

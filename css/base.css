@@ -79,6 +79,12 @@
     /* Layout */
     --bottom-nav-height: 68px;
     --top-bar-height: 56px;
+    /* iPhone notch / Dynamic Island / home indicator. The page is drawn edge to edge
+       (viewport-fit=cover, translucent status bar), so everything pinned to the top must
+       start BELOW the status bar: --top-offset is where page content begins. */
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --top-offset: calc(var(--top-bar-height) + var(--safe-top));
     --sidebar-width: 280px;
     --max-content-width: 768px;
 }
@@ -129,7 +135,15 @@ body {
     line-height: 1.6;
     overflow: hidden;
     height: 100vh;
-    width: 100vw;
+    height: 100dvh; /* iOS Safari: 100vh is taller than what is visible while the toolbars show */
+    width: 100%;
+    /* Pin the page itself: iOS otherwise scrolls/rubber-bands the whole document (e.g. when
+       the keyboard opens), dragging the fixed top bar off the top of the screen. Only the
+       page container scrolls. */
+    position: fixed;
+    top: 0;
+    left: 0;
+    overscroll-behavior: none;
     transition: background-color var(--transition-base), color var(--transition-base);
 }
 
@@ -140,6 +154,7 @@ body {
     position: relative;
     width: 100%;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
     background-color: var(--bg-warm-ivory);
 }
@@ -272,13 +287,15 @@ body {
     top: 0;
     left: 0;
     right: 0;
-    height: var(--top-bar-height);
+    height: var(--top-offset);
+    box-sizing: border-box;
     background: var(--card-white);
     border-bottom: 1px solid rgba(0,0,0,0.06);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 var(--spacing-md);
+    /* Keep the buttons clear of the notch (portrait) and the rounded corners (landscape). */
+    padding: var(--safe-top) calc(var(--spacing-md) + env(safe-area-inset-right, 0px)) 0 calc(var(--spacing-md) + env(safe-area-inset-left, 0px));
     z-index: 100;
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
@@ -401,6 +418,9 @@ body {
     width: var(--sidebar-width);
     background: var(--card-white);
     z-index: 201;
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+    box-sizing: border-box;
     transform: translateX(-100%);
     transition: transform var(--transition-base);
     display: flex;
@@ -516,7 +536,7 @@ body {
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    padding-top: var(--top-bar-height);
+    padding-top: var(--top-offset);
     padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + var(--spacing-lg));
     -webkit-overflow-scrolling: touch;
     scroll-behavior: smooth;
@@ -639,7 +659,7 @@ body {
    ============================================ */
 .toast-container {
     position: fixed;
-    top: var(--top-bar-height);
+    top: var(--top-offset);
     right: var(--spacing-md);
     z-index: 300;
     display: flex;

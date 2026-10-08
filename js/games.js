@@ -16,11 +16,12 @@
    ============================================ */
 (function () {
     'use strict';
-    var Core = window.GamesCore, BANK = window.GAMES_BANK, Play = window.GamesPlay;
+    var Core = window.GamesCore, BANK = window.GAMES_BANK, Play = window.GamesPlay, AI = window.GamesAI || null;
     var net = null;
     var live = { session: null, stage: null, roomId: null, finished: false, results: null, award: null };
     var invites = { stop: null, cards: {} };
     var profileCache = null;
+    var rematchAuto = null; // { roomId, need }: the rematch room this screen created; it starts once that many players are in
     var openTicket = 0; // only the latest openRoom() call may attach its session
 
     var esc = function (s) { return escapeHtml(String(s == null ? '' : s)); };
@@ -36,7 +37,8 @@
                     get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
                     set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } }
                 },
-                notify: function (toUid, n) { if (typeof addNotification === 'function') addNotification(toUid, n); }
+                notify: function (toUid, n) { if (typeof addNotification === 'function') addNotification(toUid, n); },
+                customQuestions: function (game, level) { return AI && level && AI.LEVELS[level] ? AI.take(game, level) : null; }
             });
         }
         return net;
@@ -87,16 +89,37 @@
         var v = live.session && live.session._view;
         return !!v && !live.session.solo && v.phase !== 'lobby' && !live.finished;
     }
+    /** An online room I am in — lobby or game — that is not over yet. It is never left by accident. */
+    function liveRoomOpen() { return !!live.session && !live.session.solo && !live.finished; }
+    /** Looking at another page: the room stays mine (seat, game clock) and a pill leads back to it. */
+    function keepRoomInBackground() {
+        if (live.stage) { live.stage.destroy(); live.stage = null; }
+        live.session.onUpdate = function (view) { updatePill(); backgroundUpdate(view); };
+        showPill();
+    }
+    /**
+     * One room at a time. If I am already in a room (lobby or game), anything that would start
+     * another one sends me back to it instead — it is only ever left with Leave / Cancel.
+     */
+    function busyWithRoom(replace) {
+        if (!liveRoomOpen()) return false;
+        showToast(liveGameRunning() ? 'Finish your current game first.' : 'You already have a room open — leave or cancel it first.', 'info');
+        go('room', live.roomId, replace);
+        return true;
+    }
     /** Called by navigateTo() for every navigation. */
     function onNavigate(route) {
+        stopBoards();
         if (route === 'play') { hidePill(); return; }
         if (!live.session) return;
-        if (liveGameRunning()) {
-            // Wandered off mid-game: keep the game ticking and offer a way back.
-            if (live.stage) { live.stage.destroy(); live.stage = null; }
-            live.session.onUpdate = function () { updatePill(); };
-            showPill();
-        } else closeLive(!live.finished); // lobby or solo: just leave it
+        // Only the Leave / Cancel buttons ever take a player out of a room. Wandering to
+        // another page (or the phone redrawing this one) must not.
+        if (liveRoomOpen()) keepRoomInBackground();
+        else closeLive(false); // a finished game or a solo game: nothing to keep
+    }
+    /** While the room is in the background: a rematch host still starts it when everyone is back. */
+    function backgroundUpdate(view) {
+        if (view.phase === 'lobby') maybeAutoStart(view);
     }
     function showPill() {
         if ($id('pl-return-pill')) return;
@@ -111,6 +134,7 @@
         var pill = $id('pl-return-pill'), v = live.session && live.session._view;
         if (!pill || !v) return;
         pill.innerHTML = v.phase === 'done' ? '<i class="fas fa-flag-checkered"></i> Game finished — see results'
+            : v.phase === 'lobby' ? '<i class="fas fa-door-open"></i> Your room is open (' + v.seated.length + ' in) — tap to return'
             : '<i class="fas fa-bolt"></i> Your game is live — tap to return';
     }
     function hidePill() { var p = $id('pl-return-pill'); if (p) p.remove(); }
@@ -149,8 +173,10 @@
             '<div class="pl-join"><input id="pl-code-input" class="form-input" maxlength="5" autocapitalize="characters" autocomplete="off" placeholder="Room code">' +
             '<button class="btn btn-primary" onclick="GamesUI.joinTyped()"><i class="fas fa-right-to-bracket"></i> Join</button></div>' +
             '<div class="pl-row-links"><button class="btn btn-outline btn-sm" onclick="GamesUI.go(\'leaderboard\')"><i class="fas fa-ranking-star"></i> Leaderboard</button>' +
-            '<button class="btn btn-outline btn-sm" onclick="GamesUI.showBadges()"><i class="fas fa-award"></i> Badges</button></div>' +
-            '<div id="pl-top-slot"></div>');
+            '<button class="btn btn-outline btn-sm" onclick="GamesUI.showBadges()"><i class="fas fa-award"></i> Badges</button>' +
+            '<button class="btn btn-outline btn-sm" onclick="GamesUI.showTour()"><i class="fas fa-circle-question"></i> How to play</button></div>' +
+            '<div id="pl-mine-slot"></div><div id="pl-top-slot"></div>');
+        maybeShowTour();
         var input = $id('pl-code-input');
         input.addEventListener('keydown', function (e) { if (e.key === 'Enter') joinTyped(); });
         if (!u) return;
@@ -166,15 +192,61 @@
             sub.textContent = 'Done today — ' + s.correct + '/' + s.total + ' correct, ' + s.score + ' points. See how others did.';
             card.classList.add('pl-daily-done');
         }).catch(function () {});
-        n.leaderboard(5).then(function (rows) {
+        boards.stops.push(n.watchLeaderboard(5, function (rows) {
             var slot = $id('pl-top-slot');
-            if (!slot || !rows.length) return;
-            slot.innerHTML = '<h3 class="pl-section">Top players</h3><div class="card pl-board">' + boardRows(rows, u.uid) + '</div>';
+            if (!slot || !rows || !rows.length) return;
+            slot.innerHTML = '<h3 class="pl-section">Top players <span class="pl-live"><span></span> Live</span></h3><div class="card pl-board">' + boardRows(rows, u.uid) + '</div>';
+        }));
+        loadMyGames();
+    }
+
+    /** "My games": rooms I created or joined in the last three days — waiting rooms to go back to, results to look at again. */
+    function loadMyGames() {
+        getNet().myGames().then(function (list) {
+            var slot = $id('pl-mine-slot');
+            if (!slot || !list.length) return;
+            slot.innerHTML = '<h3 class="pl-section">My games <span>kept for 3 days</span></h3><div class="card pl-players">' + list.slice(0, 8).map(function (g) {
+                var cfg = Core.GAMES[g.game];
+                if (!cfg) return '';
+                var left = Math.max(0, getNet().KEEP_MS - (getNet().now() - g.t)), hours = Math.ceil(left / 3600000);
+                return '<button class="pl-player pl-player-btn" onclick="GamesUI.go(\'room\', \'' + esc(g.roomId) + '\')"><span class="pl-mode-icon"><i class="fas ' + cfg.icon + '"></i></span>' +
+                    '<span class="pl-player-name">' + esc(cfg.name) + ' <small>' + (g.kind === 'duel' ? '1v1' : 'Room') + (g.code ? ' · ' + esc(g.code) : '') + '</small></span>' +
+                    '<span class="pl-tag pl-tag-away">' + (hours >= 24 ? Math.ceil(hours / 24) + 'd left' : hours + 'h left') + '</span></button>';
+            }).join('') + '</div>';
         }).catch(function () {});
     }
 
-    function boardRows(rows, myUid, valueOf) {
+    // ---------- first visit: a short tour (skippable) ----------
+
+    var TOUR = [
+        ['fa-gamepad', 'Welcome to Play & Learn', 'Five Bible games that send you back to the Word. Every answer shows its Scripture — tap the reference to read it.'],
+        ['fa-compass', 'Finding your way', 'Pick a game, then how to play: <strong>Solo</strong>, <strong>Quick Match</strong> (1v1 with whoever is online), <strong>Challenge a Brethren</strong>, or <strong>Create a Room</strong> for up to 8 with a code. Have a code? Type it under the games and tap Join.'],
+        ['fa-stopwatch', 'The rules', 'Everyone gets the same question and the same timer. Right answers score; faster answers and streaks score more. You can’t change an answer once it is locked in. In Bible Wordle you have six guesses.'],
+        ['fa-sliders', 'Levels and fresh questions', 'Choose Easy, Medium or Hard on a game’s page. New questions are written for that level and checked against the Bible text before you see them.'],
+        ['fa-fire', 'Come back daily', 'The Daily Challenge is five questions, one try. Playing each day keeps your streak, earns XP and badges, and counts toward your Faithfulness title.']
+    ];
+    function showTour(step) {
+        step = step || 0;
+        var s = TOUR[step], last = step === TOUR.length - 1;
+        // Counted as seen once the player acts on it (Skip / Next) — not merely when it opens,
+        // because the page can redraw underneath it (e.g. while sign-in completes) and close it.
+        var seen = function () { try { localStorage.setItem('gg_games_tour_seen', '1'); } catch (e) { /* private mode */ } };
+        showModal('<div class="pl-tour"><div class="pl-tour-icon"><i class="fas ' + s[0] + '"></i></div><h3>' + s[1] + '</h3><p>' + s[2] + '</p>' +
+            '<div class="pl-tour-dots">' + TOUR.map(function (x, i) { return '<span' + (i === step ? ' class="on"' : '') + '></span>'; }).join('') + '</div>' +
+            '<div class="pl-tour-actions">' + (last ? '' : '<button class="btn btn-outline" id="pl-tour-skip">Skip</button>') +
+            '<button class="btn btn-primary" id="pl-tour-next">' + (last ? 'Start playing' : 'Next') + '</button></div></div>');
+        if ($id('pl-tour-skip')) $id('pl-tour-skip').onclick = function () { seen(); closeModal(); };
+        $id('pl-tour-next').onclick = function () { seen(); if (last) closeModal(); else showTour(step + 1); };
+    }
+    function maybeShowTour() {
+        var seen = false;
+        try { seen = !!localStorage.getItem('gg_games_tour_seen'); } catch (e) { seen = true; }
+        if (!seen) setTimeout(function () { if (AppState.currentRoute === 'play' && !AppState.modalOpen) showTour(0); }, 500);
+    }
+
+    function boardRows(rows, myUid, valueOf, firstIndex) {
         return rows.map(function (r, i) {
+            i += firstIndex || 0;
             var lvl = Core.level(r.xp || 0);
             return '<div class="pl-board-row' + (r.uid === myUid ? ' pl-board-me' : '') + '" onclick="viewUserProfile(\'' + esc(r.uid) + '\')">' +
                 '<span class="pl-board-rank' + (i < 3 ? ' pl-board-top' + (i + 1) : '') + '">' + (i + 1) + '</span>' +
@@ -196,6 +268,8 @@
         page(
             '<div class="pl-hero pl-game-card-' + id + '"><span class="pl-game-icon"><i class="fas ' + g.icon + '"></i></span><h2>' + esc(g.name) + '</h2><p>' + esc(g.tagline) + '</p>' +
             '<small>' + g.rounds + ' round' + (g.rounds === 1 ? '' : 's') + ' · ' + g.secs + ' seconds each</small></div>' +
+            (AI ? '<div class="pl-levels"><div class="pl-levels-head"><strong>Level</strong><small id="pl-level-note"></small></div><div class="pl-level-pick">' +
+                Object.keys(AI.LEVELS).map(function (l) { return '<button data-level="' + l + '"><strong>' + AI.LEVELS[l].label + '</strong><small>' + AI.LEVELS[l].about + '</small></button>'; }).join('') + '</div></div>' : '') +
             '<div class="pl-modes">' +
             mode('solo', 'fa-user', 'Solo', 'Practise at your own pace') +
             mode('quick', 'fa-bolt', 'Quick Match', '1v1 against whoever is online') +
@@ -205,6 +279,20 @@
         DOM.pageContainer.querySelectorAll('[data-mode]').forEach(function (b) {
             b.onclick = function () { startMode(id, b.getAttribute('data-mode')); };
         });
+        if (!AI) return;
+        // The level the host picks decides how hard the AI-written questions are.
+        function drawLevel() {
+            var level = AI.getLevel(), note = $id('pl-level-note');
+            DOM.pageContainer.querySelectorAll('[data-level]').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-level') === level); });
+            if (note) note.innerHTML = AI.ready(id, level) ? '<i class="fas fa-circle-check"></i> Fresh questions ready' : (AI.busy(id, level) ? '<i class="fas fa-wand-magic-sparkles"></i> Preparing fresh questions…' : 'Classic questions until fresh ones are ready');
+        }
+        DOM.pageContainer.querySelectorAll('[data-level]').forEach(function (b) {
+            b.onclick = function () { AI.setLevel(b.getAttribute('data-level')); AI.refill(id, AI.getLevel()); drawLevel(); };
+        });
+        AI.refill(id, AI.getLevel());
+        drawLevel();
+        var onPool = function (e) { if (!$id('pl-level-note')) { document.removeEventListener('gg-ai-pool', onPool); return; } if (e.detail.game === id) drawLevel(); };
+        document.addEventListener('gg-ai-pool', onPool);
     }
     function mode(key, icon, title, sub) {
         return '<button class="pl-mode" data-mode="' + key + '"><span class="pl-mode-icon"><i class="fas ' + icon + '"></i></span><span><strong>' + title + '</strong><small>' + sub + '</small></span><i class="fas fa-chevron-right"></i></button>';
@@ -212,9 +300,10 @@
     function startMode(game, how) {
         if (how === 'solo') { go('solo', game); return; }
         if (!requireAuth('Sign in to play with others.', function () { startMode(game, how); })) return;
+        if (busyWithRoom()) return;
         var n = getNet();
         loading(how === 'quick' ? 'Looking for an opponent…' : 'Setting up your room…');
-        var p = how === 'quick' ? n.quickMatch(game) : n.createRoom(game, how === 'duel' ? 'duel' : 'room', false);
+        var p = how === 'quick' ? n.quickMatch(game, AI ? AI.getLevel() : null) : n.createRoom(game, how === 'duel' ? 'duel' : 'room', false, AI ? AI.getLevel() : null);
         p.then(function (r) { go('room', r.roomId, true); }, function (err) { showToast(errorText(err), 'error'); go(game, null, true); });
     }
 
@@ -223,7 +312,9 @@
     function openRoom(roomId) {
         if (!requireAuth('Sign in to join this game.')) { page('<div class="pl-stage pl-center"><p class="pl-waiting">Sign in to join this game.</p></div>'); return; }
         if (live.session && live.roomId === roomId && !live.session.solo) { attachRoom(); return; } // coming back via the pill
-        closeLive(true);
+        // Opening another room never pulls me out of a game that is being played.
+        if (busyWithRoom(true)) return;
+        closeLive(false);
         loading('Joining…');
         var n = getNet(), ticket = ++openTicket;
         n.joinRoom(roomId).then(function () { return n.openRoom(roomId); }).then(function (session) {
@@ -233,7 +324,9 @@
         }).catch(function (err) { roomError(err); });
     }
     function roomError(err) {
-        var msg = { 'not-found': 'That room no longer exists.', started: 'That game has already started.', full: 'That room is full.', left: 'You left this game.' }[err && err.code] || errorText(err);
+        // A room that is gone (cancelled by its host, or past its three days) leaves "my games".
+        if (err && err.code === 'not-found' && AppState.playRoute && AppState.playRoute.sub === 'room' && AppState.playRoute.arg) { try { getNet().forgetGame(AppState.playRoute.arg); } catch (e) { /* signed out */ } }
+        var msg = { 'not-found': 'That room no longer exists. It may have been cancelled by its host, or its three days are up.', started: 'That game has already started.', full: 'That room is full.', left: 'You left this game.' }[err && err.code] || errorText(err);
         page('<div class="pl-stage pl-center"><i class="fas fa-door-closed pl-big-icon"></i><h3>' + esc(msg) + '</h3>' +
             '<button class="btn btn-primary" onclick="GamesUI.go()">Back to Play &amp; Learn</button></div>');
     }
@@ -251,7 +344,7 @@
         s.onUpdate = function (view) {
             if (!$id('pl-room')) return;
             if (view.room.rematch && live.finished && !live.followed) offerRematch(view.room.rematch);
-            if (view.phase === 'lobby') { if (live.stage) { live.stage.destroy(); live.stage = null; } renderLobby(box, view); lastPhase = 'lobby'; return; }
+            if (view.phase === 'lobby') { if (live.stage) { live.stage.destroy(); live.stage = null; } renderLobby(box, view); maybeAutoStart(view); lastPhase = 'lobby'; return; }
             if (view.phase === 'done' && s.resultsReady()) { finishRoom(box); return; }
             if (!live.stage) {
                 if (AppState.sheetOpen && typeof closeSheet === 'function') closeSheet(); // e.g. the invite list, still open when the game starts
@@ -273,13 +366,16 @@
     function renderLobby(box, view) {
         var s = live.session, meta = view.room.meta, g = Core.GAMES[meta.game];
         var max = Core.MAX_PLAYERS[meta.kind], seated = view.seated;
-        var key = 'lobby:' + seated.map(function (u) { return u + (view.room.players[u].online === false ? '-' : '+'); }).join(',') + ':' + view.canStart;
+        var isHost = meta.hostUid === s.uid, level = meta.level && AI && AI.LEVELS[meta.level] ? meta.level : null;
+        var aiReady = !!(level && AI.ready(meta.game, level)), auto = rematchAuto && rematchAuto.roomId === live.roomId ? rematchAuto : null;
+        var key = 'lobby:' + seated.map(function (u) { return u + (view.room.players[u].online === false ? '-' : '+'); }).join(',') + ':' + view.canStart + ':' + aiReady + ':' + !!auto;
         if (box.getAttribute('data-key') === key) return;
         box.setAttribute('data-key', key);
         var searching = meta.public && seated.length < 2;
         box.innerHTML =
             '<div class="pl-hero pl-game-card-' + meta.game + '"><span class="pl-game-icon"><i class="fas ' + g.icon + '"></i></span><h2>' + esc(g.name) + '</h2>' +
-            '<p>' + (meta.kind === 'duel' ? '1v1' : 'Room · up to ' + max + ' players') + '</p></div>' +
+            '<p>' + (meta.kind === 'duel' ? '1v1' : 'Room · up to ' + max + ' players') + (level ? ' · ' + AI.LEVELS[level].label : '') + '</p></div>' +
+            (auto ? '<div class="pl-searching"><div class="pl-spinner"></div><p>Rematch — waiting for the others to rejoin (' + seated.length + '/' + auto.need + ')</p><small>The game starts by itself when everyone is back.</small></div>' : '') +
             (searching ? '<div class="pl-searching"><div class="pl-spinner"></div><p>Looking for an opponent…</p><small>You’ll start automatically when someone joins. You can also invite a Brethren.</small></div>'
                 : '<div class="pl-code-card"><small>Room code</small><div class="pl-code">' + esc(meta.code) + '</div>' +
                   '<div class="pl-code-actions"><button class="btn btn-outline btn-sm" id="pl-copy-code"><i class="fas fa-copy"></i> Copy</button>' +
@@ -291,9 +387,16 @@
                     '<span class="pl-player-name">' + esc(nameOf(uid, p.name)) + (uid === s.uid ? ' <small>(you)</small>' : '') + '</span>' +
                     (uid === meta.hostUid ? '<span class="pl-tag">Host</span>' : '') + (p.online === false ? '<span class="pl-tag pl-tag-away">Away</span>' : '') + '</div>';
             }).join('') + '</div>' +
-            (meta.public ? '' : (view.canStart ? '<button class="btn btn-primary btn-block pl-start" id="pl-start"><i class="fas fa-play"></i> Start game</button>'
+            (isHost && level ? '<p class="pl-ai-note"><i class="fas ' + (aiReady ? 'fa-circle-check' : 'fa-wand-magic-sparkles') + '"></i> ' +
+                (aiReady ? 'Fresh ' + AI.LEVELS[level].label.toLowerCase() + ' questions are ready.'
+                    : AI.busy(meta.game, level) ? 'Preparing fresh ' + AI.LEVELS[level].label.toLowerCase() + ' questions… If you start before they are ready, the classic questions are used.'
+                    : 'Fresh questions aren’t ready yet — this game will use the classic questions.') + '</p>' : '') +
+            (meta.public ? '' : (view.canStart ? '<button class="btn btn-primary btn-block pl-start" id="pl-start"><i class="fas fa-play"></i> ' + (auto ? 'Start now' : 'Start game') + '</button>'
                 : '<p class="pl-waiting">' + (seated.length < 2 ? 'Waiting for at least one more player…' : 'Waiting for the host to start…') + '</p>')) +
-            '<button class="btn btn-outline btn-block pl-leave" id="pl-leave-lobby">Leave</button>';
+            (isHost ? '<button class="btn btn-outline btn-block pl-leave" id="pl-cancel-room"><i class="fas fa-ban"></i> Cancel room</button>'
+                : '<button class="btn btn-outline btn-block pl-leave" id="pl-leave-lobby">Leave</button>') +
+            '<p class="pl-foot">This room is kept for 3 days. You can leave this page and come back — your seat stays.</p>';
+        if (isHost && level && !aiReady) AI.refill(meta.game, level);
         var link = playUrl('join/' + meta.code);
         var text = 'Join my ' + g.name + ' game on GraceGuide! 🎮📖\nRoom code: ' + meta.code;
         if ($id('pl-copy-code')) $id('pl-copy-code').onclick = function () {
@@ -301,9 +404,35 @@
         };
         if ($id('pl-share-room')) $id('pl-share-room').onclick = function () { share(text, link); };
         $id('pl-invite').onclick = function () { showInviteSheet({ roomId: live.roomId, code: meta.code, game: meta.game, kind: meta.kind }); };
-        if ($id('pl-start')) $id('pl-start').onclick = function () { $id('pl-start').disabled = true; s.start(); };
-        $id('pl-leave-lobby').onclick = function () { closeLive(true); go(null, null, true); };
+        if ($id('pl-start')) $id('pl-start').onclick = function () { $id('pl-start').disabled = true; startRoomGame(s); };
+        if ($id('pl-leave-lobby')) $id('pl-leave-lobby').onclick = function () { closeLive(true); go(null, null, true); };
+        if ($id('pl-cancel-room')) $id('pl-cancel-room').onclick = function () {
+            showModal('<h3 style="margin-bottom:8px;">Cancel this room?</h3><p class="text-muted" style="margin-bottom:16px;">It closes for everyone and the code stops working.</p>' +
+                '<div style="display:flex; gap:8px;"><button class="btn btn-outline" style="flex:1" onclick="closeModal()">Keep it</button><button class="btn btn-primary" style="flex:1" id="pl-cancel-yes">Cancel room</button></div>');
+            $id('pl-cancel-yes').onclick = function () {
+                var id = live.roomId;
+                closeModal(); getNet().stopWaiting(); closeLive(false);
+                getNet().cancelRoom(id).catch(function () { showToast('Couldn’t cancel the room. Please try again.', 'error'); });
+                go(null, null, true);
+            };
+        };
     }
+
+    /** Starts an online game with verified AI questions at the room's level when they are ready, else the built-in bank. */
+    function startRoomGame(s) {
+        return s.start(); // the session itself picks verified AI questions for the room's level when ready
+    }
+    /** A rematch room starts by itself once everyone from the last game is back in (the screen that created it does this). */
+    function maybeAutoStart(view) {
+        var auto = rematchAuto, s = live.session;
+        if (!auto || !s || auto.roomId !== live.roomId || auto.started) return;
+        if (view.seated.length >= auto.need && view.canStart) { auto.started = true; startRoomGame(s); }
+    }
+    // The lobby shows whether the AI questions are ready; redraw when that changes.
+    document.addEventListener('gg-ai-pool', function () {
+        var box = $id('pl-room'), v = live.session && live.session._view;
+        if (box && v && v.phase === 'lobby' && !live.session.solo) renderLobby(box, v);
+    });
 
     function awardedKey() { var u = user(); return 'gg_games_awarded_' + (u ? u.uid : ''); }
     function awardedBefore(roomId) {
@@ -324,16 +453,31 @@
         var res = s.results(), mine = res.byUid[s.uid];
         live.results = res;
         // Re-opening a game that was already counted (back button, reload): no second award.
-        if (!mine || awardedBefore(live.roomId)) { live.award = { already: true }; renderResults(box, s, res, live.award); return; }
+        // The same goes for looking at an old game again (results are kept for three days).
+        var old = getNet().now() - res.timeline.finishedAt > 10 * 60000;
+        if (!mine || old || awardedBefore(live.roomId)) { live.award = { already: true }; renderResults(box, s, res, live.award); return; }
         renderResults(box, s, res, null);
         markAwarded(live.roomId);
+        if (typeof publishFaith === 'function') setTimeout(publishFaith, 6000); // the Play streak feeds the Faithfulness score
         getNet().award({ game: s.game, units: mine.units, totalUnits: res.totalUnits, win: mine.win, multiplayer: res.players >= 2, day: today(), minGuesses: mine.minGuesses, score: mine.score, roomId: live.roomId })
             .then(function (a) { live.award = a; profileCache = a.profile; if ($id('pl-results') && live.session === s) renderResults(box, s, res, a); })
             .catch(function () {});
     }
+    /**
+     * Someone tapped Rematch: everyone still looking at the results goes with them into the
+     * new room (same people, no searching). "Stay here" opts out.
+     */
     function offerRematch(newRoomId) {
         var btn = $id('pl-rematch');
-        if (btn) { btn.innerHTML = '<i class="fas fa-rotate-right"></i> Join the rematch'; btn.classList.add('pl-pulse'); btn.setAttribute('data-room', newRoomId); }
+        if (!btn || btn.getAttribute('data-room') === newRoomId) return;
+        btn.innerHTML = '<i class="fas fa-rotate-right"></i> Join the rematch'; btn.classList.add('pl-pulse'); btn.setAttribute('data-room', newRoomId);
+        if (live.rematchTimer || live.followed) return;
+        var note = document.createElement('div');
+        note.className = 'pl-rematch-note'; note.id = 'pl-rematch-note';
+        note.innerHTML = '<span><i class="fas fa-rotate-right"></i> Rematch! Taking you back in…</span><button class="btn btn-outline btn-sm" id="pl-rematch-stay">Stay here</button>';
+        btn.parentNode.insertBefore(note, btn);
+        $id('pl-rematch-stay').onclick = function () { clearTimeout(live.rematchTimer); live.rematchTimer = 'declined'; note.remove(); };
+        live.rematchTimer = setTimeout(function () { var b = $id('pl-rematch'); if (b && !b.disabled && $id('pl-results')) b.click(); }, 3000);
     }
 
     // ---------- results (shared by rooms, solo and the daily challenge) ----------
@@ -370,7 +514,7 @@
     function renderResults(box, s, res, award) {
         var me = s.uid, mine = res.byUid[me], multi = res.players >= 2, g = Core.GAMES[s.game];
         var items = s.room.plan.q.map(function (id, r) {
-            var q = Core.questionById(BANK, s.game, id);
+            var q = Core.roomQuestion(BANK, s.game, s.room.plan, r);
             return q ? { q: q, ok: !!(mine && mine.rounds[r] && mine.rounds[r].ok), label: answerLabel(s.game, q) } : null;
         }).filter(Boolean);
         var headline = !mine ? 'Game over' : multi ? (mine.win ? (res.ranking.filter(function (u) { return res.byUid[u].win; }).length > 1 ? 'It’s a tie!' : 'You won! 🎉') : ordinal(mine.rank) + ' place')
@@ -393,9 +537,14 @@
         if ($id('pl-again')) $id('pl-again').onclick = function () { startSolo(s.game); };
         if ($id('pl-rematch')) $id('pl-rematch').onclick = function () {
             var btn = $id('pl-rematch'); btn.disabled = true; live.followed = true;
+            if (typeof live.rematchTimer === 'number') clearTimeout(live.rematchTimer);
             var target = btn.getAttribute('data-room');
-            (target ? getNet().joinRoom(target).then(function () { return target; }) : s.rematch()).then(function (id) {
-                closeLive(false); go('room', id, true);
+            // Whoever taps first hosts the rematch; it starts by itself once the same players are back.
+            var need = res.ranking.filter(function (uid) { var p = s.room.players[uid]; return p && typeof p.leftAt !== 'number'; }).length;
+            (target ? getNet().joinRoom(target).then(function () { return { id: target, mine: false }; }) : s.rematch().then(function (id) { return { id: id, mine: s.rematchHosted === true }; })).then(function (r) {
+                closeLive(false);
+                if (r.mine && !target) rematchAuto = { roomId: r.id, need: Math.max(2, need) };
+                go('room', r.id, true);
             }, function (err) { btn.disabled = false; live.followed = false; showToast(errorText(err), 'error'); });
         };
     }
@@ -404,16 +553,18 @@
     // ---------- solo ----------
 
     function startSolo(game) {
-        closeLive(true);
+        closeLive(false);
         var u = user(), cfg = Core.GAMES[game], n = getNet();
-        var q = Core.pickQuestions(BANK, game, cfg.rounds, n.recentQuestions(game));
-        n.rememberQuestions(game, q);
-        var s = new Play.LocalSession(game, u ? u.uid : 'guest', u ? u.name : 'You', q);
+        // Fresh, verified AI questions at the chosen level when they are ready; the built-in bank otherwise.
+        var custom = AI ? AI.take(game, AI.getLevel()) : null, q;
+        if (custom) q = custom.ids;
+        else { q = Core.pickQuestions(BANK, game, cfg.rounds, n.recentQuestions(game)); n.rememberQuestions(game, q); if (AI) AI.refill(game, AI.getLevel()); }
+        var s = new Play.LocalSession(game, u ? u.uid : 'guest', u ? u.name : 'You', q, custom ? custom.qs : null);
         live.session = s;
         page('<div id="pl-room"><div id="pl-stage-box"></div></div>');
         var box = $id('pl-room'), runRef = null;
         // With the game server deployed, a solo run is recorded so the server can verify it.
-        if (u) n.serverAlive().then(function (alive) { return alive ? n.startRun(game, q) : null; }).then(function (ref) { runRef = ref; }).catch(function () {});
+        if (u) n.serverAlive().then(function (alive) { return alive ? n.startRun(game, q, custom ? custom.qs : null) : null; }).then(function (ref) { runRef = ref; }).catch(function () {});
         live.stage = Play.mount($id('pl-stage-box'), s, { onNext: function () { s.skipReveal(); } });
         s.onUpdate = function (view) {
             if (!$id('pl-room')) return;
@@ -427,7 +578,7 @@
             if (!u) return;
             n.award({ game: game, units: mine.units, totalUnits: res.totalUnits, win: false, multiplayer: false, day: today(), minGuesses: mine.minGuesses, score: mine.score,
                 runRef: runRef, runAnswers: mine.rounds.map(function (r) { return r.a == null ? -1 : r.a; }) })
-                .then(function (a) { live.award = a; profileCache = a.profile; if ($id('pl-results') && live.session === s) renderResults(box, s, res, a); })
+                .then(function (a) { live.award = a; profileCache = a.profile; if ($id('pl-results') && live.session === s) renderResults(box, s, res, a); if (typeof publishFaith === 'function') publishFaith(); })
                 .catch(function () { if ($id('pl-results') && live.session === s) renderResults(box, s, res, { pending: true }); });
         };
         s.open();
@@ -437,7 +588,7 @@
 
     function renderDaily() {
         if (!requireAuth('Sign in to take the Daily Challenge.')) { page('<div class="pl-stage pl-center"><p class="pl-waiting">Sign in to take the Daily Challenge.</p></div>'); return; }
-        closeLive(true);
+        closeLive(false);
         loading('Loading today’s challenge…');
         var n = getNet(), day = today();
         n.dailyStatus(day).then(function (run) {
@@ -514,28 +665,56 @@
 
     // ---------- leaderboard & badges ----------
 
+    // Leaderboards are live: they redraw whenever anyone's score changes, not only mine.
+    var boards = { stops: [], rows: null, expanded: false, value: null, empty: '' };
+    function stopBoards() { boards.stops.forEach(function (stop) { try { stop(); } catch (e) { /* already stopped */ } }); boards.stops = []; }
+    /** Top 10 first; "View more" shows everyone. */
+    function drawBoard() {
+        var b = $id('pl-board'), u = user();
+        if (!b || !u) return;
+        if (boards.rows === null) { b.innerHTML = '<p class="pl-waiting">Couldn’t load the leaderboard.</p>'; return; }
+        if (!boards.rows.length) { b.innerHTML = '<p class="pl-waiting">' + boards.empty + '</p>'; return; }
+        var rows = boards.expanded ? boards.rows : boards.rows.slice(0, 10);
+        var mine = boards.rows.map(function (r) { return r.uid; }).indexOf(u.uid);
+        b.innerHTML = boardRows(rows, u.uid, boards.value) +
+            (!boards.expanded && mine >= 10 ? '<div class="pl-board-gap">…</div>' + boardRows([boards.rows[mine]], u.uid, boards.value, mine) : '') +
+            (boards.rows.length > 10 ? '<button class="btn btn-outline btn-sm btn-block pl-board-more" id="pl-board-more">' + (boards.expanded ? 'Show top 10' : 'View more (' + boards.rows.length + ')') + '</button>' : '');
+        if ($id('pl-board-more')) $id('pl-board-more').onclick = function () { boards.expanded = !boards.expanded; drawBoard(); };
+    }
     function renderLeaderboard(tab) {
         if (!requireAuth('Sign in to see the leaderboard.')) { page('<div class="pl-stage pl-center"><p class="pl-waiting">Sign in to see the leaderboard.</p></div>'); return; }
-        closeLive(true);
         tab = tab || 'global';
         var u = user(), n = getNet();
         page('<h2 class="pl-title">Leaderboard</h2><div class="pl-tabs">' +
             ['global', 'brethren', 'today'].map(function (t) {
                 return '<button class="pl-tab' + (t === tab ? ' pl-tab-on' : '') + '" onclick="GamesUI.leaderboard(\'' + t + '\')">' + { global: 'Everyone', brethren: 'Brethren', today: 'Today’s challenge' }[t] + '</button>';
-            }).join('') + '</div><div class="card pl-board" id="pl-board"><div class="pl-spinner"></div></div>');
-        var load;
-        if (tab === 'today') load = n.dailyBoard(today()).then(function (rows) { return { rows: rows, value: function (r) { return r.score + ' pts'; }, empty: 'Nobody has finished today’s challenge yet.' }; });
-        else if (tab === 'brethren') {
+            }).join('') + '</div><p class="pl-live"><span></span> Live</p><div class="card pl-board" id="pl-board"><div class="pl-spinner"></div></div>');
+        stopBoards();
+        boards.rows = []; boards.expanded = false; boards.value = null;
+        var show = function (rows) { boards.rows = rows; drawBoard(); };
+        if (tab === 'today') {
+            boards.value = function (r) { return r.score + ' pts'; }; boards.empty = 'Nobody has finished today’s challenge yet.';
+            boards.stops.push(n.watchDailyBoard(today(), show));
+        } else if (tab === 'brethren') {
+            boards.empty = 'Play a game and invite your Brethren to see them here.';
             var uids = [u.uid];
             if (AppState.userConnections) AppState.userConnections.forEach(function (status, uid) { if (status === 'brethren') uids.push(uid); });
-            load = n.profilesOf(uids).then(function (rows) { return { rows: rows, empty: 'Play a game and invite your Brethren to see them here.' }; });
-        } else load = n.leaderboard(50).then(function (rows) { return { rows: rows, empty: 'No scores yet — be the first!' }; });
-        load.then(function (r) {
-            var b = $id('pl-board');
-            if (b) b.innerHTML = r.rows.length ? boardRows(r.rows, u.uid, r.value) : '<p class="pl-waiting">' + r.empty + '</p>';
-        }).catch(function () { var b = $id('pl-board'); if (b) b.innerHTML = '<p class="pl-waiting">Couldn’t load the leaderboard.</p>'; });
+            // One small listener per Brethren, so their XP moves here as they play.
+            var byUid = {};
+            uids.slice(0, 60).forEach(function (uid) {
+                var ref = database.ref('games/profiles/' + uid);
+                var h = ref.on('value', function (s) {
+                    var p = s.val();
+                    if (p) byUid[uid] = { uid: uid, name: Core.cleanName(p.name), xp: p.xp || 0 }; else delete byUid[uid];
+                    show(Object.keys(byUid).map(function (k) { return byUid[k]; }).sort(function (a, b) { return b.xp - a.xp; }));
+                }, function () {});
+                boards.stops.push(function () { ref.off('value', h); });
+            });
+        } else {
+            boards.empty = 'No scores yet — be the first!';
+            boards.stops.push(n.watchLeaderboard(100, show));
+        }
     }
-
     function showBadges() {
         var earned = (profileCache && profileCache.badges) || {};
         showSheet('<h3 style="margin-bottom:4px;">Badges</h3><p class="text-muted" style="margin-bottom:16px;">' + Object.keys(earned).length + ' of ' + Core.BADGES.length + ' earned</p><div class="pl-badges">' +
@@ -617,8 +796,9 @@
         removeInviteCard(invite.id);
         n.inviteLive(invite).then(function (ok) {
             if (!ok) { showToast('That invitation has expired.', 'info'); n.dismissInvite(invite.id); return; }
+            if (busyWithRoom()) return;
             n.respondInvite(invite.id, 'accepted').catch(function () {});
-            if (live.session) closeLive(true);
+            closeLive(false);
             go('join', invite.code);
         });
     }
@@ -640,16 +820,13 @@
         var r = AppState.playRoute || {}, sub = r.sub, arg = r.arg;
         onSignedIn();
         AppState.scrollPositions.play = 0; // every Play screen opens at the top
+        stopBoards();
         if (sub === 'room' && arg) { openRoom(arg); return; }
-        // One game at a time: starting something else would abandon the others mid-game.
-        if (liveGameRunning() && (sub === 'solo' || sub === 'daily' || sub === 'join')) {
-            showToast('Finish your current game first.', 'info');
-            go('room', live.roomId, true);
-            return;
-        }
-        // Any other Play page: a live game keeps running behind the "return" pill.
-        if (liveGameRunning()) { if (live.stage) { live.stage.destroy(); live.stage = null; } live.session.onUpdate = function () { updatePill(); }; showPill(); }
-        else if (sub !== 'solo' && sub !== 'daily') closeLive(!live.finished);
+        // One room at a time: starting something else would abandon the people in it.
+        if ((sub === 'solo' || sub === 'daily' || sub === 'join') && busyWithRoom(true)) return;
+        // Any other Play page: my room (lobby or game) stays mine behind the "return" pill.
+        if (liveRoomOpen()) keepRoomInBackground();
+        else if (sub !== 'solo' && sub !== 'daily') closeLive(false);
         if (!sub) renderHub();
         else if (Core.GAMES[sub]) renderGamePage(sub);
         else if (sub === 'solo' && Core.GAMES[arg]) startSolo(arg);
@@ -667,7 +844,7 @@
 
     window.renderPlayPage = renderPlayPage;
     window.GamesUI = {
-        go: go, joinTyped: joinTyped, showBadges: showBadges, leaderboard: function (tab) { go('leaderboard', tab, true); },
+        go: go, joinTyped: joinTyped, showBadges: showBadges, showTour: function () { showTour(0); }, leaderboard: function (tab) { go('leaderboard', tab, true); },
         onNavigate: onNavigate, onSignedIn: onSignedIn, onSignedOut: onSignedOut, homeCardHtml: homeCardHtml,
         acceptInviteById: function (inviteId, code) { // from a notification tap
             var u = user();

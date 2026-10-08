@@ -8,7 +8,7 @@
         "meta/createdAt"
       ],
       "$room": {
-        ".write": "(auth != null) && (data.exists() && !newData.exists()) && (((data.child('meta/hostUid').val() == auth.uid) && ((!data.child('plan').exists()) || (data.child('plan/startedAt').val() < now - 900000))) || ((data.child('players/' + auth.uid).exists()) && (data.child('plan/startedAt').exists()) && (data.child('plan/startedAt').val() < now - 3600000)) || (data.child('meta/createdAt').val() < now - 7200000))",
+        ".write": "(auth != null) && (data.exists() && !newData.exists()) && (((data.child('meta/hostUid').val() == auth.uid) && ((!data.child('plan').exists()) || (data.child('plan/startedAt').val() < now - 900000))) || (data.child('meta/createdAt').val() < now - 259200000))",
         "meta": {
           ".read": "auth != null",
           ".write": "(auth != null) && (!data.exists()) && (newData.child('hostUid').val() == auth.uid)",
@@ -16,8 +16,11 @@
           "public": {
             ".validate": "newData.isBoolean()"
           },
+          "level": {
+            ".validate": "newData.isString() && newData.val().matches(/^(easy|medium|hard)$/)"
+          },
           "$other": {
-            ".validate": "$other == 'game' || $other == 'kind' || $other == 'hostUid' || $other == 'code' || $other == 'createdAt' || $other == 'public'"
+            ".validate": "$other == 'game' || $other == 'kind' || $other == 'hostUid' || $other == 'code' || $other == 'createdAt' || $other == 'public' || $other == 'level'"
           }
         },
         "players": {
@@ -45,8 +48,30 @@
               ".validate": "newData.isString() && newData.val().length <= 8 && $i.matches(/^[0-9]{1,2}$/)"
             }
           },
+          "qs": {
+            ".validate": "!newData.hasChild('a12')",
+            "$id": {
+              ".validate": "$id.matches(/^a[0-9]{1,2}$/) && newData.hasChildren(['ref', 'x'])",
+              "c": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 3"
+              },
+              "o": {
+                "$i": {
+                  ".validate": "$i.matches(/^[0-3]$/) && newData.isString() && newData.val().length <= 320"
+                }
+              },
+              "clues": {
+                "$i": {
+                  ".validate": "$i.matches(/^[0-2]$/) && newData.isString() && newData.val().length <= 320"
+                }
+              },
+              "$field": {
+                ".validate": "$field.matches(/^(e|q|cat|w|hint|ref|x)$/) && newData.isString() && newData.val().length <= 320"
+              }
+            }
+          },
           "$other": {
-            ".validate": "$other == 'startedAt' || $other == 'q' || $other == 'secs' || $other == 'rounds'"
+            ".validate": "$other == 'startedAt' || $other == 'q' || $other == 'secs' || $other == 'rounds' || $other == 'qs'"
           }
         },
         "answered": {
@@ -94,7 +119,7 @@
     "codes": {
       "$code": {
         ".read": "auth != null",
-        ".write": "(auth != null) && ($code.matches(/^[A-HJKMNP-Z2-9]{5}$/)) && (((newData.exists()) && ((!data.exists()) || (data.child('t').val() < now - 7200000))) || ((!newData.exists()) && ((data.child('uid').val() == auth.uid) || (data.child('t').val() < now - 7200000))))",
+        ".write": "(auth != null) && ($code.matches(/^[A-HJKMNP-Z2-9]{5}$/)) && (((newData.exists()) && ((!data.exists()) || (data.child('t').val() < now - 259200000))) || ((!newData.exists()) && ((data.child('uid').val() == auth.uid) || (data.child('t').val() < now - 259200000))))",
         ".validate": "(newData.hasChildren(['room', 'uid', 't'])) && (newData.child('uid').val() == auth.uid) && (newData.child('t').val() == now) && (newData.child('room').isString() && newData.child('room').val().length <= 40)",
         "$other": {
           ".validate": "$other == 'room' || $other == 'uid' || $other == 't'"
@@ -179,6 +204,24 @@
         }
       }
     },
+    "mine": {
+      "$uid": {
+        ".read": "(auth != null) && (auth.uid == $uid)",
+        "$room": {
+          ".write": "(auth != null) && (auth.uid == $uid)",
+          ".validate": "(newData.hasChildren(['game', 't'])) && (newData.child('game').isString() && newData.child('game').val().matches(/^(emoji|wordle|whoami|bibleornot|battle)$/)) && (newData.child('t').isNumber()) && ($room.length <= 40)",
+          "code": {
+            ".validate": "newData.isString() && newData.val().matches(/^[A-HJKMNP-Z2-9]{5}$/)"
+          },
+          "kind": {
+            ".validate": "newData.isString() && newData.val().matches(/^(duel|room)$/)"
+          },
+          "$other": {
+            ".validate": "$other == 'game' || $other == 't' || $other == 'code' || $other == 'kind'"
+          }
+        }
+      }
+    },
     "runs": {
       "$uid": {
         ".read": "(auth != null) && (auth.uid == $uid)",
@@ -201,8 +244,30 @@
           "daily": {
             ".validate": "newData.isBoolean()"
           },
+          "qs": {
+            ".validate": "!newData.hasChild('a12')",
+            "$id": {
+              ".validate": "$id.matches(/^a[0-9]{1,2}$/) && newData.hasChildren(['ref', 'x'])",
+              "c": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 3"
+              },
+              "o": {
+                "$i": {
+                  ".validate": "$i.matches(/^[0-3]$/) && newData.isString() && newData.val().length <= 320"
+                }
+              },
+              "clues": {
+                "$i": {
+                  ".validate": "$i.matches(/^[0-2]$/) && newData.isString() && newData.val().length <= 320"
+                }
+              },
+              "$field": {
+                ".validate": "$field.matches(/^(e|q|cat|w|hint|ref|x)$/) && newData.isString() && newData.val().length <= 320"
+              }
+            }
+          },
           "$other": {
-            ".validate": "$other == 'game' || $other == 'q' || $other == 's' || $other == 'e' || $other == 'a' || $other == 'day' || $other == 'daily'"
+            ".validate": "$other == 'game' || $other == 'q' || $other == 's' || $other == 'e' || $other == 'a' || $other == 'day' || $other == 'daily' || $other == 'qs'"
           }
         }
       }

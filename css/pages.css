@@ -9,7 +9,7 @@
    ============================================ */
 .chat-container {
     position: fixed;
-    top: var(--top-bar-height);
+    top: var(--top-offset);
     bottom: var(--bottom-nav-height);
     left: 0;
     right: 0;

@@ -20,7 +20,8 @@
     var SERVER_FRESH_MS = 72 * 3600000;
     var QUEUE_FRESH_MS = 30000;
     var INVITE_TTL_MS = 120000;
-    var CODE_TTL_MS = 2 * 3600000;
+    var KEEP_MS = 3 * 24 * 3600000; // rooms, their codes and their results are kept for three days
+    var CODE_TTL_MS = KEEP_MS;
 
     function GameError(code, message) {
         var e = new Error(message || code);
@@ -43,7 +44,19 @@
         var storage = opts.storage || { get: function () { return null; }, set: function () {} };
         var offset = 0;
         var offsetRef = db.ref('.info/serverTimeOffset');
-        offsetRef.on('value', function (s) { offset = s.val() || 0; });
+        // The whole game runs on the server's clock. Until the offset to it is known, a device
+        // whose own clock is wrong would see the game in the wrong place (and could hand in
+        // "no answer" for rounds that have not happened) — so sessions wait for clockReady.
+        var clockKnown = false, clockWaiters = [];
+        offsetRef.on('value', function (s) {
+            offset = s.val() || 0;
+            clockKnown = true;
+            clockWaiters.splice(0).forEach(function (fn) { fn(); });
+        });
+        function clockReady() {
+            if (clockKnown) return Promise.resolve();
+            return new Promise(function (resolve) { clockWaiters.push(resolve); setTimeout(resolve, 5000); });
+        }
 
         function now() { return Date.now() + offset; }
         function me() {
@@ -71,14 +84,48 @@
             mine.push({ id: id, t: now() });
             writeJson('gg_games_rooms', mine.slice(-20));
         }
-        /** Best-effort removal of rooms this device hosted earlier (rules allow it once they are over). */
+        /** Best-effort removal of rooms this device hosted more than three days ago. */
         function sweepMyOldRooms() {
             var list = readJson('gg_games_rooms', []), keep = [];
             list.forEach(function (r) {
-                if (now() - r.t < 20 * 60000) { keep.push(r); return; }
+                if (now() - r.t < KEEP_MS) { keep.push(r); return; }
                 roomRef(r.id).remove().catch(function () {});
             });
             writeJson('gg_games_rooms', keep);
+        }
+
+        // ---------- "my games": rooms I created or joined, kept for three days ----------
+        function remember(roomId, meta) {
+            var u = me();
+            var entry = { game: meta.game, t: now() };
+            if (meta.code) entry.code = meta.code;
+            if (meta.kind) entry.kind = meta.kind;
+            db.ref('games/mine/' + u.uid + '/' + roomId).set(entry).catch(function () {});
+        }
+        function forget(roomId) {
+            try { db.ref('games/mine/' + me().uid + '/' + roomId).remove().catch(function () {}); } catch (e) { /* signed out */ }
+        }
+        /** My rooms from the last three days, newest first: [{ roomId, game, kind, code, t }]. Older ones are dropped. */
+        function myGames() {
+            var u = me();
+            return val(db.ref('games/mine/' + u.uid)).then(function (all) {
+                var out = [];
+                Object.keys(all || {}).forEach(function (roomId) {
+                    var e = all[roomId] || {};
+                    if (now() - (e.t || 0) > KEEP_MS) { forget(roomId); return; }
+                    out.push({ roomId: roomId, game: e.game, kind: e.kind || 'room', code: e.code || '', t: e.t || 0 });
+                });
+                return out.sort(function (a, b) { return b.t - a.t; });
+            });
+        }
+        /** Host only: cancels a room for everyone (a lobby at any time; a game once it is over). */
+        function cancelRoom(roomId) {
+            return val(roomRef(roomId).child('meta/code')).then(function (code) {
+                return roomRef(roomId).remove().then(function () {
+                    if (code) db.ref('games/codes/' + code).remove().catch(function () {});
+                    forget(roomId);
+                });
+            });
         }
 
         function reserveCode(roomId, uid, attempt) {
@@ -90,7 +137,7 @@
         }
 
         /** Creates a lobby and seats me in it. kind: 'duel' (2 players) | 'room' (up to 8). */
-        function createRoom(game, kind, isPublic) {
+        function createRoom(game, kind, isPublic, level) {
             var u = me();
             if (!core.GAMES[game]) return Promise.reject(GameError('bad-game'));
             sweepMyOldRooms();
@@ -98,9 +145,11 @@
             return reserveCode(id, u.uid).then(function (code) {
                 var update = {};
                 update.meta = { game: game, kind: kind === 'duel' ? 'duel' : 'room', hostUid: u.uid, code: code, createdAt: TS, public: !!isPublic };
+                if (level === 'easy' || level === 'medium' || level === 'hard') update.meta.level = level;
                 update['players/' + u.uid] = { name: u.name, joinedAt: TS, online: true };
                 return ref.update(update).then(function () {
                     trackRoom(id);
+                    remember(id, update.meta);
                     return { roomId: id, code: code, game: game, kind: update.meta.kind };
                 });
             });
@@ -128,6 +177,7 @@
                             throw GameError('full', 'That room is full.');
                         });
                     }
+                    remember(roomId, meta);
                     return { roomId: roomId, meta: meta, rejoined: false };
                 });
             });
@@ -157,6 +207,7 @@
                     return ref.child('players/' + u.uid).update({ leftAt: TS, online: false });
                 }
                 var alone = Object.keys(players).length <= 1;
+                forget(roomId);
                 if (meta.hostUid === u.uid && alone) {
                     db.ref('games/codes/' + meta.code).remove().catch(function () {});
                     return ref.remove();
@@ -184,7 +235,7 @@
          * Finds someone waiting for this game and takes the seat (first claim wins), otherwise
          * opens a public 1v1 room and waits. Resolves { roomId, role: 'guest' | 'host' }.
          */
-        function quickMatch(game) {
+        function quickMatch(game, level) {
             var u = me(), q = db.ref('games/match/' + game);
             stopWaiting();
             return val(q).then(function (all) {
@@ -202,7 +253,7 @@
                 return tryNext(0);
             }).then(function (found) {
                 if (found) return found;
-                return createRoom(game, 'duel', true).then(function (room) {
+                return createRoom(game, 'duel', true, level).then(function (room) {
                     var entry = q.child(u.uid);
                     entry.onDisconnect().remove();
                     var put = function () { return entry.set({ room: room.roomId, name: u.name, t: TS }); };
@@ -286,6 +337,28 @@
                 return rows.sort(function (a, b) { return (b.xp - a.xp) || (a.uid < b.uid ? -1 : 1); });
             });
         }
+        /** The same list, live: `onRows` is called again whenever anyone's XP changes. Returns "stop". */
+        function watchLeaderboard(limit, onRows) {
+            var q = db.ref('games/profiles').orderByChild('xp').limitToLast(limit || 50);
+            var h = q.on('value', function (snap) {
+                var rows = [];
+                snap.forEach(function (c) { var p = c.val() || {}; rows.push({ uid: c.key, name: core.cleanName(p.name), xp: p.xp || 0, wins: p.wins || 0, played: p.played || 0, streak: p.streak || 0 }); });
+                onRows(rows.sort(function (a, b) { return (b.xp - a.xp) || (a.uid < b.uid ? -1 : 1); }));
+            }, function () { onRows(null); });
+            return function () { q.off('value', h); };
+        }
+        /** Today's Daily Challenge board, live. Returns "stop". */
+        function watchDailyBoard(day, onRows) {
+            var ref = db.ref('games/daily/' + day);
+            var h = ref.on('value', function (snap) {
+                var all = snap.val() || {};
+                onRows(Object.keys(all).map(function (uid) {
+                    var s = core.scoreDaily(bank, day, all[uid]);
+                    return { uid: uid, name: core.cleanName(all[uid].name), score: s.score, correct: s.correct, elapsed: s.elapsed, finished: s.finished };
+                }).filter(function (r) { return r.finished; }).sort(function (a, b) { return (b.score - a.score) || (a.elapsed - b.elapsed); }));
+            }, function () { onRows(null); });
+            return function () { ref.off('value', h); };
+        }
         function profilesOf(uids) {
             return Promise.all(uids.map(function (uid) {
                 return loadProfile(uid).then(function (p) { return p ? { uid: uid, name: core.cleanName(p.name), xp: p.xp || 0, wins: p.wins || 0, played: p.played || 0, streak: p.streak || 0 } : null; }, function () { return null; });
@@ -307,9 +380,11 @@
         }
 
         // ---------- solo runs (only needed for the game server to verify) ----------
-        function startRun(game, questionIds) {
+        function startRun(game, questionIds, custom) {
             var u = me(), ref = db.ref('games/runs/' + u.uid).push();
-            return ref.set({ game: game, q: questionIds, s: TS }).then(function () { return ref; });
+            var run = { game: game, q: questionIds, s: TS };
+            if (custom) run.qs = custom; // AI-written questions, so the server can score them too
+            return ref.set(run).then(function () { return ref; });
         }
 
         // ---------- invites ----------
@@ -406,8 +481,9 @@
                 self._subs.push(function () { conn.off('value', ch); mineOnline.onDisconnect().cancel().catch(function () {}); });
 
                 // Load who is seated and whether the game has started BEFORE the first view, so a
-                // player rejoining a running game never sees a flash of the lobby.
-                return Promise.all([val(ref.child('players')), val(ref.child('plan'))]).then(function (r) {
+                // player rejoining a running game never sees a flash of the lobby. The server clock
+                // must be known too (see clockReady).
+                return Promise.all([val(ref.child('players')), val(ref.child('plan')), clockReady()]).then(function (r) {
                     self.room.players = r[0] || {};
                     self.room.plan = r[1] || null;
                     self._ready = true;
@@ -438,19 +514,28 @@
             return online[0] === this.uid;
         };
 
-        RoomSession.prototype.start = function () {
+        /**
+         * Starts the game. `custom` = { ids, qs } are verified AI-written questions (js/games-ai.js);
+         * without them the built-in bank is used.
+         */
+        RoomSession.prototype.start = function (custom) {
             var self = this, cfg = core.GAMES[this.game];
             if (this._starting || this.room.plan) return Promise.resolve(false);
             this._starting = true;
-            var q = core.pickQuestions(bank, this.game, cfg.rounds, recentQuestions(this.game));
-            return roomRef(this.roomId).child('plan').set({ startedAt: TS, q: q, secs: cfg.secs, rounds: cfg.rounds }).then(function () {
+            var plan = { startedAt: TS, secs: cfg.secs, rounds: cfg.rounds };
+            // However the game is started (button, quick match, rematch): fresh AI questions at
+            // the room's level when a verified set is ready.
+            if (!custom && opts.customQuestions) { try { custom = opts.customQuestions(this.game, this.room.meta.level); } catch (e) { custom = null; } }
+            if (custom && custom.ids && custom.ids.length === cfg.rounds) { plan.q = custom.ids; plan.qs = custom.qs; }
+            else plan.q = core.pickQuestions(bank, this.game, cfg.rounds, recentQuestions(this.game));
+            return roomRef(this.roomId).child('plan').set(plan).then(function () {
                 if (waiting && waiting.roomId === self.roomId) stopWaiting();
                 return true;
             }, function () { self._starting = false; return false; }); // someone else started it first
         };
 
         /** Makes round `r` readable (writing a pass if I never answered it) and listens to it. */
-        RoomSession.prototype._watchRound = function (r, attempt) {
+        RoomSession.prototype._watchRound = function (r, attempt, mayPass) {
             var self = this, ref = roomRef(this.roomId).child('answers/' + r);
             if (this._watching[r] || this._closed) return;
             this._watching[r] = 'pending';
@@ -458,15 +543,19 @@
             val(mine).then(function (existing) {
                 if (existing) { if (self._mine[r] === undefined) self._mine[r] = existing.a; return null; }
                 if (self._mine[r] !== undefined && self._mine[r] !== null) return null; // my answer is still on its way
+                // "No answer" is only ever handed in for a round whose full time has run out on the
+                // server clock. A round cannot end early without my answer, so anything else means
+                // this device's idea of the time is off — wait rather than throw the round away.
+                if (!mayPass) { self._watching[r] = null; return 'wait'; }
                 self._mine[r] = -1;
                 return mine.set({ a: core.GAMES[self.game].type === 'wordle' ? '' : -1, t: TS }).catch(function () {});
-            }).then(function () {
-                if (self._closed) return;
+            }).then(function (state) {
+                if (self._closed || state === 'wait') return;
                 var h = ref.on('value', function (s) { self._watching[r] = 'on'; self.room.answers[r] = s.val() || {}; self._tick(); }, function () {
                     // Not readable yet (my own answer hasn't landed): try again shortly.
                     ref.off('value', h);
                     self._watching[r] = null;
-                    if ((attempt || 0) < 8) setTimeout(function () { self._watchRound(r, (attempt || 0) + 1); }, 400);
+                    if ((attempt || 0) < 8) setTimeout(function () { self._watchRound(r, (attempt || 0) + 1, true); }, 400);
                 });
                 self._subs.push(function () { ref.off('value', h); });
             }).catch(function () { self._watching[r] = null; });
@@ -481,7 +570,7 @@
             this._tick();
             return ref.child('answers/' + r + '/' + this.uid).set({ a: answer, t: TS }).then(function () {
                 if (core.GAMES[self.game].type !== 'wordle') ref.child('answered/' + r + '/' + self.uid).set(1).catch(function () {});
-                self._watchRound(r); // my answer is in: the round is now readable
+                self._watchRound(r, 0, true); // my answer is in: the round is now readable
                 return true;
             }, function () {
                 // Rejected (e.g. already answered from another tab): show what the server has instead.
@@ -513,13 +602,14 @@
                 view.timeline = tl;
                 // Rounds that are over (or that I've answered) become readable; needed for scores and reconnects.
                 var upTo = view.phase === 'question' ? view.round - 1 : view.phase === 'countdown' ? -1 : view.round;
-                for (var r = 0; r <= upTo; r++) this._watchRound(r);
+                var clock = now();
+                for (var r = 0; r <= upTo; r++) this._watchRound(r, 0, clock >= tl.rounds[r].nominalEnd);
                 if (view.phase === 'question' && this._mine[view.round] === undefined && !this._probed[view.round]) {
                     // After a reload mid-round: did I already answer this one (from here or another tab)?
                     this._probed[view.round] = 'pending';
                     var self = this, rr = view.round;
                     val(roomRef(this.roomId).child('answers/' + rr + '/' + this.uid)).then(function (a) {
-                        if (a && self._mine[rr] === undefined) { self._mine[rr] = a.a; self._watchRound(rr); }
+                        if (a && self._mine[rr] === undefined) { self._mine[rr] = a.a; self._watchRound(rr, 0, true); }
                     }).catch(function () {}).then(function () { self._probed[rr] = 'done'; self._tick(); });
                 }
                 // Catching up after a (re)load: until earlier rounds' answers have arrived the
@@ -559,9 +649,10 @@
         RoomSession.prototype.rematch = function () {
             var self = this, ref = roomRef(this.roomId).child('rematch');
             if (this.room.rematch) return joinRoom(this.room.rematch).then(function () { return self.room.rematch; });
-            // A 1v1 rematch starts by itself once both players are back in.
-            return createRoom(this.game, this.room.meta.kind, this.room.meta.kind === 'duel').then(function (room) {
-                return ref.set(room.roomId).then(function () { return room.roomId; }, function () {
+            // A private room for the same people: it is not offered to anyone else, and the screen
+            // that created it starts the game as soon as the others are back in (see games.js).
+            return createRoom(this.game, this.room.meta.kind, false, this.room.meta.level).then(function (room) {
+                return ref.set(room.roomId).then(function () { self.rematchHosted = true; return room.roomId; }, function () {
                     // Someone beat me to it: drop my spare room and join theirs.
                     return leaveRoom(room.roomId).then(function () { return val(ref); }).then(function (id) { return joinRoom(id).then(function () { return id; }); });
                 });
@@ -574,6 +665,7 @@
             quickMatch: quickMatch, stopWaiting: stopWaiting,
             openRoom: function (roomId) { return new RoomSession(roomId).open(); },
             serverAlive: serverAlive, loadProfile: loadProfile, award: award, leaderboard: leaderboard, profilesOf: profilesOf,
+            watchLeaderboard: watchLeaderboard, watchDailyBoard: watchDailyBoard, myGames: myGames, cancelRoom: cancelRoom, forgetGame: forget, KEEP_MS: KEEP_MS,
             dailyStatus: dailyStatus, dailyStart: dailyStart, dailyFinish: dailyFinish, dailyBoard: dailyBoard, startRun: startRun,
             sendInvite: sendInvite, respondInvite: respondInvite, dismissInvite: dismissInvite, cancelInvite: cancelInvite,
             inviteLive: inviteLive, watchInvites: watchInvites, watchInviteReply: watchInviteReply,
