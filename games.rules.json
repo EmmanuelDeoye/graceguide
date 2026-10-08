@@ -165,7 +165,7 @@
       ],
       "$uid": {
         ".write": "(auth != null) && (auth.uid == $uid) && (newData.exists()) && (!(root.child('games/server/seen').exists() && root.child('games/server/seen').val() > now - 259200000))",
-        ".validate": "(newData.hasChildren(['name', 'xp', 'played', 'dayNum', 'dayXp', 'updatedAt'])) && (newData.child('name').isString() && newData.child('name').val().length >= 1 && newData.child('name').val().length <= 24) && (newData.child('updatedAt').val() == now) && (!data.exists() || now - data.child('updatedAt').val() >= 8000) && (newData.child('played').val() == (data.child('played').exists() ? data.child('played').val() : 0) + 1) && (newData.child('xp').isNumber() && (newData.child('xp').val() - (data.child('xp').exists() ? data.child('xp').val() : 0)) >= 0 && (newData.child('xp').val() - (data.child('xp').exists() ? data.child('xp').val() : 0)) <= 200) && (newData.child('dayNum').isNumber() && newData.child('dayNum').val() % 1 === 0 && newData.child('dayNum').val() * 86400000 <= now && now < (newData.child('dayNum').val() + 1) * 86400000) && (newData.child('dayXp').val() == ((data.child('dayNum').exists() ? data.child('dayNum').val() : 0) == newData.child('dayNum').val() ? (data.child('dayXp').exists() ? data.child('dayXp').val() : 0) : 0) + (newData.child('xp').val() - (data.child('xp').exists() ? data.child('xp').val() : 0)) && newData.child('dayXp').val() <= 2000) && ((!newData.child('wins').exists() && !data.child('wins').exists()) || (newData.child('wins').val() >= (data.child('wins').exists() ? data.child('wins').val() : 0) && newData.child('wins').val() <= (data.child('wins').exists() ? data.child('wins').val() : 0) + 1)) && ((!newData.child('dailies').exists() && !data.child('dailies').exists()) || (newData.child('dailies').val() >= (data.child('dailies').exists() ? data.child('dailies').val() : 0) && newData.child('dailies').val() <= (data.child('dailies').exists() ? data.child('dailies').val() : 0) + 1)) && ((!newData.child('streak').exists() && !data.child('streak').exists()) || (newData.child('streak').val() >= 0 && newData.child('streak').val() <= (data.child('streak').exists() ? data.child('streak').val() : 0) + 1)) && ((!newData.child('bestStreak').exists() && !data.child('bestStreak').exists()) || (newData.child('bestStreak').val() >= (data.child('bestStreak').exists() ? data.child('bestStreak').val() : 0) && newData.child('bestStreak').val() <= (data.child('bestStreak').exists() ? data.child('bestStreak').val() : 0) + 1))",
+        ".validate": "(newData.hasChildren(['name', 'xp', 'played', 'dayNum', 'dayXp', 'updatedAt'])) && (newData.child('name').isString() && newData.child('name').val().length >= 1 && newData.child('name').val().length <= 24) && (newData.child('updatedAt').val() == now) && (newData.child('xp').isNumber() && newData.child('dayNum').isNumber()) && (((!data.exists() || now - data.child('updatedAt').val() >= 8000) && (newData.child('played').val() == (data.child('played').exists() ? data.child('played').val() : 0) + 1) && ((newData.child('claims').exists() ? newData.child('claims').val() : 0) == (data.child('claims').exists() ? data.child('claims').val() : 0)) && ((newData.child('xp').val() - (data.child('xp').exists() ? data.child('xp').val() : 0)) >= 0 && (newData.child('xp').val() - (data.child('xp').exists() ? data.child('xp').val() : 0)) <= 200) && (newData.child('dayNum').val() % 1 === 0 && newData.child('dayNum').val() * 86400000 <= now && now < (newData.child('dayNum').val() + 1) * 86400000) && (newData.child('dayXp').val() == ((data.child('dayNum').exists() ? data.child('dayNum').val() : 0) == newData.child('dayNum').val() ? (data.child('dayXp').exists() ? data.child('dayXp').val() : 0) : 0) + (newData.child('xp').val() - (data.child('xp').exists() ? data.child('xp').val() : 0)) && newData.child('dayXp').val() <= 2000)) || ((data.exists()) && (newData.child('played').val() == (data.child('played').exists() ? data.child('played').val() : 0)) && ((newData.child('claims').exists() ? newData.child('claims').val() : 0) == (data.child('claims').exists() ? data.child('claims').val() : 0) + 1 && (newData.child('claims').exists() ? newData.child('claims').val() : 0) <= 40) && ((newData.child('xp').val() - (data.child('xp').exists() ? data.child('xp').val() : 0)) >= 0 && (newData.child('xp').val() - (data.child('xp').exists() ? data.child('xp').val() : 0)) <= 150) && (newData.child('dayNum').val() == (data.child('dayNum').exists() ? data.child('dayNum').val() : 0) && newData.child('dayXp').val() == (data.child('dayXp').exists() ? data.child('dayXp').val() : 0)))) && ((!newData.child('wins').exists() && !data.child('wins').exists()) || (newData.child('wins').val() >= (data.child('wins').exists() ? data.child('wins').val() : 0) && newData.child('wins').val() <= (data.child('wins').exists() ? data.child('wins').val() : 0) + 1)) && ((!newData.child('dailies').exists() && !data.child('dailies').exists()) || (newData.child('dailies').val() >= (data.child('dailies').exists() ? data.child('dailies').val() : 0) && newData.child('dailies').val() <= (data.child('dailies').exists() ? data.child('dailies').val() : 0) + 1)) && ((!newData.child('streak').exists() && !data.child('streak').exists()) || (newData.child('streak').val() >= 0 && newData.child('streak').val() <= (data.child('streak').exists() ? data.child('streak').val() : 0) + 1)) && ((!newData.child('bestStreak').exists() && !data.child('bestStreak').exists()) || (newData.child('bestStreak').val() >= (data.child('bestStreak').exists() ? data.child('bestStreak').val() : 0) && newData.child('bestStreak').val() <= (data.child('bestStreak').exists() ? data.child('bestStreak').val() : 0) + 1))",
         "lastDay": {
           ".validate": "newData.isString() && (newData.val() == '' || newData.val().matches(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/))"
         },
@@ -182,8 +182,19 @@
             }
           }
         },
+        "claimed": {
+          "$badge": {
+            ".validate": "newData.isNumber() && $badge.length <= 24 && newData.parent().parent().child(\"badges\").child($badge).exists()"
+          }
+        },
+        "perfect": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        "claims": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
         "$other": {
-          ".validate": "$other == 'name' || $other == 'xp' || $other == 'played' || $other == 'wins' || $other == 'dailies' || $other == 'streak' || $other == 'bestStreak' || $other == 'lastDay' || $other == 'dayNum' || $other == 'dayXp' || $other == 'badges' || $other == 'games' || $other == 'updatedAt'"
+          ".validate": "$other == 'name' || $other == 'xp' || $other == 'played' || $other == 'wins' || $other == 'dailies' || $other == 'streak' || $other == 'bestStreak' || $other == 'lastDay' || $other == 'dayNum' || $other == 'dayXp' || $other == 'badges' || $other == 'games' || $other == 'updatedAt' || $other == 'claimed' || $other == 'perfect' || $other == 'claims'"
         }
       }
     },
@@ -201,6 +212,14 @@
           "$other": {
             ".validate": "$other == 'name' || $other == 's' || $other == 'e' || $other == 'a'"
           }
+        }
+      }
+    },
+    "badgeClaims": {
+      "$uid": {
+        "$badge": {
+          ".write": "(auth != null) && (auth.uid == $uid) && (!data.exists() && newData.exists())",
+          ".validate": "newData.val() == now && $badge.length <= 24 && root.child('games/profiles/' + $uid + '/badges/' + $badge).exists()"
         }
       }
     },

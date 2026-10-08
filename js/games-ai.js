@@ -140,14 +140,17 @@
     }
 
     /** Writes, checks and returns verified questions for a game (possibly fewer than asked, possibly none). */
-    async function generate(game, level, count) {
+    async function generate(game, level, count, report) {
+        report = report || function () {};
         var used = load('gg_ai_used_' + game, []);
+        report('writing');
         var raw = await writeCandidates(game, level, count, used);
         var seen = {};
         var bankKeys = {};
         (window.GAMES_BANK[game] || []).forEach(function (q) { bankKeys[keyOf(game, q)] = true; });
         var candidates = [];
         for (var i = 0; i < raw.length; i++) {
+            report('checking', i + 1, raw.length);
             var q = Core.cleanQuestion(game, raw[i], 'x' + i);                       // 1. shape
             if (!q) continue;
             var k = keyOf(game, q);
@@ -167,6 +170,7 @@
             candidates.push({ id: i, q: q, verse: verse, key: k });
         }
         if (!candidates.length) return [];
+        report('verifying', candidates.length);
         var approved = await factCheck(game, candidates);                            // 4. strict fact-check
         return candidates.filter(function (c) { return approved.indexOf(c.id) >= 0; }).map(function (c) {
             var shown = c.verse.length > 230 ? c.verse.slice(0, 227) + '…' : c.verse;  // 5. show the real verse
@@ -183,26 +187,57 @@
     function count(game, level) { return load(poolKey(game, level), []).length; }
     function ready(game, level) { return count(game, level) >= Core.GAMES[game].rounds; }
 
-    /** Tops the pool up in the background. Safe to call often; resolves when done (never rejects). */
+    var MAX_ATTEMPTS = 3; // full write → check → verify rounds before a game gives up on fresh questions
+    var progress = {};    // "game_level" → { stage, attempt, attempts, have, need, at, of }
+
+    /** Can fresh questions be made at all right now? (No AI key, or no connection → no.) */
+    function available() { return typeof DEEPSEEK_API_KEY !== 'undefined' && !!DEEPSEEK_API_KEY && navigator.onLine !== false; }
+    function emit(game, level, info) {
+        var key = game + '_' + level;
+        if (info) progress[key] = info; else delete progress[key];
+        document.dispatchEvent(new CustomEvent('gg-ai-progress', { detail: { game: game, level: level, info: info || null } }));
+    }
+    /** What Shepherd is doing for this game right now (null when idle). */
+    function status(game, level) { return progress[game + '_' + level] || null; }
+
+    /**
+     * Makes sure a verified set of questions exists for this game and level, working in rounds
+     * (write → look up every verse → fact-check) until there are enough, up to MAX_ATTEMPTS
+     * rounds. Safe to call often (one run at a time per game+level). Resolves true when a full
+     * set is ready, false only after every attempt has failed. Never rejects.
+     */
     function refill(game, level) {
         var key = game + '_' + level, need = Core.GAMES[game].rounds;
         if (busy[key]) return busy[key];
-        if (count(game, level) >= need * 2 || navigator.onLine === false) return Promise.resolve(false);
-        busy[key] = generate(game, level, Math.min(14, need + 4)).then(function (fresh) {
-            var pool = load(poolKey(game, level), []);
-            var have = {};
-            pool.forEach(function (q) { have[q.k] = true; });
-            fresh.forEach(function (q) { if (!have[q.k]) pool.push(q); });
-            store(poolKey(game, level), pool.slice(-POOL_MAX));
-            return fresh.length > 0;
-        }).catch(function () { return false; }).then(function (ok) {
+        if (count(game, level) >= need * 2) return Promise.resolve(true);
+        if (!available()) return Promise.resolve(ready(game, level));
+        var wasReady = ready(game, level);
+        busy[key] = (async function () {
+            for (var attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                var base = { attempt: attempt, attempts: MAX_ATTEMPTS, need: need, have: count(game, level) };
+                try {
+                    var fresh = await generate(game, level, Math.min(16, need + 6), function (stage, at, of) {
+                        emit(game, level, Object.assign({ stage: stage, at: at || 0, of: of || 0 }, base));
+                    });
+                    var pool = load(poolKey(game, level), []), have = {};
+                    pool.forEach(function (q) { have[q.k] = true; });
+                    fresh.forEach(function (q) { if (!have[q.k]) pool.push(q); });
+                    store(poolKey(game, level), pool.slice(-POOL_MAX));
+                } catch (e) { /* a failed round: try again below */ }
+                document.dispatchEvent(new CustomEvent('gg-ai-pool', { detail: { game: game, level: level } }));
+                // One full set is the goal when a player is waiting; when topping up in the background, one round is enough.
+                if (ready(game, level) || wasReady) break;
+                if (attempt < MAX_ATTEMPTS) { emit(game, level, Object.assign({ stage: 'retrying' }, base, { have: count(game, level) })); await new Promise(function (r) { setTimeout(r, 1200); }); }
+            }
+            return ready(game, level);
+        })().catch(function () { return false; }).then(function (ok) {
             delete busy[key];
+            emit(game, level, null);
             document.dispatchEvent(new CustomEvent('gg-ai-pool', { detail: { game: game, level: level } }));
             return ok;
         });
         return busy[key];
     }
-
     /**
      * Takes one game's worth of verified questions out of the pool, or null if there are not
      * enough (the caller then uses the built-in bank). Returns { ids: [...], qs: { id: question } }.
@@ -228,5 +263,5 @@
     }
 
     window.GamesAI = { LEVELS: LEVELS, getLevel: getLevel, setLevel: setLevel, ready: ready, busy: function (g, l) { return !!busy[g + '_' + l]; },
-        refill: refill, take: take, _parseRef: parseRef, _quoteMatch: quoteMatch };
+        refill: refill, ensure: refill, available: available, status: status, take: take, _parseRef: parseRef, _quoteMatch: quoteMatch };
 })();

@@ -38,7 +38,7 @@
                     set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } }
                 },
                 notify: function (toUid, n) { if (typeof addNotification === 'function') addNotification(toUid, n); },
-                customQuestions: function (game, level) { return AI && level && AI.LEVELS[level] ? AI.take(game, level) : null; }
+                customQuestions: function (game, level) { return prepareQuestions(game, level, false); }
             });
         }
         return net;
@@ -165,13 +165,13 @@
             '<div class="pl-word-first"><i class="fas fa-book-bible"></i><span>The Word comes first. <a href="#/bible">Read today</a> · <a href="#/devotional">Devotional</a></span></div>' +
             '<div class="pl-daily" id="pl-daily-card" onclick="GamesUI.go(\'daily\')"><div class="pl-daily-icon"><i class="fas fa-calendar-day"></i></div>' +
             '<div class="pl-daily-main"><h3>Daily Challenge</h3><p id="pl-daily-sub">Five questions, one try, the same for everyone today.</p></div><i class="fas fa-chevron-right"></i></div>' +
+            '<div class="pl-join"><input id="pl-code-input" class="form-input" maxlength="5" autocapitalize="characters" autocomplete="off" placeholder="Room code">' +
+            '<button class="btn btn-primary" onclick="GamesUI.joinTyped()"><i class="fas fa-right-to-bracket"></i> Join</button></div>' +
             '<h3 class="pl-section">Games</h3><div class="pl-games">' + Core.GAME_IDS.map(function (id) {
                 var g = Core.GAMES[id];
                 return '<button class="pl-game pl-game-card-' + id + '" onclick="GamesUI.go(\'' + id + '\')"><span class="pl-game-icon"><i class="fas ' + g.icon + '"></i></span>' +
                     '<span class="pl-game-name">' + esc(g.name) + '</span><span class="pl-game-tag">' + esc(g.tagline) + '</span></button>';
             }).join('') + '</div>' +
-            '<div class="pl-join"><input id="pl-code-input" class="form-input" maxlength="5" autocapitalize="characters" autocomplete="off" placeholder="Room code">' +
-            '<button class="btn btn-primary" onclick="GamesUI.joinTyped()"><i class="fas fa-right-to-bracket"></i> Join</button></div>' +
             '<div class="pl-row-links"><button class="btn btn-outline btn-sm" onclick="GamesUI.go(\'leaderboard\')"><i class="fas fa-ranking-star"></i> Leaderboard</button>' +
             '<button class="btn btn-outline btn-sm" onclick="GamesUI.showBadges()"><i class="fas fa-award"></i> Badges</button>' +
             '<button class="btn btn-outline btn-sm" onclick="GamesUI.showTour()"><i class="fas fa-circle-question"></i> How to play</button></div>' +
@@ -223,7 +223,7 @@
         ['fa-compass', 'Finding your way', 'Pick a game, then how to play: <strong>Solo</strong>, <strong>Quick Match</strong> (1v1 with whoever is online), <strong>Challenge a Brethren</strong>, or <strong>Create a Room</strong> for up to 8 with a code. Have a code? Type it under the games and tap Join.'],
         ['fa-stopwatch', 'The rules', 'Everyone gets the same question and the same timer. Right answers score; faster answers and streaks score more. You can’t change an answer once it is locked in. In Bible Wordle you have six guesses.'],
         ['fa-sliders', 'Levels and fresh questions', 'Choose Easy, Medium or Hard on a game’s page. New questions are written for that level and checked against the Bible text before you see them.'],
-        ['fa-fire', 'Come back daily', 'The Daily Challenge is five questions, one try. Playing each day keeps your streak, earns XP and badges, and counts toward your Faithfulness title.']
+        ['fa-fire', 'Come back daily', 'The Daily Challenge is five questions, one try. Playing each day keeps your streak, earns XP and badges, and counts toward your Spirit Life.']
     ];
     function showTour(step) {
         step = step || 0;
@@ -284,7 +284,7 @@
         function drawLevel() {
             var level = AI.getLevel(), note = $id('pl-level-note');
             DOM.pageContainer.querySelectorAll('[data-level]').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-level') === level); });
-            if (note) note.innerHTML = AI.ready(id, level) ? '<i class="fas fa-circle-check"></i> Fresh questions ready' : (AI.busy(id, level) ? '<i class="fas fa-wand-magic-sparkles"></i> Preparing fresh questions…' : 'Classic questions until fresh ones are ready');
+            if (note) note.innerHTML = AI.ready(id, level) ? '<i class="fas fa-circle-check"></i> Fresh questions ready' : '<i class="fas fa-wand-magic-sparkles"></i> Shepherd is preparing questions…';
         }
         DOM.pageContainer.querySelectorAll('[data-level]').forEach(function (b) {
             b.onclick = function () { AI.setLevel(b.getAttribute('data-level')); AI.refill(id, AI.getLevel()); drawLevel(); };
@@ -389,8 +389,7 @@
             }).join('') + '</div>' +
             (isHost && level ? '<p class="pl-ai-note"><i class="fas ' + (aiReady ? 'fa-circle-check' : 'fa-wand-magic-sparkles') + '"></i> ' +
                 (aiReady ? 'Fresh ' + AI.LEVELS[level].label.toLowerCase() + ' questions are ready.'
-                    : AI.busy(meta.game, level) ? 'Preparing fresh ' + AI.LEVELS[level].label.toLowerCase() + ' questions… If you start before they are ready, the classic questions are used.'
-                    : 'Fresh questions aren’t ready yet — this game will use the classic questions.') + '</p>' : '') +
+                    : 'Shepherd is preparing fresh ' + AI.LEVELS[level].label.toLowerCase() + ' questions. If you start first, the game begins as soon as they are ready.') + '</p>' : '') +
             (meta.public ? '' : (view.canStart ? '<button class="btn btn-primary btn-block pl-start" id="pl-start"><i class="fas fa-play"></i> ' + (auto ? 'Start now' : 'Start game') + '</button>'
                 : '<p class="pl-waiting">' + (seated.length < 2 ? 'Waiting for at least one more player…' : 'Waiting for the host to start…') + '</p>')) +
             (isHost ? '<button class="btn btn-outline btn-block pl-leave" id="pl-cancel-room"><i class="fas fa-ban"></i> Cancel room</button>'
@@ -404,7 +403,10 @@
         };
         if ($id('pl-share-room')) $id('pl-share-room').onclick = function () { share(text, link); };
         $id('pl-invite').onclick = function () { showInviteSheet({ roomId: live.roomId, code: meta.code, game: meta.game, kind: meta.kind }); };
-        if ($id('pl-start')) $id('pl-start').onclick = function () { $id('pl-start').disabled = true; startRoomGame(s); };
+        if ($id('pl-start')) $id('pl-start').onclick = function () {
+            $id('pl-start').disabled = true;
+            Promise.resolve(startRoomGame(s)).then(function (ok) { if (!ok && $id('pl-start')) $id('pl-start').disabled = false; });
+        };
         if ($id('pl-leave-lobby')) $id('pl-leave-lobby').onclick = function () { closeLive(true); go(null, null, true); };
         if ($id('pl-cancel-room')) $id('pl-cancel-room').onclick = function () {
             showModal('<h3 style="margin-bottom:8px;">Cancel this room?</h3><p class="text-muted" style="margin-bottom:16px;">It closes for everyone and the code stops working.</p>' +
@@ -458,9 +460,9 @@
         if (!mine || old || awardedBefore(live.roomId)) { live.award = { already: true }; renderResults(box, s, res, live.award); return; }
         renderResults(box, s, res, null);
         markAwarded(live.roomId);
-        if (typeof publishFaith === 'function') setTimeout(publishFaith, 6000); // the Play streak feeds the Faithfulness score
+        if (typeof publishFaith === 'function') setTimeout(publishFaith, 6000); // the Play streak feeds the Spirit Life score
         getNet().award({ game: s.game, units: mine.units, totalUnits: res.totalUnits, win: mine.win, multiplayer: res.players >= 2, day: today(), minGuesses: mine.minGuesses, score: mine.score, roomId: live.roomId })
-            .then(function (a) { live.award = a; profileCache = a.profile; if ($id('pl-results') && live.session === s) renderResults(box, s, res, a); })
+            .then(function (a) { live.award = a; profileCache = a.profile; if ($id('pl-results') && live.session === s) renderResults(box, s, res, a); celebrateBadges(a.newBadges); })
             .catch(function () {});
     }
     /**
@@ -552,13 +554,73 @@
 
     // ---------- solo ----------
 
+    // ---------- fresh questions from Shepherd (AI), with the classic bank as the last resort ----------
+
+    var STAGES = [['writing', 'Writing new questions'], ['checking', 'Looking up each verse in the Bible'], ['verifying', 'Checking every answer against Scripture'], ['ready', 'Ready to play']];
+    function drawPreparing(game, level) {
+        var box = $id('pl-preparing');
+        if (!box) return;
+        var st = AI.status(game, level) || { stage: 'writing', attempt: 1, attempts: 3, have: 0, need: Core.GAMES[game].rounds };
+        var at = st.stage === 'retrying' ? 0 : Math.max(0, STAGES.map(function (s) { return s[0]; }).indexOf(st.stage));
+        box.innerHTML = STAGES.map(function (s, i) {
+            var state = i < at ? 'done' : i === at ? 'now' : 'todo';
+            var detail = i === at && s[0] === 'checking' && st.of ? ' (' + st.at + ' of ' + st.of + ')' : '';
+            return '<div class="pl-prep-step pl-prep-' + state + '"><span class="pl-prep-dot">' + (state === 'done' ? '<i class="fas fa-check"></i>' : state === 'now' ? '<span class="pl-spinner pl-spinner-sm"></span>' : '') + '</span><span>' + s[1] + detail + '</span></div>';
+        }).join('') +
+            '<p class="pl-prep-note">' + (st.attempt > 1 || st.stage === 'retrying'
+                ? 'Some questions didn’t pass the Scripture check, so Shepherd is writing more (round ' + Math.min(st.attempts, st.attempt + (st.stage === 'retrying' ? 1 : 0)) + ' of ' + st.attempts + '). ' + (st.have || 0) + ' of ' + st.need + ' ready.'
+                : 'Every question is checked against the Bible text before you see it. This usually takes under a minute.') + '</p>';
+    }
+    /**
+     * Resolves this game's questions: a verified fresh set from Shepherd at the chosen level, or
+     * null to play the classic questions — which only happens when the game has no level, the
+     * AI cannot be reached at all, or every attempt to prepare a set has failed. While Shepherd
+     * is still working a dialog shows what it is doing. `cancellable` (solo) adds a Cancel button;
+     * the promise then rejects with { cancelled: true }.
+     */
+    function prepareQuestions(game, level, cancellable) {
+        if (!AI || !level || !AI.LEVELS[level]) return Promise.resolve(null);
+        var ready = AI.take(game, level);
+        if (ready) return Promise.resolve(ready);
+        if (!AI.available()) { showToast('Shepherd can’t be reached right now — playing the classic questions.', 'info'); return Promise.resolve(null); }
+        return new Promise(function (resolve, reject) {
+            var done = false, onProgress = function (e) { if (e.detail.game === game && e.detail.level === level) drawPreparing(game, level); };
+            showModal('<div class="pl-prep"><div class="pl-prep-icon"><i class="fas fa-dove"></i></div><h3>Shepherd is still generating questions</h3>' +
+                '<p class="pl-prep-sub">' + esc(Core.GAMES[game].name) + ' · ' + AI.LEVELS[level].label + '</p><div id="pl-preparing"></div>' +
+                (cancellable ? '<button class="btn btn-outline btn-block" id="pl-prep-cancel">Cancel</button>' : '') + '</div>',
+                { closeOnOverlay: false });
+            drawPreparing(game, level);
+            document.addEventListener('gg-ai-progress', onProgress);
+            if ($id('pl-prep-cancel')) $id('pl-prep-cancel').onclick = function () { finish(null, true); };
+            function finish(custom, cancelled) {
+                if (done) return;
+                done = true;
+                document.removeEventListener('gg-ai-progress', onProgress);
+                if ($id('pl-preparing') && AppState.modalOpen) closeModal();
+                if (cancelled) reject({ cancelled: true }); else resolve(custom);
+            }
+            AI.ensure(game, level).then(function (ok) {
+                var custom = ok ? AI.take(game, level) : null;
+                if (!custom && !done) showToast('Shepherd couldn’t prepare new questions after several tries — playing the classic questions this time.', 'warning');
+                finish(custom, false);
+            });
+        });
+    }
+
     function startSolo(game) {
         closeLive(false);
+        if (!Core.GAMES[game]) { go(null, null, true); return; }
+        loading('Getting your questions…');
+        prepareQuestions(game, AI ? AI.getLevel() : null, true).then(function (custom) {
+            if (AppState.currentRoute !== 'play' || !AppState.playRoute || AppState.playRoute.sub !== 'solo' || AppState.playRoute.arg !== game) return;
+            runSolo(game, custom);
+        }, function () { go(game, null, true); });
+    }
+    function runSolo(game, custom) {
         var u = user(), cfg = Core.GAMES[game], n = getNet();
-        // Fresh, verified AI questions at the chosen level when they are ready; the built-in bank otherwise.
-        var custom = AI ? AI.take(game, AI.getLevel()) : null, q;
+        var q;
         if (custom) q = custom.ids;
-        else { q = Core.pickQuestions(BANK, game, cfg.rounds, n.recentQuestions(game)); n.rememberQuestions(game, q); if (AI) AI.refill(game, AI.getLevel()); }
+        else { q = Core.pickQuestions(BANK, game, cfg.rounds, n.recentQuestions(game)); n.rememberQuestions(game, q); }
         var s = new Play.LocalSession(game, u ? u.uid : 'guest', u ? u.name : 'You', q, custom ? custom.qs : null);
         live.session = s;
         page('<div id="pl-room"><div id="pl-stage-box"></div></div>');
@@ -578,7 +640,7 @@
             if (!u) return;
             n.award({ game: game, units: mine.units, totalUnits: res.totalUnits, win: false, multiplayer: false, day: today(), minGuesses: mine.minGuesses, score: mine.score,
                 runRef: runRef, runAnswers: mine.rounds.map(function (r) { return r.a == null ? -1 : r.a; }) })
-                .then(function (a) { live.award = a; profileCache = a.profile; if ($id('pl-results') && live.session === s) renderResults(box, s, res, a); if (typeof publishFaith === 'function') publishFaith(); })
+                .then(function (a) { live.award = a; profileCache = a.profile; if ($id('pl-results') && live.session === s) renderResults(box, s, res, a); celebrateBadges(a.newBadges); if (typeof publishFaith === 'function') publishFaith(); })
                 .catch(function () { if ($id('pl-results') && live.session === s) renderResults(box, s, res, { pending: true }); });
         };
         s.open();
@@ -637,6 +699,7 @@
                     var sc = Core.scoreDaily(BANK, day, run);
                     return n.award({ game: 'battle', daily: true, units: sc.correct, totalUnits: sc.total, day: day, score: sc.score }).catch(function () { return { pending: true }; }).then(function (a) {
                         if (a && a.profile) profileCache = a.profile;
+                        if (a) celebrateBadges(a.newBadges);
                         showDailyBoard(day, run, a);
                     });
                 }, function (err) { showToast(errorText(err), 'error'); go(null, null, true); });
@@ -716,14 +779,98 @@
         }
     }
     function showBadges() {
-        var earned = (profileCache && profileCache.badges) || {};
-        showSheet('<h3 style="margin-bottom:4px;">Badges</h3><p class="text-muted" style="margin-bottom:16px;">' + Object.keys(earned).length + ' of ' + Core.BADGES.length + ' earned</p><div class="pl-badges">' +
-            Core.BADGES.map(function (b) {
-                return '<div class="pl-badge' + (earned[b.id] ? ' pl-badge-on' : '') + '"><span class="pl-badge-icon"><i class="fas ' + b.icon + '"></i></span>' +
-                    '<strong>' + esc(b.name) + '</strong><small>' + esc(b.desc) + '</small><em>' + esc(b.ref) + '</em></div>';
+        var earned = (profileCache && profileCache.badges) || {}, claimed = (profileCache && profileCache.claimed) || {};
+        var waiting = Core.claimable(profileCache).length;
+        // Earned first (unclaimed ones at the very top), then the ones still to earn.
+        var order = Core.BADGES.slice().sort(function (a, b) {
+            var rank = function (x) { return earned[x.id] ? (claimed[x.id] ? 1 : 0) : 2; };
+            return rank(a) - rank(b);
+        });
+        showSheet('<h3 style="margin-bottom:4px;">Badges</h3><p class="text-muted" style="margin-bottom:16px;">' + Object.keys(earned).length + ' of ' + Core.BADGES.length + ' earned' +
+            (waiting ? ' · <strong>' + waiting + ' bonus' + (waiting === 1 ? '' : 'es') + ' to claim</strong>' : '') + '</p><div class="pl-badges">' +
+            order.map(function (b) {
+                var on = !!earned[b.id], got = !!claimed[b.id];
+                return '<div class="pl-badge' + (on ? ' pl-badge-on' : '') + '"><span class="pl-badge-icon"><i class="fas ' + b.icon + '"></i></span>' +
+                    '<strong>' + esc(b.name) + '</strong><small>' + esc(b.desc) + '</small><em>' + esc(b.ref) + '</em>' +
+                    (on && !got ? '<button class="btn btn-gold btn-sm pl-badge-claim" data-claim="' + b.id + '">Claim +' + b.xp + ' XP</button>'
+                        : '<span class="pl-badge-xp">' + (got ? '<i class="fas fa-check"></i> +' + b.xp + ' XP claimed' : '+' + b.xp + ' XP') + '</span>') + '</div>';
             }).join('') + '</div>');
+        document.querySelectorAll('[data-claim]').forEach(function (btn) {
+            btn.onclick = function () { claimBadge(btn.getAttribute('data-claim'), btn).then(function () { if (AppState.sheetOpen) showBadges(); }); };
+        });
     }
 
+    /** Claims a badge's bonus XP; `btn` (optional) shows the progress. Resolves true when the XP was added. */
+    function claimBadge(id, btn) {
+        var b = Core.badgeById(id);
+        if (!b || !user()) return Promise.resolve(false);
+        if (btn) { btn.disabled = true; btn.textContent = 'Claiming…'; }
+        return getNet().claimBadge(id).then(function (r) {
+            if (r && r.profile) profileCache = r.profile;
+            var slot = $id('pl-level-slot'); if (slot) slot.innerHTML = levelCard(profileCache);
+            if (r && r.gained > 0) { chime([784, 988, 1319]); showToast('+' + r.gained + ' XP — ' + b.name, 'success'); return true; }
+            if (r && r.pending) showToast('Your bonus XP will appear shortly.', 'info');
+            return false;
+        }, function () {
+            if (btn) { btn.disabled = false; btn.textContent = 'Claim +' + b.xp + ' XP'; }
+            showToast('Couldn’t claim that just now — try again from Badges.', 'error');
+            return false;
+        });
+    }
+
+    // ---------- a badge is earned: the celebration ----------
+
+    var audio = null;
+    /** A short, soft chime (made in the browser — no sound file). Silent if the device does not allow it. */
+    function chime(notes) {
+        try {
+            audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+            if (audio.state === 'suspended') audio.resume();
+            notes.forEach(function (freq, i) {
+                var osc = audio.createOscillator(), gain = audio.createGain(), at = audio.currentTime + i * 0.13;
+                osc.type = 'sine'; osc.frequency.value = freq;
+                gain.gain.setValueAtTime(0.0001, at);
+                gain.gain.exponentialRampToValueAtTime(0.16, at + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.55);
+                osc.connect(gain); gain.connect(audio.destination);
+                osc.start(at); osc.stop(at + 0.6);
+            });
+        } catch (e) { /* no audio: the animation is enough */ }
+    }
+    var badgeQueue = [], badgeShowing = false;
+    function celebrateBadges(ids) {
+        (ids || []).forEach(function (id) { if (Core.badgeById(id) && badgeQueue.indexOf(id) < 0) badgeQueue.push(id); });
+        if (!badgeShowing) nextBadge();
+    }
+    function nextBadge() {
+        var id = badgeQueue.shift(), b = id && Core.badgeById(id);
+        if (!b) { badgeShowing = false; return; }
+        badgeShowing = true;
+        var el = document.createElement('div');
+        el.className = 'pl-pop';
+        var confetti = '';
+        for (var i = 0; i < 26; i++) confetti += '<i style="left:' + Math.round(Math.random() * 100) + '%; animation-delay:' + (Math.random() * 0.6).toFixed(2) + 's; background:' + ['#c7a65a', '#c87552', '#718575', '#f8f6f0', '#d9bc7a'][i % 5] + '; transform: rotate(' + Math.round(Math.random() * 360) + 'deg);"></i>';
+        el.innerHTML = '<div class="pl-pop-confetti">' + confetti + '</div><div class="pl-pop-card" role="dialog" aria-label="Badge earned">' +
+            '<div class="pl-pop-rays"></div><div class="pl-pop-badge"><i class="fas ' + b.icon + '"></i></div>' +
+            '<div class="pl-pop-eyebrow">Badge earned</div><h3>' + esc(b.name) + '</h3><p>' + esc(b.desc) + '</p><em>' + esc(b.ref) + '</em>' +
+            '<button class="btn btn-gold btn-block pl-pop-claim" id="pl-pop-claim"><i class="fas fa-gift"></i> Claim +' + b.xp + ' XP</button>' +
+            '<button class="pl-pop-later" id="pl-pop-later">Later</button></div>';
+        document.body.appendChild(el);
+        requestAnimationFrame(function () { el.classList.add('pl-pop-in'); });
+        chime([523, 659, 784, 1047]);
+        function close() {
+            el.classList.remove('pl-pop-in');
+            setTimeout(function () { el.remove(); nextBadge(); }, 260);
+        }
+        el.querySelector('#pl-pop-later').onclick = close;
+        el.querySelector('#pl-pop-claim').onclick = function () {
+            var btn = el.querySelector('#pl-pop-claim');
+            claimBadge(id, btn).then(function (ok) {
+                if (ok) { btn.innerHTML = '<i class="fas fa-check"></i> +' + b.xp + ' XP added'; el.querySelector('.pl-pop-card').classList.add('pl-pop-claimed'); setTimeout(close, 900); }
+                else close();
+            });
+        };
+    }
     // ---------- invitations ----------
 
     function showInviteSheet(room, namesLoaded) {

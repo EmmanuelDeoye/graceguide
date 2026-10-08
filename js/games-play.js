@@ -98,7 +98,7 @@
      * Returns { update(view), destroy() }.
      */
     function mount(container, session, opts) {
-        var key = null, wordle = null, destroyed = false, lastScores = null;
+        var key = null, wordle = null, destroyed = false, lastScores = null, lastScene = null, lastPicked = false;
         opts = opts || {};
         var me = session.uid, cfg = Core.GAMES[session.game];
 
@@ -281,7 +281,13 @@
             var body = cfg.type === 'wordle' ? wordleHtml(q, view, revealed) : promptHtml(q, view, revealed) + optionsHtml(q, view, revealed);
             var waiting = !revealed && cfg.type !== 'wordle' && session.myAnswer(view.round) !== undefined && view.seated.length > 1
                 ? '<p class="pl-waiting"><i class="fas fa-hourglass-half"></i> Locked in — waiting for the others</p>' : '';
-            container.innerHTML = '<div class="pl-stage pl-game-' + session.game + (revealed ? ' pl-revealed' : '') + '">' +
+            // Motion: a new question slides in, a reveal pops the right answer (and shakes a wrong
+            // pick), locking an answer in gives a small press. Only on the change itself — never
+            // again when the same screen is merely redrawn (e.g. another player locks in).
+            var scene = view.phase + ':' + view.round, picked = session.myAnswer(view.round) !== undefined;
+            var fx = scene !== lastScene ? (revealed ? ' pl-fx-reveal' : ' pl-fx-question') : (picked && !lastPicked && !revealed ? ' pl-fx-pick' : '');
+            lastScene = scene; lastPicked = picked;
+            container.innerHTML = '<div class="pl-stage pl-game-' + session.game + (revealed ? ' pl-revealed' : '') + fx + '">' +
                 headerHtml(view) + duelBarHtml(view, revealed ? view.round : view.round - 1) +
                 '<div class="pl-body">' + body + waiting + (revealed ? learnHtml(q, view) : '') + '</div>' +
                 (revealed && view.solo ? '<button class="btn btn-primary btn-block pl-next" id="pl-next">' + esc(opts.nextLabel || (view.round + 1 >= view.room.plan.rounds ? 'See results' : 'Next')) + ' <i class="fas fa-arrow-right"></i></button>' : '') +

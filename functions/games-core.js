@@ -48,8 +48,51 @@
         { id: 'conqueror', name: 'More Than Conqueror', icon: 'fa-crown', desc: 'Win twenty-five multiplayer games.', ref: 'Romans 8:37' },
         { id: 'all_rounder', name: 'All Things', icon: 'fa-star', desc: 'Play all five games.', ref: 'Philippians 4:13' },
         { id: 'berean', name: 'Berean', icon: 'fa-book-open', desc: 'Earn 1,000 XP.', ref: 'Acts 17:11' },
-        { id: 'scribe', name: 'Ready Scribe', icon: 'fa-feather', desc: 'Earn 5,000 XP.', ref: 'Ezra 7:6' }
+        { id: 'scribe', name: 'Ready Scribe', icon: 'fa-feather', desc: 'Earn 5,000 XP.', ref: 'Ezra 7:6' },
+        // --- added in v1.3 (40 in all) ---
+        { id: 'first_win', name: 'First Victory', icon: 'fa-flag', desc: 'Win your first multiplayer game.', ref: '1 Corinthians 15:57' },
+        { id: 'wins_10', name: 'Valiant', icon: 'fa-medal', desc: 'Win ten multiplayer games.', ref: 'Psalm 60:12' },
+        { id: 'wins_50', name: 'Mighty in Battle', icon: 'fa-trophy', desc: 'Win fifty multiplayer games.', ref: 'Psalm 24:8' },
+        { id: 'wins_100', name: 'Champion of the Word', icon: 'fa-chess-king', desc: 'Win one hundred multiplayer games.', ref: '1 John 5:4' },
+        { id: 'played_10', name: 'Getting Started', icon: 'fa-seedling', desc: 'Play ten games.', ref: 'Zechariah 4:10' },
+        { id: 'played_50', name: 'Regular', icon: 'fa-leaf', desc: 'Play fifty games.', ref: 'Galatians 6:9' },
+        { id: 'played_100', name: 'Centurion', icon: 'fa-tree', desc: 'Play one hundred games.', ref: 'Matthew 8:10' },
+        { id: 'played_250', name: 'Tireless', icon: 'fa-mountain', desc: 'Play two hundred and fifty games.', ref: 'Isaiah 40:31' },
+        { id: 'faithful_14', name: 'Two Weeks Strong', icon: 'fa-calendar-week', desc: 'Play fourteen days in a row.', ref: 'Daniel 6:10' },
+        { id: 'faithful_30', name: 'A Month of Days', icon: 'fa-calendar-days', desc: 'Play thirty days in a row.', ref: 'Psalm 1:2' },
+        { id: 'faithful_60', name: 'Steadfast', icon: 'fa-anchor', desc: 'Play sixty days in a row.', ref: '1 Corinthians 15:58' },
+        { id: 'faithful_100', name: 'Unmovable', icon: 'fa-landmark', desc: 'Play one hundred days in a row.', ref: 'Hebrews 10:23' },
+        { id: 'daily_3', name: 'Daily Portion', icon: 'fa-wheat-awn', desc: 'Complete three Daily Challenges.', ref: 'Proverbs 30:8' },
+        { id: 'daily_30', name: 'Bread for a Month', icon: 'fa-calendar-plus', desc: 'Complete thirty Daily Challenges.', ref: 'John 6:35' },
+        { id: 'daily_100', name: 'Hundredfold', icon: 'fa-sun', desc: 'Complete one hundred Daily Challenges.', ref: 'Matthew 13:8' },
+        { id: 'daily_perfect', name: 'Perfect Portion', icon: 'fa-bullseye', desc: 'Get every Daily Challenge question right.', ref: 'Psalm 119:105' },
+        { id: 'xp_500', name: 'Growing', icon: 'fa-arrow-trend-up', desc: 'Earn 500 XP.', ref: '2 Peter 3:18' },
+        { id: 'xp_2500', name: 'Rooted', icon: 'fa-wand-magic-sparkles', desc: 'Earn 2,500 XP.', ref: 'Colossians 2:7' },
+        { id: 'xp_10000', name: 'Treasure of Wisdom', icon: 'fa-coins', desc: 'Earn 10,000 XP.', ref: 'Proverbs 2:4' },
+        { id: 'xp_25000', name: 'Teacher of the Word', icon: 'fa-graduation-cap', desc: 'Earn 25,000 XP.', ref: 'Matthew 13:52' },
+        { id: 'flawless_5', name: 'Sharp Sword', icon: 'fa-bolt', desc: 'Finish five games without a wrong answer.', ref: 'Hebrews 4:12' },
+        { id: 'flawless_25', name: 'Rightly Dividing', icon: 'fa-scale-balanced', desc: 'Finish twenty-five games without a wrong answer.', ref: '2 Timothy 2:15' },
+        { id: 'word_quick', name: 'Quick Understanding', icon: 'fa-lightbulb', desc: 'Solve a Bible Wordle in two guesses or fewer.', ref: 'Isaiah 11:3' },
+        { id: 'emoji_10', name: 'Story Teller', icon: 'fa-face-smile', desc: 'Play Bible Emoji ten times.', ref: 'Psalm 78:4' },
+        { id: 'wordle_10', name: 'Word Smith', icon: 'fa-table-cells', desc: 'Play Bible Wordle ten times.', ref: 'Proverbs 25:11' },
+        { id: 'whoami_10', name: 'Cloud of Witnesses', icon: 'fa-user-secret', desc: 'Play Who Am I? ten times.', ref: 'Hebrews 12:1' },
+        { id: 'bibleornot_10', name: 'Discerner', icon: 'fa-magnifying-glass', desc: 'Play Bible or Not? ten times.', ref: '1 John 4:1' },
+        { id: 'battle_10', name: 'Soldier of Christ', icon: 'fa-shield', desc: 'Play Bible Battle ten times.', ref: '2 Timothy 2:3' }
     ];
+
+    /**
+     * Bonus XP a player may claim once for each badge. Earlier / easier badges give a little,
+     * rare ones more (never above BADGE_XP_MAX, which the database rules also enforce).
+     */
+    var BADGE_XP = {
+        first_steps: 25, flawless: 50, word_hidden: 50, faithful_3: 30, faithful_7: 60, daily_bread: 25, daily_7: 60, good_fight: 60,
+        conqueror: 120, all_rounder: 50, berean: 75, scribe: 120, first_win: 30, wins_10: 80, wins_50: 130, wins_100: 150,
+        played_10: 30, played_50: 75, played_100: 110, played_250: 150, faithful_14: 90, faithful_30: 130, faithful_60: 150, faithful_100: 150,
+        daily_3: 30, daily_30: 110, daily_100: 150, daily_perfect: 60, xp_500: 40, xp_2500: 90, xp_10000: 140, xp_25000: 150,
+        flawless_5: 80, flawless_25: 140, word_quick: 80, emoji_10: 40, wordle_10: 40, whoami_10: 40, bibleornot_10: 40, battle_10: 40
+    };
+    var BADGE_XP_MAX = 150;
+    BADGES.forEach(function (b) { b.xp = BADGE_XP[b.id] || 25; });
 
     var LEVEL_TITLES = [[1, 'Seeker'], [3, 'Disciple'], [6, 'Berean'], [10, 'Psalmist'], [15, 'Scribe'], [20, 'Watchman'], [30, 'Overcomer']];
 
@@ -368,9 +411,17 @@
         return Math.max(0, Math.min(XP_GAME_CAP, xp));
     }
 
-    function level(xp) { return Math.floor((1 + Math.sqrt(1 + 8 * Math.max(0, xp) / 100)) / 2); }
-    /** XP needed to reach `lvl` (level 1 = 0). */
-    function xpForLevel(lvl) { return 100 * lvl * (lvl - 1) / 2; }
+    /**
+     * XP needed to reach `lvl` (level 1 = 0). The steps grow with the level — quick at the
+     * start, slower the higher you climb: level 2 at 100 XP, 3 at 400, 5 at 2,000, 10 at 16,500,
+     * 20 at 133,000. (Whole numbers always: (l-1)·l·(l+1) is divisible by 6.)
+     */
+    function xpForLevel(lvl) { return 50 * (lvl - 1) * lvl * (lvl + 1) / 3; }
+    function level(xp) {
+        var x = Math.max(0, xp || 0), lvl = 1;
+        while (lvl < 999 && xpForLevel(lvl + 1) <= x) lvl++;
+        return lvl;
+    }
     function levelTitle(lvl) {
         var title = LEVEL_TITLES[0][1];
         for (var i = 0; i < LEVEL_TITLES.length; i++) if (lvl >= LEVEL_TITLES[i][0]) title = LEVEL_TITLES[i][1];
@@ -378,7 +429,7 @@
     }
 
     function emptyProfile(name) {
-        return { name: cleanName(name), xp: 0, played: 0, wins: 0, dailies: 0, streak: 0, bestStreak: 0, lastDay: '', dayNum: 0, dayXp: 0, badges: {}, games: {} };
+        return { name: cleanName(name), xp: 0, played: 0, wins: 0, dailies: 0, streak: 0, bestStreak: 0, lastDay: '', dayNum: 0, dayXp: 0, perfect: 0, claims: 0, badges: {}, claimed: {}, games: {} };
     }
 
     /**
@@ -391,10 +442,11 @@
         var out = {
             name: cleanName(result.name || p.name), xp: +p.xp || 0, played: +p.played || 0, wins: +p.wins || 0, dailies: +p.dailies || 0,
             streak: +p.streak || 0, bestStreak: +p.bestStreak || 0, lastDay: typeof p.lastDay === 'string' ? p.lastDay : '',
-            dayNum: +p.dayNum || 0, dayXp: +p.dayXp || 0, badges: {}, games: {}
+            dayNum: +p.dayNum || 0, dayXp: +p.dayXp || 0, perfect: +p.perfect || 0, claims: +p.claims || 0, badges: {}, claimed: {}, games: {}
         };
         var k;
         for (k in (p.badges || {})) if (Object.prototype.hasOwnProperty.call(p.badges, k)) out.badges[k] = p.badges[k];
+        for (k in (p.claimed || {})) if (Object.prototype.hasOwnProperty.call(p.claimed, k)) out.claimed[k] = p.claimed[k];
         for (k in (p.games || {})) if (Object.prototype.hasOwnProperty.call(p.games, k)) {
             var g0 = p.games[k] || {};
             out.games[k] = { played: +g0.played || 0, wins: +g0.wins || 0, best: +g0.best || 0 };
@@ -410,6 +462,8 @@
         out.played += 1;
         if (result.win && result.multiplayer) out.wins += 1;
         if (result.daily) out.dailies += 1;
+        var allRight = result.totalUnits > 0 && result.units >= result.totalUnits;
+        if (allRight && !result.daily && result.totalUnits >= 5) out.perfect += 1;
         var key = result.daily ? 'daily' : result.game;
         var gs = out.games[key] || { played: 0, wins: 0, best: 0 };
         gs.played += 1;
@@ -439,8 +493,57 @@
         grant('all_rounder', GAME_IDS.every(function (id) { return out.games[id] && out.games[id].played > 0; }));
         grant('berean', out.xp >= 1000);
         grant('scribe', out.xp >= 5000);
+        grant('first_win', out.wins >= 1);
+        grant('wins_10', out.wins >= 10);
+        grant('wins_50', out.wins >= 50);
+        grant('wins_100', out.wins >= 100);
+        grant('played_10', out.played >= 10);
+        grant('played_50', out.played >= 50);
+        grant('played_100', out.played >= 100);
+        grant('played_250', out.played >= 250);
+        grant('faithful_14', out.streak >= 14);
+        grant('faithful_30', out.streak >= 30);
+        grant('faithful_60', out.streak >= 60);
+        grant('faithful_100', out.streak >= 100);
+        grant('daily_3', out.dailies >= 3);
+        grant('daily_30', out.dailies >= 30);
+        grant('daily_100', out.dailies >= 100);
+        grant('daily_perfect', !!result.daily && allRight);
+        grant('xp_500', out.xp >= 500);
+        grant('xp_2500', out.xp >= 2500);
+        grant('xp_10000', out.xp >= 10000);
+        grant('xp_25000', out.xp >= 25000);
+        grant('flawless_5', out.perfect >= 5);
+        grant('flawless_25', out.perfect >= 25);
+        grant('word_quick', result.game === 'wordle' && !result.daily && result.minGuesses > 0 && result.minGuesses <= 2);
+        GAME_IDS.forEach(function (id) { grant(id + '_10', !!out.games[id] && out.games[id].played >= 10); });
 
         return { profile: out, gained: gained, newBadges: newBadges };
+    }
+
+    function badgeById(id) { for (var i = 0; i < BADGES.length; i++) if (BADGES[i].id === id) return BADGES[i]; return null; }
+    /** Badges the player has earned but not yet claimed the bonus XP for (in the order they are listed). */
+    function claimable(profile) {
+        var p = profile || {}, badges = p.badges || {}, claimed = p.claimed || {};
+        return BADGES.filter(function (b) { return badges[b.id] && !claimed[b.id]; }).map(function (b) { return b.id; });
+    }
+    /**
+     * Claims one earned badge's bonus XP. Returns { profile, gained } — or null if the badge is
+     * unknown, not earned, or already claimed. Badge XP is a gift: it does not count toward the
+     * per-day game XP limit. Never mutates its input.
+     */
+    function claimBadge(profile, badgeId, nowMs) {
+        var b = badgeById(badgeId), p = profile && typeof profile === 'object' ? profile : null;
+        if (!b || !p || !(p.badges || {})[badgeId] || (p.claimed || {})[badgeId]) return null;
+        var out = {}, k;
+        for (k in p) if (Object.prototype.hasOwnProperty.call(p, k) && k !== 'updatedAt') out[k] = p[k];
+        out.claimed = {};
+        for (k in (p.claimed || {})) if (Object.prototype.hasOwnProperty.call(p.claimed, k)) out.claimed[k] = p.claimed[k];
+        out.claimed[badgeId] = nowMs;
+        var gained = Math.min(BADGE_XP_MAX, b.xp);
+        out.xp = (+p.xp || 0) + gained;
+        out.claims = (+p.claims || 0) + 1;
+        return { profile: out, gained: gained };
     }
 
     return {
@@ -451,6 +554,7 @@
         questionById: questionById, cleanQuestion: cleanQuestion, roomQuestion: roomQuestion, pickQuestions: pickQuestions, dailyQuestions: dailyQuestions,
         parseGuesses: parseGuesses, wordleFeedback: wordleFeedback, judge: judge,
         timeline: timeline, phaseAt: phaseAt, pointsFor: pointsFor, seatedPlayers: seatedPlayers, scoreRoom: scoreRoom, scoreDaily: scoreDaily,
-        xpFor: xpFor, level: level, xpForLevel: xpForLevel, levelTitle: levelTitle, emptyProfile: emptyProfile, applyResult: applyResult
+        xpFor: xpFor, level: level, xpForLevel: xpForLevel, levelTitle: levelTitle, emptyProfile: emptyProfile, applyResult: applyResult,
+        BADGE_XP_MAX: BADGE_XP_MAX, badgeById: badgeById, claimable: claimable, claimBadge: claimBadge
     };
 });

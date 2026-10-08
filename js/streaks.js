@@ -7,7 +7,7 @@
      Study     — days in a row a Study Planner entry was completed
      Play      — days in a row a Play & Learn game was played
 
-   Faithfulness = the AVERAGE of those three current streaks. It earns
+   Spirit Life (shown to users under that name) = the AVERAGE of those three current streaks. It earns
    points (average × 10) and one of ten titles. Averaging on purpose: one
    long streak cannot carry the score — the way up is to keep all three.
 
@@ -68,7 +68,10 @@
         };
     }
 
-    var api = { FAITH_TITLES: FAITH_TITLES, previousDayKey: previousDayKey, liveStreak: liveStreak, extendStreak: extendStreak, faithScore: faithScore };
+    /** Each Spirit Life level has its own sticker (shown on the profile picture). Level 1 → 10. */
+    var SPIRIT_STICKERS = ['🌱', '🕯️', '🌿', '🔥', '🙏', '🛡️', '⚓', '⛰️', '🏛️', '👑'];
+
+    var api = { SPIRIT_STICKERS: SPIRIT_STICKERS, FAITH_TITLES: FAITH_TITLES, previousDayKey: previousDayKey, liveStreak: liveStreak, extendStreak: extendStreak, faithScore: faithScore };
     if (typeof module === 'object' && module.exports) { module.exports = api; return; }
     root.Streaks = api;
 
@@ -116,6 +119,46 @@
     }
     root.faithFromProfile = function (profile) { return profile && profile.faith ? scoreFromRecords(profile.faith) : null; };
 
+    /** May the signed-in person see this profile's Spirit Life? (Its owner can limit it to Brethren.) */
+    function spiritVisible(uid, profile) {
+        if (!profile || !profile.spiritPrivate) return true;
+        var me = AppState.currentUser && AppState.currentUser.uid;
+        return uid === me || (AppState.userConnections && AppState.userConnections.get(uid) === 'brethren');
+    }
+    /** The level sticker: a small round badge, unique to each of the ten levels. */
+    function stickerHTML(score, extraClass) {
+        return '<span class="spirit-sticker spirit-l' + score.level + (extraClass ? ' ' + extraClass : '') + '" title="Spirit Life ' + score.points + ' · ' + escapeHtml(score.title) + '">' + SPIRIT_STICKERS[score.level - 1] + '</span>';
+    }
+    root.spiritStickerFor = function (uid, profile, extraClass) {
+        var score = root.faithFromProfile(profile);
+        return score && spiritVisible(uid, profile) ? stickerHTML(score, extraClass) : '';
+    };
+    /**
+     * Wherever a person's avatar appears (posts, comments, chats, lists) their level sticker
+     * sits on its corner. Called by hydrateUserNames() with the avatar-initial nodes it resolved.
+     */
+    root.applySpiritStickers = function (nodes) {
+        if (typeof UserNameCache === 'undefined' || !UserNameCache.profiles) return;
+        nodes.forEach(function (node) {
+            var uid = node.dataset.userInitial, holder = node.parentElement;
+            if (!uid || !holder) return;
+            var old = holder.querySelector(':scope > .spirit-sticker');
+            var html = root.spiritStickerFor(uid, UserNameCache.profiles.get(uid), 'spirit-on-avatar');
+            if (old) old.remove();
+            if (!html) return;
+            holder.classList.add('has-spirit');
+            holder.insertAdjacentHTML('beforeend', html);
+        });
+    };
+    /** Settings: show my level to Brethren only. */
+    root.setSpiritPrivate = function (on) {
+        if (!AppState.currentUser) return;
+        database.ref('users/' + AppState.currentUser.uid + '/profile/spiritPrivate').set(!!on).then(function () {
+            if (AppState.userProfile) AppState.userProfile.spiritPrivate = !!on;
+            showToast(on ? 'Only your Brethren can see your Spirit Life level now.' : 'Everyone can see your Spirit Life level.', 'success');
+        }, function () { showToast('Could not save — please try again.', 'error'); });
+    };
+
     /** Saves my streak records on my public profile so others see my title. Best-effort. */
     async function publishFaith() {
         if (!AppState.currentUser) return null;
@@ -142,12 +185,15 @@
         var card = document.getElementById('faith-card');
         if (!card || !score) return;
         var pct = score.next ? Math.max(4, Math.min(100, Math.round(100 * (score.average - FAITH_TITLES[score.level - 1][0]) / (score.next.at - FAITH_TITLES[score.level - 1][0])))) : 100;
+        // My profile picture carries my level sticker (where the camera icon used to be).
+        var mySticker = document.getElementById('my-spirit-sticker');
+        if (mySticker) mySticker.innerHTML = stickerHTML(score);
         card.innerHTML =
-            '<div class="faith-head"><div class="faith-badge">' + score.level + '</div><div class="faith-head-main"><div class="faith-title">' + escapeHtml(score.title) + '</div>' +
-            '<div class="faith-sub">' + score.points + ' faithfulness points · average streak ' + score.average + ' day' + (score.average === 1 ? '' : 's') + '</div></div>' +
-            '<button class="icon-btn" onclick="showFaithTitles()" aria-label="How faithfulness works"><i class="fas fa-circle-info"></i></button></div>' +
+            '<div class="faith-head"><div class="faith-badge">' + SPIRIT_STICKERS[score.level - 1] + '</div><div class="faith-head-main"><div class="faith-eyebrow">Spirit Life</div><div class="faith-title">' + score.points + ' <span>· ' + escapeHtml(score.title) + '</span></div>' +
+            '<div class="faith-sub">Level ' + score.level + ' of 10 · average streak ' + score.average + ' day' + (score.average === 1 ? '' : 's') + '</div></div>' +
+            '<button class="icon-btn" onclick="showFaithTitles()" aria-label="How Spirit Life works"><i class="fas fa-circle-info"></i></button></div>' +
             '<div class="faith-bar"><div style="width:' + pct + '%"></div></div>' +
-            '<div class="faith-next">' + (score.next ? score.next.toGo + ' more day' + (score.next.toGo === 1 ? '' : 's') + ' of average streak to become <strong>' + escapeHtml(score.next.title) + '</strong>' : 'The highest title. Keep going!') + '</div>' +
+            '<div class="faith-next">' + (score.next ? score.next.toGo + ' more day' + (score.next.toGo === 1 ? '' : 's') + ' of average streak to reach <strong>' + escapeHtml(score.next.title) + '</strong>' : 'The highest title. Keep going!') + '</div>' +
             streakRow('fa-sun', 'Devotion', score.devotion, 'Mark the Daily Devotional done') +
             streakRow('fa-calendar-check', 'Study', score.study, 'Complete a Study Planner entry') +
             streakRow('fa-gamepad', 'Play &amp; Learn', score.games, 'Play any Bible game');
@@ -155,20 +201,20 @@
 
     root.showFaithTitles = function () {
         var mine = AppState.faith ? scoreFromRecords(AppState.faith) : null;
-        showSheet('<h3 style="margin-bottom:4px;">Faithfulness</h3>' +
-            '<p class="text-muted" style="font-size:13px; margin-bottom:14px;">Your score is the <strong>average</strong> of three daily streaks — Devotion, Study and Play &amp; Learn — times ten. Keeping all three alive is what moves you up; a streak ends after a day is missed.</p>' +
+        showSheet('<h3 style="margin-bottom:4px;">Spirit Life</h3>' +
+            '<p class="text-muted" style="font-size:13px; margin-bottom:14px;">Your Spirit Life is the <strong>average</strong> of three daily streaks — Devotion, Study and Play &amp; Learn — times ten. Keeping all three alive is what moves you up; a streak ends after a day is missed. Each level has its own badge, shown on your profile picture.</p>' +
             FAITH_TITLES.map(function (t, i) {
                 var on = mine && mine.level === i + 1;
-                return '<div class="faith-level' + (on ? ' faith-level-on' : '') + '"><span class="faith-level-num">' + (i + 1) + '</span><span class="faith-level-main"><strong>' + t[1] + '</strong><small>' + t[2] + '</small></span>' +
+                return '<div class="faith-level' + (on ? ' faith-level-on' : '') + '"><span class="faith-level-num">' + SPIRIT_STICKERS[i] + '</span><span class="faith-level-main"><strong>' + t[1] + '</strong><small>' + t[2] + '</small></span>' +
                     '<span class="faith-level-at">' + (t[0] === 0 ? 'Start' : t[0] + '+ days') + '</span></div>';
             }).join(''));
     };
 
     /** One line for someone else's profile: "Faithful · 142 pts". Empty if they have no score yet. */
-    root.faithLineHTML = function (profile) {
+    root.faithLineHTML = function (profile, uid) {
         var score = root.faithFromProfile(profile);
-        if (!score) return '';
-        return '<div class="faith-line" onclick="showFaithTitles()"><i class="fas fa-fire"></i> ' + escapeHtml(score.title) + ' · ' + score.points + ' faithfulness points</div>';
+        if (!score || !spiritVisible(uid, profile)) return '';
+        return '<div class="faith-line" onclick="showFaithTitles()">' + SPIRIT_STICKERS[score.level - 1] + ' Spirit Life ' + score.points + ' · ' + escapeHtml(score.title) + '</div>';
     };
 
     /** "🔥 5-day devotion streak" for the devotional page; empty when there is no streak. */

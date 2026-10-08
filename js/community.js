@@ -35,7 +35,7 @@ async function renderCommunityPage() {
                 </div>
             ` : `
                 <div class="community-users-tools">
-                    <input type="search" id="community-user-search" class="form-input" placeholder="Search people by name" autocomplete="off" value="${escapeHtml(CommunityUsers.query)}">
+                    <input type="search" id="community-user-search" class="form-input" placeholder="Search by name or email" autocomplete="off" value="${escapeHtml(CommunityUsers.query)}">
                     <div class="community-users-row">
                         <div class="community-chips" id="community-user-filters">
                             ${[['all', 'All'], ['brethren', 'Brethren'], ['new', 'Not connected'], ['active', 'Active this week']].map(([key, label]) =>
@@ -59,8 +59,9 @@ async function renderCommunityPage() {
     if (tab === 'forums') { await loadCommunityGroups(); return; }
 
     const search = document.getElementById('community-user-search');
-    search.addEventListener('input', () => { CommunityUsers.query = search.value; renderCommunityUsersList(); });
+    search.addEventListener('input', () => { CommunityUsers.query = search.value; CommunityUsers.shown = 40; refreshCommunityUserSearch(); });
     await loadCommunityUsers();
+    refreshCommunityUserSearch();
 }
 
 function switchCommunityTab(tab) {
@@ -74,7 +75,63 @@ function switchCommunityTab(tab) {
    photo, when they joined, when they were last active) each account keeps up
    to date itself. It never contains an email address; the admin-only
    userDirectory does, which is why that is not what is listed here. */
-const CommunityUsers = { all: null, loadedAt: 0, query: '', filter: 'all', sort: 'name', shown: 40 };
+const CommunityUsers = { all: null, loadedAt: 0, query: '', queryHash: '', filter: 'all', sort: 'name', shown: 40 };
+
+/** SHA-256 of a trimmed, lower-cased email, as hex ('' if it cannot be worked out here). */
+async function emailSearchHash(email) {
+    const clean = String(email || '').trim().toLowerCase();
+    if (!clean || !window.crypto || !crypto.subtle || typeof TextEncoder === 'undefined') return '';
+    try {
+        const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(clean)));
+        return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch (error) { return ''; }
+}
+
+/** Redraws the list for what is typed. A full email address is matched by its hash — emails themselves are never listed. */
+async function refreshCommunityUserSearch() {
+    const typed = CommunityUsers.query;
+    const looksLikeEmail = /^\S+@\S+\.\S+$/.test(typed.trim());
+    CommunityUsers.queryHash = '';
+    if (looksLikeEmail) {
+        const hash = await emailSearchHash(typed);
+        if (CommunityUsers.query !== typed) return; // they kept typing
+        CommunityUsers.queryHash = hash;
+    }
+    renderCommunityUsersList();
+}
+
+/**
+ * Everyone who can be listed: the public cards first, then members who have no card yet but
+ * are already visible elsewhere in the app (my Brethren, Space authors, the quiz and games
+ * rankings). Each source is optional — one failing never empties the list.
+ */
+async function gatherCommunityPeople() {
+    const people = new Map();
+    const add = (uid, username, extra) => {
+        const name = typeof username === 'string' ? username.trim() : '';
+        if (!uid || !name || people.has(uid)) return;
+        people.set(uid, Object.assign({ uid, username: name, avatar: '', bio: '', createdAt: 0, lastActiveAt: 0, eh: '' }, extra || {}));
+    };
+    const read = (query) => query.once('value').then(snap => snap.val() || {}).catch(() => null);
+
+    const [cards, quiz, games] = await Promise.all([
+        read(database.ref('publicProfiles')),
+        read(database.ref('quizLeaderboardAllTime')),
+        read(database.ref('games/profiles').orderByChild('xp').limitToLast(200))
+    ]);
+    Object.entries(cards || {}).forEach(([uid, p]) => {
+        if (p) add(uid, p.username, { avatar: p.avatar || '', bio: p.bio || '', createdAt: p.createdAt || 0, lastActiveAt: p.lastActiveAt || 0, eh: typeof p.eh === 'string' ? p.eh : '' });
+    });
+    Object.entries(quiz || {}).forEach(([uid, row]) => { if (row) add(uid, row.username || row.name); });
+    Object.entries(games || {}).forEach(([uid, row]) => { if (row) add(uid, row.name); });
+    (AppState.spacePosts || []).forEach(post => add(post.authorId, getDisplayName(post.authorId, post.authorName || '')));
+
+    // People I am connected with are always findable, even with no public card.
+    const known = AppState.userConnections ? Array.from(AppState.userConnections.keys()).filter(uid => !people.has(uid)) : [];
+    await Promise.all(known.slice(0, 200).map(uid => fetchUserProfileName(uid).then(name => add(uid, name, { avatar: UserNameCache.avatars.get(uid) || '' }))));
+
+    return { list: Array.from(people.values()), cards };
+}
 
 function setCommunityUserFilter(key) {
     CommunityUsers.filter = key; CommunityUsers.shown = 40;
@@ -99,13 +156,11 @@ async function loadCommunityUsers() {
     }
     try {
         if (!CommunityUsers.all || Date.now() - CommunityUsers.loadedAt > 60000) {
-            const snap = await database.ref('publicProfiles').once('value');
-            const raw = snap.val() || {};
-            CommunityUsers.all = Object.entries(raw)
-                .filter(([, p]) => p && typeof p.username === 'string' && p.username.trim())
-                .map(([uid, p]) => ({ uid, username: p.username.trim(), avatar: p.avatar || '', bio: p.bio || '', createdAt: p.createdAt || 0, lastActiveAt: p.lastActiveAt || 0 }));
+            const found = await gatherCommunityPeople();
+            if (found.list.length === 0 && found.cards === null) throw new Error('No source of people could be read');
+            CommunityUsers.all = found.list;
             CommunityUsers.loadedAt = Date.now();
-            backfillPublicProfilesIfAdmin(raw);
+            backfillPublicProfilesIfAdmin(found.cards || {});
         }
         renderCommunityUsersList();
     } catch (error) {
@@ -142,12 +197,21 @@ async function backfillPublicProfilesIfAdmin(existing) {
 }
 
 /** Applies search + filter + sort to the loaded people (pure, so it can be tested). */
-function filterCommunityUsers(all, { query, filter, sort, myUid, connections, blocked, now }) {
-    const q = (query || '').trim().toLowerCase();
+function filterCommunityUsers(all, { query, queryHash, filter, sort, myUid, connections, blocked, now }) {
+    // Names are compared without accents, case or spacing differences, word by word in any order.
+    const fold = (text) => String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const words = fold(query).split(' ').filter(Boolean);
     const weekAgo = now - 7 * 86400000;
     const list = (all || []).filter(u => {
-        if (u.uid === myUid || (blocked && blocked.has(u.uid))) return false;
-        if (q && !u.username.toLowerCase().includes(q)) return false;
+        if (blocked && blocked.has(u.uid)) return false;
+        // I am left out of the browsing list, but searching for myself still finds me.
+        if (u.uid === myUid && words.length === 0) return false;
+        if (words.length > 0) {
+            const name = fold(u.username);
+            const byName = words.every(word => name.includes(word));
+            const byEmail = !!queryHash && u.eh === queryHash;
+            if (!byName && !byEmail) return false;
+        }
         const status = connections ? connections.get(u.uid) : undefined;
         if (filter === 'brethren') return status === 'brethren';
         if (filter === 'new') return !status;
@@ -165,7 +229,7 @@ function renderCommunityUsersList() {
     const list = document.getElementById('community-users-list');
     if (!list || !CommunityUsers.all) return;
     const people = filterCommunityUsers(CommunityUsers.all, {
-        query: CommunityUsers.query, filter: CommunityUsers.filter, sort: CommunityUsers.sort,
+        query: CommunityUsers.query, queryHash: CommunityUsers.queryHash, filter: CommunityUsers.filter, sort: CommunityUsers.sort,
         myUid: AppState.currentUser?.uid, connections: AppState.userConnections, blocked: AppState.blockedUsers instanceof Set ? AppState.blockedUsers : null, now: Date.now()
     });
     if (people.length === 0) {
@@ -173,7 +237,11 @@ function renderCommunityUsersList() {
             <div class="empty-state">
                 <div class="empty-state-icon"><i class="fas fa-magnifying-glass"></i></div>
                 <h3 style="margin-bottom: 8px;">No one found</h3>
-                <p style="color: var(--text-slate);">${CommunityUsers.query.trim() ? 'Try a different name or clear the filters.' : 'Nobody matches this filter yet.'}</p>
+                <p style="color: var(--text-slate);">${CommunityUsers.query.trim()
+                    ? (CommunityUsers.query.includes('@')
+                        ? 'Type the full email address exactly. People appear by email once they have opened this version of GraceGuide.'
+                        : (CommunityUsers.filter !== 'all' ? 'Nobody with that name matches this filter — try “All”.' : 'Try another spelling, or search by their full email address.'))
+                    : 'Nobody matches this filter yet.'}</p>
             </div>`;
         return;
     }
@@ -192,17 +260,28 @@ function renderCommunityUsersList() {
             const meta = [joined, activeLabel(u.lastActiveAt)].filter(Boolean).join(' · ');
             return `
                 <div class="group-card community-user" onclick="viewUserProfile('${escapeHtml(u.uid)}', '${escapeHtml(u.username).replace(/'/g, "\\'")}')">
-                    <div class="post-avatar community-user-avatar">${u.avatar ? `<img src="${escapeHtml(u.avatar)}" alt="" loading="lazy">` : escapeHtml(u.username.charAt(0).toUpperCase())}</div>
+                    <div class="post-avatar community-user-avatar" data-spirit-uid="${escapeHtml(u.uid)}">${u.avatar ? `<img src="${escapeHtml(u.avatar)}" alt="" loading="lazy">` : escapeHtml(u.username.charAt(0).toUpperCase())}</div>
                     <div style="flex: 1; min-width: 0;">
                         <div style="font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(u.username)}</div>
                         ${u.bio ? `<div style="font-size: 12px; color: var(--text-slate); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(u.bio)}</div>` : ''}
                         ${meta ? `<div style="font-size: 11px; color: var(--text-slate); margin-top: 2px;">${meta}</div>` : ''}
                     </div>
-                    ${tag(AppState.userConnections.get(u.uid))}
+                    ${u.uid === AppState.currentUser?.uid ? '<span class="community-user-tag">You</span>' : tag(AppState.userConnections.get(u.uid))}
                 </div>`;
         }).join('')}
         ${people.length > CommunityUsers.shown ? `<button class="btn btn-outline btn-block mt-2" onclick="showMoreCommunityUsers()">Show more</button>` : ''}
     `;
+    // Each person's Spirit Life sticker, once their profile is known (hidden if they keep it for Brethren).
+    if (typeof spiritStickerFor === 'function') {
+        list.querySelectorAll('[data-spirit-uid]').forEach(holder => {
+            const uid = holder.dataset.spiritUid;
+            fetchUserProfileName(uid).then(() => {
+                if (!holder.isConnected || holder.querySelector('.spirit-sticker')) return;
+                const html = spiritStickerFor(uid, uid === AppState.currentUser?.uid ? AppState.userProfile : UserNameCache.profiles.get(uid), 'spirit-on-avatar');
+                if (html) { holder.classList.add('has-spirit'); holder.insertAdjacentHTML('beforeend', html); }
+            });
+        });
+    }
 }
 async function loadCommunityGroups() {
     const container = $('#groups-list');
@@ -723,10 +802,11 @@ async function renderViewProfilePage() {
             <div class="profile-header">
                 <div class="profile-avatar">
                     ${profile.avatar ? `<img src="${profile.avatar}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">` : (name[0]?.toUpperCase() || 'U')}
+                    ${typeof spiritStickerFor === 'function' ? `<div class="avatar-spirit">${spiritStickerFor(userId, profile)}</div>` : ''}
                 </div>
                 <h2 style="font-weight: 700; margin-top: 8px;">${name}</h2>
                 <p style="color: var(--text-slate);">${escapeHtml(profile.bio || 'No bio yet')}</p>
-                ${typeof faithLineHTML === 'function' ? faithLineHTML(profile) : ''}
+                ${typeof faithLineHTML === 'function' ? faithLineHTML(profile, userId) : ''}
                 ${status === 'pending_received' ? `<p style="font-size: 12px; color: var(--text-slate); margin-top: 4px;">Sent you a connection request</p>` : ''}
             </div>
 
@@ -1435,7 +1515,7 @@ function renderProfilePage() {
             <div class="profile-header">
                 <div class="profile-avatar" style="position: relative; cursor: pointer;" onclick="triggerAvatarUpload()">
                     ${profile.avatar ? `<img src="${profile.avatar}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">` : (profile.username?.[0]?.toUpperCase() || 'U')}
-                    <div class="avatar-edit-badge"><i class="fas fa-camera"></i></div>
+                    <div class="avatar-spirit" id="my-spirit-sticker"></div>
                 </div>
                 <button class="btn btn-sm btn-outline mt-2" onclick="triggerAvatarUpload()">
                     <i class="fas fa-camera"></i> Change Photo
@@ -1471,7 +1551,7 @@ function renderProfilePage() {
                 </button>
             </div>
 
-            <!-- Faithfulness: the three daily streaks averaged into points and a title -->
+            <!-- Spirit Life: the three daily streaks averaged into points and a title -->
             ${typeof faithCardHTML === 'function' ? faithCardHTML() : ''}
 
             <!-- Your Journey (moved from Home — sits just before Recent Activity) -->
@@ -1515,10 +1595,17 @@ function renderProfilePage() {
             <div class="card mb-3">
                 <h3 style="font-weight: 600; margin-bottom: 16px;">My Bookmarks</h3>
                 ${AppState.bookmarks.length > 0 ? `
-                    ${AppState.bookmarks.slice(-5).reverse().map(bookmark => `
-                        <div class="p-2" style="border-bottom: 1px solid rgba(0,0,0,0.06); cursor: pointer;" onclick="openBookmark('${bookmark.reference}')">
-                            <div style="font-weight: 600;">${escapeHtml(bookmark.reference)}</div>
-                            ${bookmark.text ? `<div style="font-size: 12px; color: var(--text-slate);">${truncate(escapeHtml(bookmark.text), 80)}</div>` : ''}
+                    ${AppState.bookmarks.map((bookmark, index) => ({ bookmark, index })).slice(-5).reverse().map(({ bookmark, index }) => `
+                        <div class="p-2 profile-item" style="border-bottom: 1px solid rgba(0,0,0,0.06);">
+                            <div class="profile-item-main" onclick="openBookmark('${escapeHtml(bookmark.reference || '').replace(/'/g, "\\'")}')">
+                                <div style="font-weight: 600;">${escapeHtml(bookmark.reference)}</div>
+                                ${bookmark.text ? `<div style="font-size: 12px; color: var(--text-slate);">${truncate(escapeHtml(bookmark.text), 80)}</div>` : ''}
+                                ${bookmark.note ? `<div class="profile-item-note"><i class="fas fa-pen"></i> ${truncate(escapeHtml(bookmark.note), 90)}</div>` : ''}
+                            </div>
+                            <div class="profile-item-actions">
+                                <button class="icon-btn" title="Edit" aria-label="Edit bookmark" onclick="editProfileBookmark(${index})"><i class="fas fa-pen"></i></button>
+                                <button class="icon-btn" title="Delete" aria-label="Delete bookmark" onclick="deleteProfileItem('bookmarks', ${index})"><i class="fas fa-trash"></i></button>
+                            </div>
                         </div>
                     `).join('')}
                 ` : `
@@ -1529,16 +1616,18 @@ function renderProfilePage() {
             <div class="card">
                 <h3 style="font-weight: 600; margin-bottom: 16px;">My Notes</h3>
                 ${AppState.notes.length > 0 ? `
-                    ${AppState.notes.slice(-5).reverse().map((note, idx) => `
+                    ${AppState.notes.map((note, index) => ({ note, index })).slice(-5).reverse().map(({ note, index }) => `
                         <div class="p-2" style="border-bottom: 1px solid rgba(0,0,0,0.06);">
                             <div style="display: flex; align-items: flex-start; gap: 8px; justify-content: space-between;">
-                                <div style="flex: 1; cursor: pointer;" onclick="viewProfileNote('${escapeHtml(note.reference).replace(/'/g, "\\'")}', '${escapeHtml(note.text || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}')">
+                                <div style="flex: 1; min-width: 0; cursor: pointer;" onclick="viewProfileNote('${escapeHtml(note.reference).replace(/'/g, "\\'")}', '${escapeHtml(note.text || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}')">
                                     <div style="font-weight: 600;">${escapeHtml(note.reference)}</div>
                                     ${note.text ? `<div style="font-size: 12px; color: var(--text-slate); margin-top: 4px;">${truncate(escapeHtml(note.text), 80)}</div>` : ''}
                                 </div>
                                 <button class="btn btn-outline btn-sm" title="Share to Space" onclick="shareNoteToSpace('${escapeHtml(note.reference).replace(/'/g, "\\'")}', '${escapeHtml(note.text || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}')" style="flex-shrink: 0; padding: 6px 10px;">
                                     <i class="fas fa-share"></i>
                                 </button>
+                                <button class="icon-btn" title="Edit" aria-label="Edit note" onclick="editProfileNote(${index})"><i class="fas fa-pen"></i></button>
+                                <button class="icon-btn" title="Delete" aria-label="Delete note" onclick="deleteProfileItem('notes', ${index})"><i class="fas fa-trash"></i></button>
                             </div>
                         </div>
                     `).join('')}
@@ -1554,6 +1643,87 @@ function renderProfilePage() {
     // rather than blocking the whole profile render on a query.
     fetchMySpacePostCount();
     fetchAndRenderMyQuizStats();
+}
+
+/* ---- Editing and deleting my notes and bookmarks from the profile page ----
+   Both are saved as whole lists (users/{uid}/notes, users/{uid}/bookmarks),
+   the same way the Bible reader saves them, so the two stay in step. */
+async function saveProfileList(kind, next, previous, doneMessage) {
+    AppState[kind] = next;
+    try {
+        await database.ref(`users/${AppState.currentUser.uid}/${kind}`).set(next);
+        closeModal();
+        showToast(doneMessage, 'success');
+    } catch (error) {
+        console.error(`Error saving ${kind}:`, error);
+        AppState[kind] = previous; // put it back: nothing was saved
+        showToast('Could not save — please try again.', 'error');
+    }
+    if (AppState.currentRoute === 'profile') renderProfilePage();
+}
+
+function editProfileNote(index) {
+    const note = AppState.notes[index];
+    if (!note || !AppState.currentUser) return;
+    showModal(`
+        <h3 style="margin-bottom: 4px;">Edit note</h3>
+        <p class="text-muted" style="font-size: 12px; margin-bottom: 12px;"><i class="fas fa-book-bible"></i> ${escapeHtml(note.reference || '')}</p>
+        <textarea id="profile-note-text" class="form-textarea" rows="6" maxlength="4000">${escapeHtml(note.text || '')}</textarea>
+        <div class="stack-buttons mt-3">
+            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" id="profile-note-save">Save</button>
+        </div>
+    `);
+    document.getElementById('profile-note-save').onclick = () => {
+        const text = document.getElementById('profile-note-text').value.trim();
+        if (!text) { showToast('A note can’t be empty — delete it instead.', 'warning'); return; }
+        const previous = AppState.notes;
+        saveProfileList('notes', previous.map((n, i) => i === index ? { ...n, text, updatedAt: Date.now() } : n), previous, 'Note updated');
+    };
+}
+
+/** A bookmark is a saved verse; what can be edited is your own note on it. */
+function editProfileBookmark(index) {
+    const bookmark = AppState.bookmarks[index];
+    if (!bookmark || !AppState.currentUser) return;
+    showModal(`
+        <h3 style="margin-bottom: 4px;">Edit bookmark</h3>
+        <p class="text-muted" style="font-size: 12px; margin-bottom: 12px;"><i class="fas fa-bookmark"></i> ${escapeHtml(bookmark.reference || '')}</p>
+        <label class="form-label" for="profile-bookmark-note">Why you saved it (optional)</label>
+        <textarea id="profile-bookmark-note" class="form-textarea" rows="4" maxlength="600" placeholder="A few words to remember it by">${escapeHtml(bookmark.note || '')}</textarea>
+        <div class="stack-buttons mt-3">
+            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" id="profile-bookmark-save">Save</button>
+        </div>
+    `);
+    document.getElementById('profile-bookmark-save').onclick = () => {
+        const note = document.getElementById('profile-bookmark-note').value.trim();
+        const previous = AppState.bookmarks;
+        saveProfileList('bookmarks', previous.map((b, i) => {
+            if (i !== index) return b;
+            const next = { ...b, updatedAt: Date.now() };
+            if (note) next.note = note; else delete next.note;
+            return next;
+        }), previous, 'Bookmark updated');
+    };
+}
+
+function deleteProfileItem(kind, index) {
+    const item = AppState[kind][index];
+    if (!item || !AppState.currentUser) return;
+    const what = kind === 'notes' ? 'note' : 'bookmark';
+    showModal(`
+        <h3 style="margin-bottom: 8px;">Delete this ${what}?</h3>
+        <p class="text-muted" style="margin-bottom: 16px;">${escapeHtml(item.reference || '')}${kind === 'notes' && item.text ? ` — “${truncate(escapeHtml(item.text), 70)}”` : ''}<br>This can’t be undone.</p>
+        <div class="stack-buttons">
+            <button class="btn btn-outline" onclick="closeModal()">Keep it</button>
+            <button class="btn btn-accent" id="profile-item-delete">Delete</button>
+        </div>
+    `);
+    document.getElementById('profile-item-delete').onclick = () => {
+        const previous = AppState[kind];
+        saveProfileList(kind, previous.filter((_, i) => i !== index), previous, what === 'note' ? 'Note deleted' : 'Bookmark deleted');
+    };
 }
 
 function viewProfileNote(reference, text) {
@@ -1787,7 +1957,7 @@ async function showMyPostsModal() {
         const preview = (post) => {
             if (post.type === 'text' || !post.type) return truncate(escapeHtml(post.content || ''), 90);
             if (post.type === 'note') return truncate(escapeHtml(post.text || post.content || ''), 90);
-            if (post.type === 'plan') return `📅 ${escapeHtml(post.title || 'Study Plan')}`;
+            if (post.type === 'plan') return `📅 ${escapeHtml(post.planName || post.title || 'Study Plan')}`;
             if (post.type === 'video') return `🎬 ${escapeHtml(post.caption || 'Video')}`;
             return truncate(escapeHtml(post.content || post.text || ''), 90);
         };
@@ -1877,7 +2047,7 @@ async function showUserPostsModal(uid, displayName) {
         const preview = (post) => {
             if (post.type === 'text' || !post.type) return truncate(escapeHtml(post.content || ''), 90);
             if (post.type === 'note') return truncate(escapeHtml(post.text || post.content || ''), 90);
-            if (post.type === 'plan') return `📅 ${escapeHtml(post.title || 'Study Plan')}`;
+            if (post.type === 'plan') return `📅 ${escapeHtml(post.planName || post.title || 'Study Plan')}`;
             if (post.type === 'video') return `🎬 ${escapeHtml(post.caption || 'Video')}`;
             return truncate(escapeHtml(post.content || post.text || ''), 90);
         };
@@ -2194,6 +2364,29 @@ function renderSettingsPage() {
                 </div>
             </div>
             
+            <div class="card mb-3">
+                <h3 style="font-weight: 600; margin-bottom: 4px;">Daily Devotional</h3>
+                <p style="font-size: 12px; color: var(--text-slate); margin-bottom: 12px;">How long should your devotional be? It applies from your next devotional.</p>
+                <div class="settings-choice" role="radiogroup" aria-label="Devotional length">
+                    ${Object.entries(DEVOTIONAL_LENGTHS).map(([key, l]) => `
+                        <button class="settings-choice-item ${(getSavedDevotionalLength() || '') === key ? 'active' : ''}" role="radio" aria-checked="${getSavedDevotionalLength() === key}" onclick="setDevotionalLength('${key}')">
+                            <strong>${l.label}</strong><small>${l.about}</small>
+                        </button>`).join('')}
+                </div>
+                ${getSavedDevotionalLength() ? '' : '<p style="font-size: 12px; color: var(--text-slate); margin-top: 8px;">Not set yet — Shepherd is choosing for you (Auto).</p>'}
+            </div>
+
+            <div class="card mb-3">
+                <h3 style="font-weight: 600; margin-bottom: 4px;">Spirit Life</h3>
+                <div class="flex items-center justify-between p-2">
+                    <div>
+                        <div style="font-weight: 600;">Show my level to Brethren only</div>
+                        <div style="font-size: 12px; color: var(--text-slate);">When on, only people you are connected with see your Spirit Life level and badge.</div>
+                    </div>
+                    <input type="checkbox" id="spirit-private" ${AppState.userProfile?.spiritPrivate ? 'checked' : ''} ${AppState.currentUser ? '' : 'disabled'} onchange="setSpiritPrivate(this.checked)" style="width: 20px; height: 20px; flex-shrink: 0;">
+                </div>
+            </div>
+
             <div class="card mb-3">
                 <h3 style="font-weight: 600; margin-bottom: 16px;">Notifications</h3>
 

@@ -185,7 +185,7 @@ function localDateKey(date = new Date()) {
    (users/{uid}/profile, publicly readable), so renaming yourself in
    Profile updates every post/comment you've ever made.
    ============================================ */
-const UserNameCache = { names: new Map(), avatars: new Map(), fetchedAt: new Map(), pending: new Map() };
+const UserNameCache = { names: new Map(), avatars: new Map(), profiles: new Map(), fetchedAt: new Map(), pending: new Map() };
 const USER_NAME_TTL_MS = 5 * 60 * 1000;
 
 function getDisplayName(uid, fallback) {
@@ -209,6 +209,7 @@ function fetchUserProfileName(uid) {
             const profile = snap.val() || {};
             if (profile.username) UserNameCache.names.set(uid, profile.username);
             UserNameCache.avatars.set(uid, profile.avatar || '');
+            UserNameCache.profiles.set(uid, profile); // for the Spirit Life sticker on their avatar
             UserNameCache.fetchedAt.set(uid, Date.now());
             return profile.username || null;
         })
@@ -246,6 +247,8 @@ async function hydrateUserNames(root = document) {
             node.textContent = name[0].toUpperCase();
         }
     });
+    // Each person's Spirit Life level sticker rides on the corner of their avatar.
+    if (typeof applySpiritStickers === 'function') applySpiritStickers(nodes.filter(n => n.dataset.userInitial));
 }
 
 function showToast(message, type = 'info') {
@@ -628,13 +631,19 @@ function syncPublicProfile() {
     const user = AppState.currentUser;
     if (!user) return;
     const profile = AppState.userProfile || {};
-    database.ref(`publicProfiles/${user.uid}`).set({
+    const card = database.ref(`publicProfiles/${user.uid}`);
+    card.update({
         username: String(profile.username || user.email?.split('@')[0] || 'User').slice(0, 60),
         avatar: profile.avatar || '',
         bio: String(profile.bio || '').slice(0, 140),
         createdAt: profile.createdAt || Date.now(),
         lastActiveAt: Date.now()
     }).catch(() => {});
+    // So people who already know my email can find me by it: only a one-way hash is stored,
+    // never the address. Written on its own so it can never hold up the card above.
+    if (user.email && typeof emailSearchHash === 'function') {
+        emailSearchHash(user.email).then(hash => { if (hash) card.child('eh').set(hash).catch(() => {}); });
+    }
 }
 
 /**
@@ -717,7 +726,7 @@ async function loadUserData() {
     // Start realtime listeners (notifications, chat unread, forum unread) —
     // these update live via Firebase's .on('value'), no refresh needed.
     if (typeof startRealtimeListeners === 'function') startRealtimeListeners();
-    // Keep my public Faithfulness title current (devotion + study + games streaks).
+    // Keep my public Spirit Life title current (devotion + study + games streaks).
     if (typeof publishFaith === 'function') setTimeout(publishFaith, 4000);
     // Game invitations (Play & Learn) pop up on whatever page the user is on.
     if (window.GamesUI) GamesUI.onSignedIn();
@@ -2347,7 +2356,28 @@ async function buildDevotionalPersonalizationContext() {
     return [base, ...lines].filter(Boolean).join('\n');
 }
 
+/* ---- Devotional length (Settings → Daily Devotional) ----
+   'auto' lets Shepherd decide (a full, unhurried devotional); the others ask
+   for a set size. Saved on this device like the other reading preferences. */
+const DEVOTIONAL_LENGTHS = {
+    auto: { label: 'Auto', about: 'Shepherd decides — usually a full devotional', body: '3-5 paragraphs (roughly 220-320 words) — take the room the theme needs; do not cut it short', tokens: 1100 },
+    short: { label: 'Short', about: 'About a minute to read', body: '2 short paragraphs (roughly 80-120 words)', tokens: 600 },
+    moderate: { label: 'Moderate', about: 'About three minutes', body: '4-6 paragraphs (roughly 300-400 words)', tokens: 1300 },
+    long: { label: 'Long', about: 'A deeper, five-minute read', body: '7-9 paragraphs (roughly 600-750 words), developing the passage step by step with a practical application at the end', tokens: 2200 }
+};
+/** The chosen length, or null if the person has never chosen one. */
+function getSavedDevotionalLength() {
+    try { const v = localStorage.getItem('graceguide_devotional_length'); return DEVOTIONAL_LENGTHS[v] ? v : null; } catch (e) { return null; }
+}
+function setDevotionalLength(value) {
+    if (!DEVOTIONAL_LENGTHS[value]) return;
+    try { localStorage.setItem('graceguide_devotional_length', value); } catch (e) { /* private mode */ }
+    showToast(`Devotional length set to ${DEVOTIONAL_LENGTHS[value].label}. It applies from your next devotional.`, 'success');
+    if (AppState.currentRoute === 'settings') renderSettingsPage();
+}
+
 async function generateDevotionalWithAI(personalContext, continuityEntries, dateKey) {
+    const length = DEVOTIONAL_LENGTHS[getSavedDevotionalLength() || 'auto'];
     const continuityText = continuityEntries.length > 0
         ? `Their recent devotionals, for natural continuity (don't repeat these — build on one only if it genuinely fits, otherwise ignore):\n${continuityEntries.map(e => `- ${e.date}: "${e.title}" (themes: ${(e.themes || []).join(', ') || 'none recorded'})`).join('\n')}`
         : 'No previous devotionals on record yet.';
@@ -2360,12 +2390,12 @@ async function generateDevotionalWithAI(personalContext, continuityEntries, date
             messages: [
                 {
                     role: 'system',
-                    content: `You are Shepherd, writing a short, warm, biblically grounded daily devotional for a specific user of the GraceGuide Bible app. Personalize the "body" using the context given, but weave it in naturally and only where it genuinely fits — don't recite their stats back at them or force a connection to every detail. If a previous devotional's theme naturally continues today, you may build on it briefly without repeating it. If nothing personal fits well, still write a solid, grounded devotional.
+                    content: `You are Shepherd, writing a warm, biblically grounded daily devotional for a specific user of the GraceGuide Bible app. Personalize the "body" using the context given, but weave it in naturally and only where it genuinely fits — don't recite their stats back at them or force a connection to every detail. If a previous devotional's theme naturally continues today, you may build on it briefly without repeating it. If nothing personal fits well, still write a solid, grounded devotional.
 
 "prayerPoints" is different: keep those GENERIC and tied only to the verse/theme, never to anything personal about this user — they may be shown to other people if this devotional gets shared, so they must stand alone for anyone.
 
 Respond with ONLY valid JSON — no markdown, no code fences, no commentary — matching exactly this shape:
-{"title": "3-6 word title", "body": "2-4 short paragraphs of devotional content separated by \\n\\n", "verseReference": "e.g. Philippians 4:6-7", "verseText": "short quote or close paraphrase of that passage, under 30 words", "prayerPrompt": "one short, concrete prayer or action prompt, 1-2 sentences", "prayerPoints": ["3-4 short, general, actionable prayer points related to today's verse/theme — each under 15 words, generic enough for anyone to pray, not tied to this specific user's activity"], "themes": ["2-4 short lowercase theme words"]}`
+{"title": "3-6 word title", "body": "${length.body}, separated by \\n\\n", "verseReference": "e.g. Philippians 4:6-7", "verseText": "short quote or close paraphrase of that passage, under 30 words", "prayerPrompt": "one short, concrete prayer or action prompt, 1-2 sentences", "prayerPoints": ["3-4 short, general, actionable prayer points related to today's verse/theme — each under 15 words, generic enough for anyone to pray, not tied to this specific user's activity"], "themes": ["2-4 short lowercase theme words"]}`
                 },
                 {
                     role: 'user',
@@ -2373,7 +2403,7 @@ Respond with ONLY valid JSON — no markdown, no code fences, no commentary — 
                 }
             ],
             temperature: 0.9,
-            max_tokens: 600
+            max_tokens: length.tokens
         })
     });
 
@@ -2613,6 +2643,9 @@ async function renderDevotionalPage() {
                     <i class="fas fa-share"></i> Share Devotional
                 </button>
             </div>
+            ${getSavedDevotionalLength() ? '' : `
+                <p class="devotional-length-note"><i class="fas fa-sliders"></i> Want longer or shorter devotionals? <a href="#/settings" onclick="event.preventDefault(); navigateTo('settings')">Choose a length in Settings</a>.</p>
+            `}
         </div>
     `;
 

@@ -2053,6 +2053,9 @@ function buildSpacePostObject(fields) {
         sourceChapter: fields.sourceChapter || null,
         videoUrl: fields.videoUrl || null,
         planName: fields.planName || null,
+        // The plan's readings travel with the post — without them nobody else can open or adopt it.
+        planData: fields.planData || null,
+        planShareId: fields.planShareId || null,
         tags: fields.tags || [],
         amens: {},
         saves: {},
@@ -2362,12 +2365,15 @@ function renderSpaceCard(post) {
         <button class="space-chapter-btn" onclick="navigateTo('planner')">
             <i class="fas fa-calendar-check"></i> View Study Plan
         </button>
-    ` : (post.planData?.days?.length > 0 ? `
+    ` : `
         <button class="space-chapter-btn" onclick="previewSpacePlan('${post.id}')">
             <i class="fas fa-calendar-check"></i> View &amp; Adopt Plan
         </button>
-    ` : '')
+    `
     ) : '');
+    // Wherever this card is drawn (feed, a shared-post page, someone's posts) the plan it
+    // carries must be reachable from the button above — not only when the post is in the feed list.
+    if (post.type === 'plan') SpacePlanPosts.set(post.id, post);
 
     return `
         <div class="space-card" id="space-${post.id}">
@@ -2664,6 +2670,8 @@ async function submitTextSpacePost() {
 function submitVideoSpacePost() {
     const url = $('#space-video-input')?.value.trim();
     if (!url) { showToast('Please paste a video link', 'warning'); return; }
+    // Only videos that can play inside GraceGuide may be posted.
+    if (!videoEmbedInfo(url)) { showToast(videoLinkProblem(url), 'warning'); return; }
     submitCreateSpacePost({ type: 'video', videoUrl: url, slides: [] });
 }
 
@@ -2693,6 +2701,8 @@ function submitPlanSpacePost(index) {
             name,
             days: planDaysForSharing(plan)
         },
+        // Also kept as a public share, so the plan can still be opened if the post's own copy is ever missing.
+        planShareId: typeof savePlanShareSnapshot === 'function' ? savePlanShareSnapshot(plan) : null,
         tags: extractTags(name)
     });
 }
@@ -2702,13 +2712,38 @@ function submitPlanSpacePost(index) {
  * own Study Planner. Resets completion/progress so it starts fresh for them.
  */
 async function addSpacePlanToMyPlanner(postId) {
-    const post = AppState.spacePosts.find(p => p.id === postId);
-    const planData = post?.planData;
-    if (!planData || !Array.isArray(planData.days) || planData.days.length === 0) {
-        showToast("This study plan doesn't have day-by-day content to copy.", 'warning');
-        return;
+    const plan = await loadSpacePlan(postId);
+    if (!plan) { showToast("This study plan doesn't have day-by-day content to copy.", 'warning'); return; }
+    return adoptSharedPlan(plan.name, plan.days, `space_${postId}`);
+}
+
+/** Plan posts seen on screen, by post id (the feed list is not the only place a post is shown). */
+const SpacePlanPosts = new Map();
+
+/**
+ * The plan behind a Space post: { name, days, authorId, authorName }, or null if none can be
+ * found. Posts carry the plan's days; older posts that do not are matched to the author's
+ * public plan share of the same name, so they can still be opened.
+ */
+async function loadSpacePlan(postId) {
+    const post = SpacePlanPosts.get(postId) || AppState.spacePosts.find(p => p.id === postId);
+    if (!post) return null;
+    const name = post.planData?.name || post.planName || 'Study Plan';
+    let days = normalizeSharedPlanDays(post.planData?.days);
+    if (days.length === 0) {
+        try {
+            const direct = post.planShareId ? (await database.ref(`plannerShares/${post.planShareId}`).once('value')).val() : null;
+            let share = direct;
+            if (!share || normalizeSharedPlanDays(share.days).length === 0) {
+                const all = (await database.ref('plannerShares').once('value')).val() || {};
+                share = Object.values(all).find(s => s && s.ownerId === post.authorId && s.name === name && normalizeSharedPlanDays(s.days).length > 0) || null;
+            }
+            if (share) days = normalizeSharedPlanDays(share.days);
+        } catch (error) {
+            console.error('Error loading shared plan for post:', error);
+        }
     }
-    return adoptSharedPlan(planData.name, planData.days, `space_${postId}`);
+    return days.length > 0 ? { name, days, authorId: post.authorId, authorName: post.authorName } : null;
 }
 
 /* ---- Shared study plans: look through it, then "Adopt Plan" ----
@@ -2826,24 +2861,31 @@ async function adoptSharedPlan(name, days, sourceId) {
 }
 
 /** Space: look through a posted plan before adopting it. */
-function previewSpacePlan(postId) {
-    const post = AppState.spacePosts.find(p => p.id === postId);
-    const planData = post?.planData;
-    if (!planData || !Array.isArray(planData.days) || planData.days.length === 0) {
-        showToast("This study plan doesn't have day-by-day content to view.", 'warning');
+async function previewSpacePlan(postId) {
+    showSheet(`<div class="skeleton" style="height: 28px; border-radius: 8px; margin-bottom: 12px;"></div><div class="skeleton" style="height: 160px; border-radius: 12px;"></div>`);
+    const plan = await loadSpacePlan(postId);
+    if (!AppState.sheetOpen) return; // closed while it was loading
+    if (!plan) {
+        showSheet(`
+            <h3 style="margin-bottom: 8px;">This plan can’t be opened</h3>
+            <p class="text-muted">It was shared before study plans could be viewed from Space. Ask the person who posted it to share it again.</p>
+        `);
         return;
     }
-    const count = normalizeSharedPlanDays(planData.days).length;
+    const mine = AppState.currentUser && plan.authorId === AppState.currentUser.uid;
     showSheet(`
-        <h3 style="margin-bottom: 4px;">${escapeHtml(planData.name || 'Study Plan')}</h3>
-        <p class="text-muted" style="font-size: 13px; margin-bottom: 12px;">Shared by ${escapeHtml(getDisplayName(post.authorId, post.authorName || 'a GraceGuide user'))} · ${count} day${count === 1 ? '' : 's'}</p>
-        <button class="btn btn-primary btn-block" style="margin-bottom: 12px;" onclick="addSpacePlanToMyPlanner('${postId}')">
-            <i class="fas fa-plus"></i> Adopt Plan
-        </button>
-        <div class="planner-days">${sharedPlanDaysHTML(planData.days)}</div>
+        <h3 style="margin-bottom: 4px;">${escapeHtml(plan.name)}</h3>
+        <p class="text-muted" style="font-size: 13px; margin-bottom: 12px;">Shared by ${escapeHtml(getDisplayName(plan.authorId, plan.authorName || 'a GraceGuide user'))} · ${plan.days.length} day${plan.days.length === 1 ? '' : 's'}</p>
+        ${mine ? `
+            <button class="btn btn-primary btn-block" style="margin-bottom: 12px;" onclick="closeSheetThen(() => navigateTo('planner'))">
+                <i class="fas fa-calendar-check"></i> Open My Study Planner
+            </button>` : `
+            <button class="btn btn-primary btn-block" style="margin-bottom: 12px;" onclick="addSpacePlanToMyPlanner('${postId}')">
+                <i class="fas fa-plus"></i> Adopt Plan
+            </button>`}
+        <div class="planner-days">${sharedPlanDaysHTML(plan.days)}</div>
     `);
 }
-
 /** Chat / Forum: open a plan someone shared in a message. */
 function openSharedPlanMessage(shareId, isMine) {
     if (shareId && /^[\w-]+$/.test(shareId)) {
@@ -3079,24 +3121,84 @@ async function submitShareReelToGroup(postId, groupId) {
     }
 }
 
-function renderEmbed(url) {
-    if (url && (url.includes('youtube.com') || url.includes('youtu.be'))) {
-        const videoId = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/)?.[1];
-        if (videoId) {
-            return `
-                <div class="space-yt-wrap">
-                    <img class="space-yt-thumb" src="https://img.youtube.com/vi/${videoId}/hqdefault.jpg" alt="" loading="lazy" onclick="this.parentElement.innerHTML='<iframe src=\\'https://www.youtube.com/embed/${videoId}?autoplay=1\\' allow=\\'autoplay; encrypted-media; picture-in-picture\\' allowfullscreen class=\\'space-yt-iframe\\'></iframe>'">
-                    <div class="space-yt-play"><i class="fas fa-play"></i></div>
-                </div>
-            `;
-        }
+/* ---- Videos that play inside GraceGuide ----
+   A shared video link is turned into the site's own embeddable player, so it
+   plays on the page instead of sending people away. Only links that CAN be
+   embedded are accepted when posting (see submitVideoSpacePost): YouTube,
+   Facebook, TikTok, X (Twitter), Instagram and Vimeo. Short "share" links that
+   hide the video's id (vm.tiktok.com) and sites that refuse to be embedded
+   (Snapchat and others) are turned away with an explanation. */
+const VIDEO_SITES = 'YouTube, Facebook, TikTok, X (Twitter), Instagram or Vimeo';
+
+/** { site, label, icon, embed, tall, thumb? } for a link that can play in-app, else null. */
+function videoEmbedInfo(rawUrl) {
+    let url;
+    try { url = new URL(String(rawUrl || '').trim()); } catch (e) { return null; }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+    const host = url.hostname.replace(/^(www|m|mobile|web)\./, '').toLowerCase();
+    const path = url.pathname;
+    let m;
+
+    if (host === 'youtube.com' || host === 'youtu.be' || host === 'music.youtube.com' || host === 'youtube-nocookie.com') {
+        const id = host === 'youtu.be' ? path.slice(1).split('/')[0]
+            : url.searchParams.get('v') || (path.match(/^\/(?:shorts|embed|live|v)\/([^/?]+)/) || [])[1];
+        return id && /^[\w-]{11}$/.test(id) ? { site: 'youtube', label: 'YouTube', icon: 'fab fa-youtube', embed: `https://www.youtube.com/embed/${id}?autoplay=1`, thumb: `https://img.youtube.com/vi/${id}/hqdefault.jpg`, tall: /^\/shorts\//.test(path) } : null;
     }
-    if (url && (url.includes('twitter.com') || url.includes('x.com'))) {
-        return `<div class="space-tweet-wrap"><blockquote class="twitter-tweet" data-dnt="true"><a href="${url}"></a></blockquote></div>`;
+    if (host === 'vimeo.com' || host === 'player.vimeo.com') {
+        m = path.match(/\/(?:video\/)?(\d{6,})/);
+        return m ? { site: 'vimeo', label: 'Vimeo', icon: 'fab fa-vimeo-v', embed: `https://player.vimeo.com/video/${m[1]}?autoplay=1`, tall: false } : null;
     }
-    return `<div class="space-link-card"><i class="fas fa-link" style="font-size: 28px;"></i><a href="${url}" target="_blank">View Link</a></div>`;
+    if (host === 'facebook.com' || host === 'fb.watch') {
+        const isVideo = host === 'fb.watch' || /\/videos\/|\/watch\/?|\/reel\/|\/share\/[vr]\/|video\.php/.test(path);
+        if (!isVideo) return null;
+        const clean = `https://www.facebook.com${host === 'fb.watch' ? '' : path}${url.searchParams.get('v') ? `?v=${url.searchParams.get('v')}` : ''}`;
+        return { site: 'facebook', label: 'Facebook', icon: 'fab fa-facebook', embed: `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(host === 'fb.watch' ? url.href : clean)}&show_text=false&autoplay=true`, tall: /\/reel\//.test(path) };
+    }
+    if (host === 'tiktok.com') {
+        m = path.match(/\/video\/(\d+)/);
+        return m ? { site: 'tiktok', label: 'TikTok', icon: 'fab fa-tiktok', embed: `https://www.tiktok.com/embed/v2/${m[1]}`, tall: true } : null;
+    }
+    if (host === 'twitter.com' || host === 'x.com') {
+        m = path.match(/\/status(?:es)?\/(\d+)/);
+        return m ? { site: 'x', label: 'X', icon: 'fab fa-x-twitter', embed: `https://platform.twitter.com/embed/Tweet.html?id=${m[1]}&dnt=true`, tall: true } : null;
+    }
+    if (host === 'instagram.com') {
+        m = path.match(/\/(?:p|reel|reels|tv)\/([\w-]+)/);
+        return m ? { site: 'instagram', label: 'Instagram', icon: 'fab fa-instagram', embed: `https://www.instagram.com/p/${m[1]}/embed`, tall: true } : null;
+    }
+    return null;
 }
 
+/** Why a link was refused, in words for the person posting it. */
+function videoLinkProblem(rawUrl) {
+    const text = String(rawUrl || '').trim();
+    if (!/^https?:\/\//i.test(text)) return 'Paste the full link, starting with https://';
+    if (/vm\.tiktok\.com|vt\.tiktok\.com/i.test(text)) return 'That is a TikTok share link. Open the video in TikTok or a browser and copy the full link (it contains “/video/”).';
+    if (/snapchat\.com/i.test(text)) return 'Snapchat doesn’t allow its videos to play inside other apps, so they can’t be posted here.';
+    if (/facebook\.com|tiktok\.com|twitter\.com|x\.com|instagram\.com|youtube\.com|youtu\.be|vimeo\.com/i.test(text)) return 'That link doesn’t point to a single video. Open the video itself and copy its link.';
+    return `That site can’t play inside GraceGuide. Use a ${VIDEO_SITES} link.`;
+}
+
+function playEmbeddedVideo(el) {
+    const wrap = el.closest('.space-embed');
+    if (!wrap) return;
+    if (wrap.dataset.tall === '1') wrap.closest('.space-video-wrap')?.classList.add('space-video-tall');
+    wrap.innerHTML = `<iframe src="${wrap.dataset.embed}" class="space-yt-iframe" allow="autoplay; encrypted-media; picture-in-picture; fullscreen; clipboard-write" allowfullscreen scrolling="no" referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+}
+
+function renderEmbed(url) {
+    const info = videoEmbedInfo(url);
+    if (!info) {
+        // A link posted before unsupported sites were turned away: it can only be opened outside.
+        return `<div class="space-embed-none"><i class="fas fa-video-slash"></i><div><strong>This video can’t play here</strong><a href="${escapeHtml(url || '')}" target="_blank" rel="noopener">Open the link</a></div></div>`;
+    }
+    return `
+        <div class="space-embed space-embed-${info.site}" data-embed="${escapeHtml(info.embed)}" data-tall="${info.tall ? 1 : 0}" onclick="playEmbeddedVideo(this)">
+            ${info.thumb ? `<img class="space-yt-thumb" src="${info.thumb}" alt="" loading="lazy">` : `<div class="space-embed-poster"><i class="${info.icon}"></i><span>${info.label} video</span></div>`}
+            <div class="space-yt-play"><i class="fas fa-play"></i></div>
+        </div>
+    `;
+}
 async function moderateContent(content) {
     const bannedWords = ['spam', 'scam', 'hack', 'illegal', 'explicit'];
     const flagged = bannedWords.some(word => content.toLowerCase().includes(word));

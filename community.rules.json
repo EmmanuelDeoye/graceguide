@@ -20,6 +20,9 @@
       "lastActiveAt": {
         ".validate": "newData.isNumber()"
       },
+      "eh": {
+        ".validate": "newData.isString() && newData.val().length == 64"
+      },
       "$other": {
         ".validate": "$other == 'username'"
       }

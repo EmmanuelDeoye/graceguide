@@ -284,6 +284,18 @@
                 return ref.set(data).then(function () {
                     return { mode: 'client', gained: applied.gained, newBadges: applied.newBadges, profile: applied.profile };
                 }, function (err) {
+                    // A database still on the rules from before badge XP refuses the newer fields:
+                    // save the game without them rather than lose the XP.
+                    if (!attempt) {
+                        var plain = Object.assign({}, data);
+                        delete plain.perfect; delete plain.claims; delete plain.claimed;
+                        return ref.set(plain).then(function () {
+                            var kept = Object.assign({}, applied.profile, { perfect: 0, claims: 0, claimed: {} });
+                            return { mode: 'client', gained: applied.gained, newBadges: applied.newBadges, profile: kept };
+                        }, function () {
+                            return new Promise(function (res) { setTimeout(res, 1200); }).then(function () { return writeOwnProfile(result, 1); });
+                        });
+                    }
                     // Two games finishing within the cooldown, or the clock ticking over midnight UTC.
                     if ((attempt || 0) < 2) return new Promise(function (res) { setTimeout(res, attempt ? 9000 : 1200); }).then(function () { return writeOwnProfile(result, (attempt || 0) + 1); });
                     throw err;
@@ -325,6 +337,32 @@
                     if (!after) return { mode: 'server', pending: true, gained: 0, newBadges: [], profile: before };
                     var fresh = Object.keys(after.badges || {}).filter(function (id) { return !(before.badges || {})[id]; });
                     return { mode: 'server', gained: (after.xp || 0) - (before.xp || 0), newBadges: fresh, profile: after };
+                });
+            });
+        }
+
+        /**
+         * Claims the bonus XP of a badge I have earned. Resolves { gained, profile } (gained 0 if it
+         * was already claimed). With the referee deployed the server adds the XP; otherwise my own
+         * profile is updated inside the rule limits (one claim per write, never twice per badge).
+         */
+        function claimBadge(badgeId, attempt) {
+            var u = me(), ref = db.ref('games/profiles/' + u.uid);
+            return Promise.all([serverAlive(), val(ref)]).then(function (r) {
+                var current = r[1];
+                if (!current || (current.claimed || {})[badgeId]) return { gained: 0, profile: current };
+                if (r[0]) {
+                    return db.ref('games/badgeClaims/' + u.uid + '/' + badgeId).set(TS).catch(function () { return null; }).then(function () {
+                        return waitFor(ref, function (p) { return p && (p.claimed || {})[badgeId]; }, 9000);
+                    }).then(function (after) {
+                        return after ? { gained: (after.xp || 0) - (current.xp || 0), profile: after } : { gained: 0, profile: current, pending: true };
+                    });
+                }
+                var claimed = core.claimBadge(current, badgeId, now());
+                if (!claimed) return { gained: 0, profile: current };
+                return ref.set(Object.assign({}, claimed.profile, { updatedAt: TS })).then(function () { return claimed; }, function (err) {
+                    if ((attempt || 0) < 1) return new Promise(function (res) { setTimeout(res, 1200); }).then(function () { return claimBadge(badgeId, 1); });
+                    throw err;
                 });
             });
         }
@@ -522,16 +560,22 @@
             var self = this, cfg = core.GAMES[this.game];
             if (this._starting || this.room.plan) return Promise.resolve(false);
             this._starting = true;
-            var plan = { startedAt: TS, secs: cfg.secs, rounds: cfg.rounds };
-            // However the game is started (button, quick match, rematch): fresh AI questions at
-            // the room's level when a verified set is ready.
-            if (!custom && opts.customQuestions) { try { custom = opts.customQuestions(this.game, this.room.meta.level); } catch (e) { custom = null; } }
-            if (custom && custom.ids && custom.ids.length === cfg.rounds) { plan.q = custom.ids; plan.qs = custom.qs; }
-            else plan.q = core.pickQuestions(bank, this.game, cfg.rounds, recentQuestions(this.game));
-            return roomRef(this.roomId).child('plan').set(plan).then(function () {
-                if (waiting && waiting.roomId === self.roomId) stopWaiting();
-                return true;
-            }, function () { self._starting = false; return false; }); // someone else started it first
+            // However the game is started (button, quick match, rematch): fresh AI questions at the
+            // room's level. opts.customQuestions may take a while (it waits for the questions to be
+            // written and verified) and resolves null only when that has really failed.
+            var ask = custom ? Promise.resolve(custom)
+                : opts.customQuestions ? Promise.resolve().then(function () { return opts.customQuestions(self.game, self.room.meta.level); }).catch(function () { return null; })
+                : Promise.resolve(null);
+            return ask.then(function (custom) {
+                if (self._closed || self.room.plan) { self._starting = false; return false; }
+                var plan = { startedAt: TS, secs: cfg.secs, rounds: cfg.rounds };
+                if (custom && custom.ids && custom.ids.length === cfg.rounds) { plan.q = custom.ids; plan.qs = custom.qs; }
+                else plan.q = core.pickQuestions(bank, self.game, cfg.rounds, recentQuestions(self.game));
+                return roomRef(self.roomId).child('plan').set(plan).then(function () {
+                    if (waiting && waiting.roomId === self.roomId) stopWaiting();
+                    return true;
+                }, function () { self._starting = false; return false; }); // someone else started it first
+            });
         };
 
         /** Makes round `r` readable (writing a pass if I never answered it) and listens to it. */
@@ -664,7 +708,7 @@
             createRoom: createRoom, joinRoom: joinRoom, joinByCode: joinByCode, leaveRoom: leaveRoom,
             quickMatch: quickMatch, stopWaiting: stopWaiting,
             openRoom: function (roomId) { return new RoomSession(roomId).open(); },
-            serverAlive: serverAlive, loadProfile: loadProfile, award: award, leaderboard: leaderboard, profilesOf: profilesOf,
+            serverAlive: serverAlive, loadProfile: loadProfile, award: award, claimBadge: claimBadge, leaderboard: leaderboard, profilesOf: profilesOf,
             watchLeaderboard: watchLeaderboard, watchDailyBoard: watchDailyBoard, myGames: myGames, cancelRoom: cancelRoom, forgetGame: forget, KEEP_MS: KEEP_MS,
             dailyStatus: dailyStatus, dailyStart: dailyStart, dailyFinish: dailyFinish, dailyBoard: dailyBoard, startRun: startRun,
             sendInvite: sendInvite, respondInvite: respondInvite, dismissInvite: dismissInvite, cancelInvite: cancelInvite,

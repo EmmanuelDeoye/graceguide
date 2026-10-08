@@ -100,6 +100,24 @@ exports.gamesRefereeRoom = functions
     return null;
   });
 
+/** A player claims the bonus XP of a badge they have earned (once per badge). */
+exports.gamesRefereeBadge = functions
+  .region(REGION)
+  .database.ref('/games/badgeClaims/{uid}/{badgeId}')
+  .onCreate(async (snapshot, context) => {
+    const { uid, badgeId } = context.params;
+    await beat();
+    const now = Date.now();
+    await db().ref(`/games/profiles/${uid}`).transaction((current) => {
+      // A transaction is first tried against an empty local copy: answering null there makes the
+      // server send the real profile and run this again (and leaves a missing profile missing).
+      if (current === null) return null;
+      const claimed = Core.claimBadge(current, badgeId, now); // null: not earned, or already claimed
+      return claimed ? Object.assign({}, claimed.profile, { updatedAt: now }) : undefined;
+    });
+    return null;
+  });
+
 /** A solo game was finished (start and finish are separate, server-stamped writes). */
 exports.gamesRefereeRun = functions
   .region(REGION)

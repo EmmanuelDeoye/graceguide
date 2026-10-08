@@ -2038,13 +2038,13 @@
 .community-tab { flex: 1; padding: 10px 12px; border: none; border-radius: var(--radius-full); background: transparent; color: var(--text-slate); font-family: inherit; font-size: var(--text-sm); font-weight: 700; cursor: pointer; }
 .community-tab.active { background: var(--card-white); color: var(--text-charcoal); box-shadow: var(--shadow-sm); }
 .community-users-tools { margin-bottom: 12px; }
-.community-users-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-.community-chips { display: flex; gap: 6px; overflow-x: auto; flex: 1; min-width: 0; padding-bottom: 2px; scrollbar-width: none; }
+.community-users-row { display: flex; flex-direction: column; gap: 8px; align-items: stretch; margin-top: 8px; }
+.community-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .community-chips::-webkit-scrollbar { display: none; }
 .community-chip { white-space: nowrap; padding: 7px 12px; border-radius: var(--radius-full); border: 1px solid rgba(0,0,0,0.1); background: var(--card-white); color: var(--text-slate); font-family: inherit; font-size: var(--text-xs); font-weight: 700; cursor: pointer; }
 [data-theme="dark"] .community-chip { border-color: var(--dark-border); }
 .community-chip.active { background: var(--primary-deep-olive); border-color: var(--primary-deep-olive); color: #f8f6f0; }
-.community-sort { width: auto; flex-shrink: 0; padding: 7px 10px; font-size: var(--text-xs); font-weight: 600; }
+.community-sort { width: 100%; padding: 9px 12px; font-size: var(--text-sm); font-weight: 600; }
 .community-users-count { font-size: var(--text-xs); color: var(--text-slate); margin-bottom: 8px; }
 .community-user-avatar { width: 44px; height: 44px; flex-shrink: 0; overflow: hidden; }
 .community-user-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
@@ -2084,3 +2084,92 @@
 .faith-level-main { flex: 1; display: flex; flex-direction: column; font-size: 14px; }
 .faith-level-main small { font-size: 12px; color: var(--text-slate); }
 .faith-level-at { font-size: 12px; font-weight: 700; color: var(--text-slate); white-space: nowrap; }
+
+/* ============================================
+   IN-APP VIDEO (YouTube, Facebook, TikTok, X, Instagram, Vimeo)
+   ============================================ */
+.space-embed { position: relative; width: 100%; height: 100%; cursor: pointer; background: #000; }
+.space-embed-poster { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px; padding-bottom: 18px; color: rgba(255,255,255,0.92); font-size: 13px; font-weight: 700; background: linear-gradient(135deg, #30483a, #111815); }
+.space-embed-poster i { position: absolute; top: 14px; left: 16px; font-size: 22px; }
+.space-embed-facebook .space-embed-poster { background: linear-gradient(135deg, #1877f2, #0b3d91); }
+.space-embed-tiktok .space-embed-poster { background: linear-gradient(135deg, #111, #25f4ee 160%); }
+.space-embed-x .space-embed-poster { background: linear-gradient(135deg, #14171a, #3a4046); }
+.space-embed-instagram .space-embed-poster { background: linear-gradient(135deg, #833ab4, #fd1d1d 60%, #fcb045); }
+.space-embed-vimeo .space-embed-poster { background: linear-gradient(135deg, #1ab7ea, #0b6a8a); }
+.space-video-wrap.space-video-tall { aspect-ratio: 9 / 14; max-height: 620px; }
+.space-embed-none { display: flex; align-items: center; gap: 14px; height: 100%; padding: 20px; background: var(--card-white); color: var(--text-slate); }
+.space-embed-none i { font-size: 26px; opacity: 0.6; }
+.space-embed-none strong { display: block; color: var(--text-charcoal); font-size: 14px; }
+.space-embed-none a { color: var(--primary-deep-olive); font-weight: 600; font-size: 13px; }
+[data-theme="dark"] .space-embed-none a { color: var(--gold-light); }
+
+/* ============================================
+   SETTINGS choices + devotional length note + dark-mode selects
+   ============================================ */
+.settings-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.settings-choice-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; text-align: left; cursor: pointer; font-family: inherit; border-radius: var(--radius-md); border: 2px solid rgba(0,0,0,0.1); background: var(--card-white); color: var(--text-charcoal); }
+.settings-choice-item small { font-size: 11px; color: var(--text-slate); line-height: 1.3; }
+.settings-choice-item.active { border-color: var(--accent-muted-gold); background: rgba(199,166,90,0.16); }
+[data-theme="dark"] .settings-choice-item { border-color: var(--dark-border); }
+[data-theme="dark"] .settings-choice-item.active { border-color: var(--accent-muted-gold); }
+@media (max-width: 480px) { .settings-choice { grid-template-columns: 1fr; } }
+.devotional-length-note { font-size: 13px; color: var(--text-slate); text-align: center; margin-bottom: 24px; }
+.devotional-length-note a { color: var(--primary-deep-olive); font-weight: 700; text-decoration: underline; }
+[data-theme="dark"] .devotional-length-note a { color: var(--gold-light); }
+
+/* Dark mode: drop-down selectors were dark-on-dark and vanished into the page. Give them a
+   lighter surface, a visible outline and readable options (and tell the browser the page is
+   dark so its own drop-down list matches). */
+[data-theme="dark"] select,
+[data-theme="dark"] select.form-input {
+    color-scheme: dark;
+    background-color: #2a3830;
+    color: var(--dark-text);
+    border: 1px solid #5d7166;
+}
+[data-theme="dark"] select:focus { border-color: var(--accent-muted-gold); outline: none; }
+[data-theme="dark"] select option { background-color: #2a3830; color: var(--dark-text); }
+
+/* ============================================
+   PROFILE: notes/bookmarks rows, Spirit Life stickers, stacked buttons
+   ============================================ */
+.profile-item { display: flex; align-items: flex-start; gap: 8px; }
+.profile-item-main { flex: 1; min-width: 0; cursor: pointer; }
+.profile-item-note { font-size: 12px; color: var(--gold-dark); margin-top: 4px; }
+[data-theme="dark"] .profile-item-note { color: var(--gold-light); }
+.profile-item-actions { display: flex; flex-shrink: 0; }
+/* Two buttons side by side when there is room; stacked when they would squeeze their words. */
+.stack-buttons { display: flex; gap: 8px; }
+.stack-buttons .btn { flex: 1; }
+@media (max-width: 380px) { .stack-buttons { flex-direction: column-reverse; } }
+
+.profile-avatar { position: relative; }
+.avatar-spirit { position: absolute; right: -4px; bottom: -4px; }
+.spirit-sticker { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; font-size: 18px; line-height: 1; font-style: normal; font-weight: 400; background: var(--card-white); border: 2px solid var(--accent-muted-gold); box-shadow: var(--shadow-sm); cursor: default; }
+.spirit-l1, .spirit-l2 { border-color: #8fb39a; }
+.spirit-l3, .spirit-l4 { border-color: #c87552; }
+.spirit-l5, .spirit-l6 { border-color: #5b8a9a; }
+.spirit-l7, .spirit-l8 { border-color: #7b6a94; }
+.spirit-l9, .spirit-l10 { border-color: #d4af37; box-shadow: 0 0 0 2px rgba(212,175,55,0.3), var(--shadow-sm); }
+.has-spirit { position: relative; overflow: visible; }
+.spirit-on-avatar { position: absolute; right: -6px; bottom: -6px; width: 20px; height: 20px; font-size: 11px; border-width: 1.5px; z-index: 1; }
+.faith-eyebrow { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--gold-dark); }
+[data-theme="dark"] .faith-eyebrow { color: var(--gold-light); }
+.faith-title span { font-size: 14px; font-weight: 700; color: var(--text-slate); }
+.faith-badge { font-size: 24px; background: rgba(199,166,90,0.2); border: 2px solid var(--accent-muted-gold); }
+.faith-level-num { font-size: 15px; background: rgba(199,166,90,0.16); }
+
+/* ---- Phones: buttons that sit side by side are stacked instead of squeezing their words ---- */
+@media (max-width: 420px) {
+    .plan-focus-actions { grid-template-columns: 1fr; }
+    .plan-focus-actions .btn { width: 100%; }
+    .modal-content .flex:has(> .btn + .btn),
+    .sheet-content .flex:has(> .btn + .btn),
+    .modal-content div[style*="display: flex"]:has(> .btn + .btn),
+    .sheet-content div[style*="display: flex"]:has(> .btn + .btn),
+    .modal-content div[style*="display:flex"]:has(> .btn + .btn),
+    .sheet-content div[style*="display:flex"]:has(> .btn + .btn) { flex-direction: column; align-items: stretch; }
+    .modal-content .flex:has(> .btn + .btn) > .btn,
+    .sheet-content .flex:has(> .btn + .btn) > .btn { width: 100%; }
+    .profile-actions-row, .flex.gap-2.mb-4[style*="justify-content: center"] { flex-wrap: wrap; }
+}

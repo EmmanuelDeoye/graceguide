@@ -709,7 +709,7 @@ async function renderQuizPageForState() {
                     </div>
                 ` : ''}
                 ${lastSessionParticipants.length > 0 ? `
-                    <div class="card">
+                    <div class="card mb-3">
                         <h3 style="font-weight: 700; margin-bottom: 12px;">Last Session Leaderboard</h3>
                         <div class="quiz-leaderboard-list">
                             ${lastSessionParticipants.slice(0, 10).map((p, i) => `
@@ -722,9 +722,19 @@ async function renderQuizPageForState() {
                         </div>
                     </div>
                 ` : ''}
+                <!-- The all-time ranking stays on this page while the next quiz counts down. -->
+                <div class="card">
+                    <h3 style="font-weight: 700; margin-bottom: 4px;"><i class="fas fa-medal"></i> All-Time Ranking</h3>
+                    <p class="text-muted" style="font-size: 12px; margin-bottom: 12px;">Ranked by Quiz XP — every quiz you take adds to it, and better scores add more.</p>
+                    <div class="quiz-leaderboard-list" id="quiz-page-alltime-list">
+                        <div class="skeleton" style="height: 44px; border-radius: 10px; margin-bottom: 6px;"></div>
+                        <div class="skeleton" style="height: 44px; border-radius: 10px;"></div>
+                    </div>
+                </div>
             </div>
         `;
         startQuizCountdownTicker(() => renderQuizPage());
+        renderQuizPageAllTimeSection();
         return;
     }
 
@@ -772,7 +782,7 @@ async function renderQuizPageForState() {
             </div>
             <div class="card">
                 <h3 style="font-weight: 700; margin-bottom: 4px;"><i class="fas fa-medal"></i> All-Time Ranking</h3>
-                <p class="text-muted" style="font-size: 12px; margin-bottom: 12px;">Accumulated score across every round — ties broken by total time taken.</p>
+                <p class="text-muted" style="font-size: 12px; margin-bottom: 12px;">Ranked by Quiz XP — every quiz you take adds to it, and better scores add more.</p>
                 <div class="quiz-leaderboard-list" id="quiz-page-alltime-list">
                     <div class="skeleton" style="height: 44px; border-radius: 10px; margin-bottom: 6px;"></div>
                     <div class="skeleton" style="height: 44px; border-radius: 10px;"></div>
