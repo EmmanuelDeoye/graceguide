@@ -22,7 +22,10 @@ async function registerServiceWorkers() {
     if (!('serviceWorker' in navigator)) return;
 
     try {
-        await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+        // updateViaCache 'none': the browser always asks the server for sw.js itself, so a new
+        // version is noticed straight away instead of after the HTTP cache expires.
+        const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' });
+        watchForAppUpdate(registration);
     } catch (e) {
         console.warn('App service worker registration failed:', e);
     }
@@ -38,6 +41,53 @@ async function registerServiceWorkers() {
     } catch (e) {
         console.warn('FCM service worker registration failed:', e);
     }
+}
+
+/* ============================================
+   APP UPDATES
+   The service worker fetches the app's files from the network first, so
+   a reload always shows the latest version. What is left is a tab that
+   is ALREADY open when an update goes out: this notices the update
+   (checking again whenever the app comes back to the front), and either
+   reloads straight away — if the app has only just been opened — or
+   shows a small "Refresh" bar, so nobody is thrown out of a game, a
+   chat or something they are typing.
+   ============================================ */
+const APP_OPENED_AT = Date.now();
+let appUpdateReloading = false;
+
+function watchForAppUpdate(registration) {
+    if (!registration) return;
+    // Was this page already under a service worker's control? (If not, this is a first visit:
+    // the worker taking control is not an update.)
+    const hadController = !!navigator.serviceWorker.controller;
+
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!hadController || appUpdateReloading) return;
+        const busy = AppState.modalOpen || AppState.sheetOpen || ['play', 'group-chat', 'dm-thread', 'ask'].includes(AppState.currentRoute)
+            || /^(INPUT|TEXTAREA)$/.test((document.activeElement && document.activeElement.tagName) || '');
+        if (Date.now() - APP_OPENED_AT < 15000 && !busy) { appUpdateReloading = true; window.location.reload(); }
+        else showAppUpdateBar();
+    });
+
+    const check = () => { registration.update().catch(() => {}); };
+    let lastCheck = Date.now();
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && Date.now() - lastCheck > 5 * 60 * 1000) { lastCheck = Date.now(); check(); }
+    });
+    window.addEventListener('online', check);
+    setInterval(() => { if (document.visibilityState === 'visible') { lastCheck = Date.now(); check(); } }, 30 * 60 * 1000);
+}
+
+function showAppUpdateBar() {
+    if (document.getElementById('app-update-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'app-update-bar';
+    bar.className = 'app-update-bar';
+    bar.setAttribute('role', 'status');
+    bar.innerHTML = '<span><i class="fas fa-arrows-rotate"></i> GraceGuide has been updated.</span><button class="btn btn-gold btn-sm" id="app-update-refresh">Refresh</button>';
+    document.body.appendChild(bar);
+    document.getElementById('app-update-refresh').onclick = () => { appUpdateReloading = true; window.location.reload(); };
 }
 
 /* ============================================

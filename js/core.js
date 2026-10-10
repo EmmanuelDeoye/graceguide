@@ -472,7 +472,7 @@ function initAuth() {
     // this is what makes those URLs work after a hard refresh, not just
     // when navigated to from inside the app.
     const VALID_INITIAL_ROUTES = ['home', 'bible', 'ask', 'space', 'community', 'planner', 'messages', 'profile', 'settings', 'talk-to-someone', 'terms'];
-    const DEEP_LINK_ROUTE_MARKERS = ['deep-profile', 'deep-space-post', 'deep-planner', 'deep-bible', 'deep-quiz', 'deep-devotional', 'deep-play'];
+    const DEEP_LINK_ROUTE_MARKERS = ['deep-profile', 'deep-space-post', 'deep-planner', 'deep-bible', 'deep-quiz', 'deep-devotional', 'deep-play', 'deep-forum'];
     const hashRoute = window.location.hash.replace(/^#\//, '');
     const bootParsedRoute = parseAppRoute(window.location.hash);
     // hashRoute.length check preserves the original behavior for an
@@ -1265,6 +1265,10 @@ function parseAppRoute(hash) {
     if (first === 'devotional' && second) {
         return { route: 'deep-devotional', params: { shareId: second }, urlPath: path };
     }
+    // A shared forum group: #/forum/GROUP_ID
+    if (first === 'forum' && second) {
+        return { route: 'deep-forum', params: { groupId: second }, urlPath: path };
+    }
     // Play & Learn: #/play, #/play/battle, #/play/room/ID, #/play/join/CODE …
     if (first === 'play') {
         return { route: 'deep-play', params: { sub: second || null, arg: third || null }, urlPath: path };
@@ -1336,6 +1340,12 @@ function navigateToHash(hash, options = {}) {
         case 'deep-play':
             AppState.playRoute = parsed.params;
             navigateTo('play', navOptions);
+            return;
+
+        case 'deep-forum':
+            // Opens the group itself (anyone signed in can read it and tap Join).
+            AppState.currentGroupId = parsed.params.groupId;
+            navigateTo('group-chat', navOptions);
             return;
 
         default:

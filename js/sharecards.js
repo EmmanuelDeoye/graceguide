@@ -31,6 +31,10 @@
    ============================================ */
 const SHARE_CARD_WIDTH = 1080;
 const SHARE_CARD_HEIGHT = 1350;
+// Some cards are shorter (square): a game room, Spirit Life and a forum link carry little
+// text, so the tall format left them mostly empty. Set `short: true` on the card config.
+const SHARE_CARD_HEIGHT_SHORT = 1080;
+function shareCardHeight(config) { return config && config.short ? SHARE_CARD_HEIGHT_SHORT : SHARE_CARD_HEIGHT; }
 
 const SHARE_CARD_COLORS = {
     oliveDark: '#243629',
@@ -98,7 +102,7 @@ async function ensureShareCardFontsReady() {
             document.fonts.load('800 42px "Inter"'),
             document.fonts.load('600 30px "Inter"'),
             document.fonts.load('500 28px "Inter"'),
-            document.fonts.load('900 46px "Font Awesome 6 Free"', '\uf518\uf059\uf0c0\uf007\uf274\uf091\uf06d\uf647\uf185\uf4ba\uf684')
+            document.fonts.load('900 46px "Font Awesome 6 Free"', '\uf518\uf059\uf0c0\uf007\uf274\uf091\uf06d\uf647\uf185\uf4ba\uf684\uf11b\uf005\uf521\uf086')
         ]);
         await document.fonts.ready;
     } catch (error) {
@@ -129,6 +133,9 @@ function shareCardGlyph(config) {
         case 'quiz': return '\uf059'; // circle-question
         case 'space': return '\uf0c0'; // users
         case 'profile': return '\uf007'; // user
+        case 'game': return '\uf11b'; // gamepad
+        case 'spirit': return '\uf005'; // star
+        case 'forum': return '\uf0c0'; // users
         default: return '\uf518'; // book-open: verses, devotionals, plans
     }
 }
@@ -143,6 +150,9 @@ function shareCardHeroGlyph(config) {
         case 'space': return '\uf4ba'; // dove
         case 'profile': return '\uf684'; // hands-praying
         case 'plan': return '\uf274'; // calendar-check
+        case 'game': return '\uf11b'; // gamepad
+        case 'spirit': return '\uf521'; // crown
+        case 'forum': return '\uf086'; // comments
         default: return null; // today's verse keeps the sparkles
     }
 }
@@ -204,9 +214,9 @@ async function renderShareCardOntoCanvas(canvas, config) {
     const logo = await loadShareCardLogo();
 
     canvas.width = SHARE_CARD_WIDTH;
-    canvas.height = SHARE_CARD_HEIGHT;
+    canvas.height = shareCardHeight(config);
     const ctx = canvas.getContext('2d');
-    const W = SHARE_CARD_WIDTH, H = SHARE_CARD_HEIGHT;
+    const W = SHARE_CARD_WIDTH, H = shareCardHeight(config);
     const C = SHARE_CARD_COLORS;
     const marginX = 84;
 
@@ -302,7 +312,7 @@ async function renderShareCardOntoCanvas(canvas, config) {
         ctx.font = `700 ${titleSize}px "Playfair Display", serif`;
         titleLines = wrapCanvasTextMax(ctx, title, textW, 3);
         ctx.font = `italic 400 ${bodySize}px "Playfair Display", serif`;
-        bodyLines = config.body ? wrapCanvasTextMax(ctx, config.body, textW, 9) : [];
+        bodyLines = config.body ? wrapCanvasTextMax(ctx, config.body, textW, config.short ? 4 : 9) : [];
         ctx.font = '600 30px "Inter", sans-serif';
         footLines = config.footer ? wrapCanvasTextMax(ctx, config.footer, textW, 2) : [];
         contentH = pillH + 48 + 56 + titleLines.length * titleSize * 1.12 + 34 + 12
@@ -312,7 +322,7 @@ async function renderShareCardOntoCanvas(canvas, config) {
         titleSize = Math.max(56, titleSize - 6);
         bodySize = Math.max(30, bodySize - 2);
     }
-    const cardH = Math.min(areaBottom - areaTop, Math.max(560, contentH + pad * 2));
+    const cardH = Math.min(areaBottom - areaTop, Math.max(config.short ? 480 : 560, contentH + pad * 2));
     const cardT = areaTop + (areaBottom - areaTop - cardH) / 2;
     const cardB = cardT + cardH;
     const radius = 46;
@@ -471,6 +481,8 @@ function resolveShareUrl(kind, params = {}) {
             return params.quizId ? `${base}#/quiz/${params.quizId}` : base;
         case 'devotional':
             return params.shareId ? `${base}#/devotional/${params.shareId}` : base;
+        case 'forum':
+            return params.groupId ? `${base}#/forum/${params.groupId}` : base;
         default:
             return base;
     }
@@ -588,7 +600,7 @@ function openShareSheet(cardConfig, options = {}) {
         showSheet(`
             <h3 style="margin-bottom: 12px;">Share</h3>
             <div class="share-card-preview-wrap">
-                <canvas id="share-card-canvas-preview" class="share-card-preview-canvas" aria-label="Share card preview"></canvas>
+                <canvas id="share-card-canvas-preview" class="share-card-preview-canvas${cardConfig.short ? ' share-card-preview-short' : ''}" aria-label="Share card preview"></canvas>
                 <div class="share-card-preview-loading" id="share-card-preview-loading">
                     <i class="fas fa-spinner fa-spin"></i>
                 </div>
@@ -953,3 +965,60 @@ window.shareQuizResultCard = shareQuizResultCard;
 window.shareUpcomingQuizCard = shareUpcomingQuizCard;
 window.shareDailyVerseCard = shareDailyVerseCard;
 window.shareDevotionalCard = shareDevotionalCard;
+
+/* ---- Short cards (v1.4): game room, Spirit Life, forum link ---- */
+
+// A game room to join: the game, its code and the link that opens it.
+function shareGameRoomCard(room) {
+    return openShareSheet({
+        kind: 'game', short: true,
+        eyebrow: 'Play & Learn',
+        title: room.game,
+        body: `Join my ${room.kind === 'duel' ? '1v1' : 'room'} — code ${room.code}`,
+        footer: `Room code: ${room.code}`,
+        tagline: 'Play with me'
+    }, {
+        url: room.url,
+        shareTitle: 'GraceGuide — Play & Learn',
+        shareText: room.text || `Join my ${room.game} game on GraceGuide! Room code: ${room.code}`
+    });
+}
+
+// My Spirit Life level. Only the level, title and points — nothing private.
+function shareSpiritLifeCard(score) {
+    if (!score) return Promise.resolve();
+    const uid = AppState.currentUser && AppState.currentUser.uid;
+    return openShareSheet({
+        kind: 'spirit', short: true,
+        eyebrow: 'Spirit Life',
+        title: `${score.title} · Level ${score.level}`,
+        body: `My GraceGuide Spirit Life is ${score.points}.`,
+        footer: `Devotion ${score.devotion} • Study ${score.study} • Play ${score.games} day streaks`,
+        tagline: 'What is your Spirit Life?'
+    }, {
+        url: uid ? resolveShareUrl('profile', { uid }) : resolveShareUrl('home'),
+        shareTitle: 'GraceGuide — Spirit Life',
+        shareText: `My GraceGuide Spirit Life is ${score.points} — ${score.title}, level ${score.level} of 10. What is yours?`
+    });
+}
+
+// A forum group to join.
+function shareForumGroupCard(group) {
+    if (!group) return Promise.resolve();
+    const members = group.members ? Object.keys(group.members).length : 0;
+    return openShareSheet({
+        kind: 'forum', short: true,
+        eyebrow: 'Forum',
+        title: group.name || 'Forum group',
+        body: group.description ? truncate(group.description, 110) : '',
+        footer: `${members} member${members === 1 ? '' : 's'}`,
+        tagline: 'Join the conversation'
+    }, {
+        url: resolveShareUrl('forum', { groupId: group.id }),
+        shareTitle: 'GraceGuide — Forum',
+        shareText: `Join “${group.name || 'our group'}” on GraceGuide — a forum to talk about faith, study and life together.`
+    });
+}
+window.shareGameRoomCard = shareGameRoomCard;
+window.shareSpiritLifeCard = shareSpiritLifeCard;
+window.shareForumGroupCard = shareForumGroupCard;

@@ -1995,6 +1995,8 @@ function togglePlannerDay(index) {
     const after = computeStudyStreak();
     syncPlanStreaks(after.count);
     persistPlannerData();
+    // The study streak feeds Spirit Life: work it out again (a new level is celebrated wherever I am).
+    if (typeof publishFaith === 'function') setTimeout(publishFaith, 600);
 
     renderPlannerPage();
     if (day.completed && after.count > before && after.count > 1 && typeof STREAK_MILESTONES !== 'undefined' && STREAK_MILESTONES.includes(after.count)) {

@@ -403,6 +403,7 @@ async function renderGroupChatPage() {
                     <div id="group-chat-members" style="font-size:12px; color: var(--text-slate);"></div>
                 </div>
                 <button class="btn btn-outline btn-sm" id="group-join-btn" style="display:none;">Join</button>
+                <button class="icon-btn" id="group-share-btn" aria-label="Share this group" style="display:none;"><i class="fas fa-share-nodes"></i></button>
             </div>
 
             <div class="group-chat-messages" id="group-chat-messages">
@@ -437,6 +438,13 @@ async function renderGroupChatPage() {
         $('#group-chat-title').textContent = group.name;
         const memberCount = group.members ? Object.keys(group.members).length : 0;
         $('#group-chat-members').textContent = `${memberCount} member${memberCount !== 1 ? 's' : ''}`;
+
+        // Share this group: its link on the branded card (short format).
+        const shareBtn = $('#group-share-btn');
+        if (shareBtn && typeof shareForumGroupCard === 'function') {
+            shareBtn.style.display = 'inline-flex';
+            shareBtn.addEventListener('click', () => shareForumGroupCard({ ...group, id: groupId }));
+        }
 
         const uid = AppState.currentUser?.uid;
         const isMember = uid && group.members && group.members[uid];
@@ -823,6 +831,7 @@ async function renderViewProfilePage() {
                     <div class="profile-stat-value">${streakCount}</div>
                     <div class="profile-stat-label">Streak</div>
                 </div>
+                ${gameWinsStatHTML(userId, false)}
             </div>
 
             <div class="flex gap-2 mb-4" style="justify-content: center; flex-wrap: wrap;">
@@ -1525,7 +1534,7 @@ function renderProfilePage() {
                 
                 <div class="profile-stats">
                     <div class="profile-stat" style="cursor: pointer;" onclick="showBrethrenListModal()">
-                        <div class="profile-stat-value">${brethrenCount}</div>
+                        <div class="profile-stat-value" id="profile-brethren-count">${brethrenCount}</div>
                         <div class="profile-stat-label">Brethren</div>
                     </div>
                     <div class="profile-stat" style="cursor: pointer;" onclick="showMyPostsModal()">
@@ -1536,6 +1545,7 @@ function renderProfilePage() {
                         <div class="profile-stat-value">${AppState.spaceStreak?.count || 0}</div>
                         <div class="profile-stat-label">Streak</div>
                     </div>
+                    ${gameWinsStatHTML(AppState.currentUser.uid, true)}
                 </div>
             </div>
             
@@ -1911,6 +1921,7 @@ async function showBrethrenListModal() {
 
         const body = document.getElementById('brethren-list-body');
         if (!body) return; // modal was closed before this resolved
+        body.dataset.mine = '1'; // my own list: redrawn live when my connections change
 
         body.innerHTML = brethren.length > 0 ? `
             <div style="display:flex; flex-direction:column; gap:4px; max-height: 400px; overflow-y:auto;">
@@ -2507,6 +2518,7 @@ async function addNotification(userId, notification) {
    requiring a page refresh or re-navigation.
    ============================================ */
 let _notifRef = null;
+let _connectionsRef = null;
 let _dmIndexRef = null;
 let _groupsListRef = null;
 let _groupMsgRefs = {};
@@ -2533,10 +2545,59 @@ function announceNewSpacePost(postId, post) {
 }
 window.announceNewSpacePost = announceNewSpacePost;
 
+/** Fills every "Wins" stat on the page (multiplayer games won in Play & Learn). */
+function fillGameWins() {
+    document.querySelectorAll('[data-game-wins]').forEach(el => {
+        const uid = el.dataset.gameWins;
+        if (!uid || el.dataset.filled === uid) return;
+        el.dataset.filled = uid;
+        database.ref(`games/profiles/${uid}/wins`).once('value')
+            .then(snap => { if (el.isConnected) el.textContent = Number(snap.val()) || 0; })
+            .catch(() => { if (el.isConnected) el.textContent = '0'; });
+    });
+}
+window.fillGameWins = fillGameWins;
+/** The "Wins" stat for a profile header; it fills itself in once it is on the page. */
+function gameWinsStatHTML(uid, mine) {
+    setTimeout(fillGameWins, 0);
+    return `
+        <div class="profile-stat"${mine ? ` style="cursor: pointer;" onclick="navigateToHash('#/play/leaderboard')"` : ''}>
+            <div class="profile-stat-value" data-game-wins="${escapeHtml(uid)}">—</div>
+            <div class="profile-stat-label">Wins</div>
+        </div>`;
+}
+
+/** My connections changed (someone sent, accepted or removed a request): bring what is on screen up to date. */
+function refreshConnectionViews() {
+    const count = Array.from(AppState.userConnections.values()).filter(s => s === 'brethren').length;
+    const countEl = document.getElementById('profile-brethren-count');
+    if (countEl) countEl.textContent = count;
+    if (AppState.modalOpen && document.querySelector('#brethren-list-body[data-mine]') && typeof showBrethrenListModal === 'function') showBrethrenListModal();
+    if (AppState.currentRoute === 'community' && document.getElementById('community-users-list') && typeof renderCommunityUsersList === 'function') renderCommunityUsersList();
+    if (AppState.currentRoute === 'view-profile' && !AppState.modalOpen && !AppState.sheetOpen && typeof renderViewProfilePage === 'function') renderViewProfilePage();
+}
+
 function startRealtimeListeners() {
     if (!AppState.currentUser) return;
     stopRealtimeListeners();
     const uid = AppState.currentUser.uid;
+
+    // --- Brethren / connection requests: live, so the list never needs the app to be reopened ---
+    let connectionsKey = null;
+    _connectionsRef = database.ref(`users/${uid}/connections`);
+    _connectionsRef.on('value', (snapshot) => {
+        const next = new Map();
+        Object.entries(snapshot.val() || {}).forEach(([otherUid, info]) => {
+            if (!info) return;
+            if (info.status === 'accepted') next.set(otherUid, 'brethren');
+            else if (info.status === 'pending') next.set(otherUid, info.direction === 'incoming' ? 'pending_received' : 'pending_sent');
+        });
+        const key = JSON.stringify(Array.from(next.entries()).sort());
+        const first = connectionsKey === null, changed = key !== connectionsKey;
+        connectionsKey = key;
+        AppState.userConnections = next;
+        if (!first && changed) refreshConnectionViews();
+    }, () => {});
 
     // --- Notifications (space amens/comments, connection requests, etc.) ---
     _notifKnownKeys = new Set(AppState.notifications.map(n => n.key));
@@ -2605,6 +2666,7 @@ function startRealtimeListeners() {
 }
 
 function stopRealtimeListeners() {
+    if (_connectionsRef) { _connectionsRef.off(); _connectionsRef = null; }
     if (_notifRef) { _notifRef.off(); _notifRef = null; }
     if (_spacePostsRef) { _spacePostsRef.off(); _spacePostsRef = null; }
     if (_dmIndexRef) { _dmIndexRef.off(); _dmIndexRef = null; }

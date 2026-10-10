@@ -168,10 +168,90 @@
             AppState.faith = rec;
             if (AppState.userProfile) AppState.userProfile.faith = rec;
             database.ref('users/' + AppState.currentUser.uid + '/profile/faith').set(rec).catch(function () {});
-            return scoreFromRecords(rec);
+            var score = scoreFromRecords(rec);
+            noteSpiritLevel(AppState.currentUser.uid, score);
+            return score;
         } catch (e) { return null; }
     }
     root.publishFaith = publishFaith;
+
+    // ---------- rising to a higher Spirit Life ----------
+
+    /**
+     * Remembers the level this device last saw for me and celebrates when it has gone up.
+     * (The first time — nothing remembered yet — is only noted: no pop-up for a level I
+     * already had. A level that drops is noted too, so climbing back is celebrated again.)
+     */
+    function noteSpiritLevel(uid, score) {
+        if (!score) return;
+        var key = 'gg_spirit_level_' + uid, before = null;
+        try { var v = localStorage.getItem(key); before = v == null ? null : parseInt(v, 10); } catch (e) { return; }
+        if (before !== score.level) { try { localStorage.setItem(key, String(score.level)); } catch (e) { /* private mode */ } }
+        if (before != null && !isNaN(before) && score.level > before) showSpiritLevelUp(score);
+    }
+
+    /** A short rising fanfare, made on the spot (no sound files). */
+    function fanfare() {
+        try {
+            var Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            var ctx = new Ctx(), t0 = ctx.currentTime + 0.02;
+            [[392, 0], [523.25, 0.14], [659.25, 0.28], [783.99, 0.42], [1046.5, 0.6], [1318.5, 0.6], [1568, 0.6]].forEach(function (n) {
+                var osc = ctx.createOscillator(), gain = ctx.createGain(), at = t0 + n[1], long = n[1] >= 0.6;
+                osc.type = 'triangle'; osc.frequency.value = n[0];
+                gain.gain.setValueAtTime(0.0001, at);
+                gain.gain.exponentialRampToValueAtTime(long ? 0.13 : 0.16, at + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.0001, at + (long ? 1.4 : 0.5));
+                osc.connect(gain); gain.connect(ctx.destination);
+                osc.start(at); osc.stop(at + (long ? 1.5 : 0.6));
+            });
+            setTimeout(function () { try { ctx.close(); } catch (e) { /* already closed */ } }, 2600);
+        } catch (e) { /* no sound is fine */ }
+    }
+
+    /**
+     * The celebration for reaching a higher Spirit Life level — shown over whatever page is
+     * open. Grander than a game badge: a full-screen glow, turning rays, falling light, the new
+     * level's sticker, and a button to share it on the branded GraceGuide card.
+     */
+    function showSpiritLevelUp(score) {
+        if (typeof document === 'undefined' || document.getElementById('spirit-pop')) return;
+        var sparks = '';
+        for (var i = 0; i < 34; i++) {
+            sparks += '<i style="left:' + Math.round(Math.random() * 100) + '%; animation-delay:' + (Math.random() * 2.4).toFixed(2) + 's; animation-duration:' + (2.6 + Math.random() * 2.4).toFixed(2) + 's; --s:' + (0.5 + Math.random()).toFixed(2) + ';"></i>';
+        }
+        var el = document.createElement('div');
+        el.id = 'spirit-pop';
+        el.className = 'spirit-pop';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-label', 'You reached a higher Spirit Life');
+        el.innerHTML =
+            '<div class="spirit-pop-sparks">' + sparks + '</div>' +
+            '<div class="spirit-pop-card">' +
+            '<div class="spirit-pop-halo"><div class="spirit-pop-rays"></div><div class="spirit-pop-rays spirit-pop-rays-2"></div>' +
+            '<div class="spirit-pop-ring"></div><div class="spirit-pop-sticker">' + SPIRIT_STICKERS[score.level - 1] + '</div></div>' +
+            '<div class="spirit-pop-eyebrow">Spirit Life · Level ' + score.level + ' of 10</div>' +
+            '<h2 class="spirit-pop-title">' + escapeHtml(score.title) + '</h2>' +
+            '<p class="spirit-pop-about">' + escapeHtml(score.about) + '</p>' +
+            '<div class="spirit-pop-points"><strong>' + score.points + '</strong><span>Spirit Life</span></div>' +
+            '<p class="spirit-pop-verse">“Well done, good and faithful servant.” <small>Matthew 25:23</small></p>' +
+            '<div class="spirit-pop-actions">' +
+            '<button class="btn btn-gold btn-block" id="spirit-pop-share"><i class="fas fa-share-nodes"></i> Share</button>' +
+            '<button class="btn btn-block spirit-pop-continue" id="spirit-pop-close">Continue</button></div></div>';
+        document.body.appendChild(el);
+        setTimeout(function () { el.classList.add('on'); }, 30); // (a timer, not an animation frame: frames can be held back while the tab is not in front)
+        fanfare();
+        var close = function () { el.classList.remove('on'); setTimeout(function () { el.remove(); }, 320); };
+        document.getElementById('spirit-pop-close').onclick = close;
+        document.getElementById('spirit-pop-share').onclick = function () {
+            close();
+            if (typeof shareSpiritLifeCard === 'function') shareSpiritLifeCard(score);
+        };
+        // My avatar's sticker changes with the level.
+        var mySticker = document.getElementById('my-spirit-sticker');
+        if (mySticker) mySticker.innerHTML = stickerHTML(score);
+    }
+    root.showSpiritLevelUp = showSpiritLevelUp;
 
     function streakRow(icon, label, days, hint) {
         return '<div class="faith-row"><span class="faith-row-icon"><i class="fas ' + icon + '"></i></span><span class="faith-row-label">' + label +
@@ -191,12 +271,19 @@
         card.innerHTML =
             '<div class="faith-head"><div class="faith-badge">' + SPIRIT_STICKERS[score.level - 1] + '</div><div class="faith-head-main"><div class="faith-eyebrow">Spirit Life</div><div class="faith-title">' + score.points + ' <span>· ' + escapeHtml(score.title) + '</span></div>' +
             '<div class="faith-sub">Level ' + score.level + ' of 10 · average streak ' + score.average + ' day' + (score.average === 1 ? '' : 's') + '</div></div>' +
+            '<button class="icon-btn" onclick="shareMySpiritLife()" aria-label="Share my Spirit Life"><i class="fas fa-share-nodes"></i></button>' +
             '<button class="icon-btn" onclick="showFaithTitles()" aria-label="How Spirit Life works"><i class="fas fa-circle-info"></i></button></div>' +
             '<div class="faith-bar"><div style="width:' + pct + '%"></div></div>' +
             '<div class="faith-next">' + (score.next ? score.next.toGo + ' more day' + (score.next.toGo === 1 ? '' : 's') + ' of average streak to reach <strong>' + escapeHtml(score.next.title) + '</strong>' : 'The highest title. Keep going!') + '</div>' +
             streakRow('fa-sun', 'Devotion', score.devotion, 'Mark the Daily Devotional done') +
             streakRow('fa-calendar-check', 'Study', score.study, 'Complete a Study Planner entry') +
             streakRow('fa-gamepad', 'Play &amp; Learn', score.games, 'Play any Bible game');
+    };
+
+    /** Share my Spirit Life on the branded card (the short format). */
+    root.shareMySpiritLife = function () {
+        var score = AppState.faith ? scoreFromRecords(AppState.faith) : null;
+        if (score && typeof shareSpiritLifeCard === 'function') shareSpiritLifeCard(score);
     };
 
     root.showFaithTitles = function () {

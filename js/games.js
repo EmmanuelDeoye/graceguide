@@ -16,7 +16,7 @@
    ============================================ */
 (function () {
     'use strict';
-    var Core = window.GamesCore, BANK = window.GAMES_BANK, Play = window.GamesPlay, AI = window.GamesAI || null;
+    var Core = window.GamesCore, BANK = window.GAMES_BANK, Play = window.GamesPlay;
     var net = null;
     var live = { session: null, stage: null, roomId: null, finished: false, results: null, award: null };
     var invites = { stop: null, cards: {} };
@@ -37,8 +37,7 @@
                     get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
                     set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } }
                 },
-                notify: function (toUid, n) { if (typeof addNotification === 'function') addNotification(toUid, n); },
-                customQuestions: function (game, level) { return prepareQuestions(game, level, false); }
+                notify: function (toUid, n) { if (typeof addNotification === 'function') addNotification(toUid, n); }
             });
         }
         return net;
@@ -200,12 +199,12 @@
         loadMyGames();
     }
 
-    /** "My games": rooms I created or joined in the last three days — waiting rooms to go back to, results to look at again. */
+    /** "My games": rooms I created or joined that have not been played yet (kept for three days) — waiting rooms to go back to. */
     function loadMyGames() {
         getNet().myGames().then(function (list) {
             var slot = $id('pl-mine-slot');
             if (!slot || !list.length) return;
-            slot.innerHTML = '<h3 class="pl-section">My games <span>kept for 3 days</span></h3><div class="card pl-players">' + list.slice(0, 8).map(function (g) {
+            slot.innerHTML = '<h3 class="pl-section">My games <span>waiting to be played</span></h3><div class="card pl-players">' + list.slice(0, 8).map(function (g) {
                 var cfg = Core.GAMES[g.game];
                 if (!cfg) return '';
                 var left = Math.max(0, getNet().KEEP_MS - (getNet().now() - g.t)), hours = Math.ceil(left / 3600000);
@@ -222,7 +221,7 @@
         ['fa-gamepad', 'Welcome to Play & Learn', 'Five Bible games that send you back to the Word. Every answer shows its Scripture — tap the reference to read it.'],
         ['fa-compass', 'Finding your way', 'Pick a game, then how to play: <strong>Solo</strong>, <strong>Quick Match</strong> (1v1 with whoever is online), <strong>Challenge a Brethren</strong>, or <strong>Create a Room</strong> for up to 8 with a code. Have a code? Type it under the games and tap Join.'],
         ['fa-stopwatch', 'The rules', 'Everyone gets the same question and the same timer. Right answers score; faster answers and streaks score more. You can’t change an answer once it is locked in. In Bible Wordle you have six guesses.'],
-        ['fa-sliders', 'Levels and fresh questions', 'Choose Easy, Medium or Hard on a game’s page. New questions are written for that level and checked against the Bible text before you see them.'],
+        ['fa-pause', 'Pause when you need to', 'Tap Pause during a question and the game stops for everyone playing — the question is covered until someone taps Resume (or a minute passes).'],
         ['fa-fire', 'Come back daily', 'The Daily Challenge is five questions, one try. Playing each day keeps your streak, earns XP and badges, and counts toward your Spirit Life.']
     ];
     function showTour(step) {
@@ -268,8 +267,6 @@
         page(
             '<div class="pl-hero pl-game-card-' + id + '"><span class="pl-game-icon"><i class="fas ' + g.icon + '"></i></span><h2>' + esc(g.name) + '</h2><p>' + esc(g.tagline) + '</p>' +
             '<small>' + g.rounds + ' round' + (g.rounds === 1 ? '' : 's') + ' · ' + g.secs + ' seconds each</small></div>' +
-            (AI ? '<div class="pl-levels"><div class="pl-levels-head"><strong>Level</strong><small id="pl-level-note"></small></div><div class="pl-level-pick">' +
-                Object.keys(AI.LEVELS).map(function (l) { return '<button data-level="' + l + '"><strong>' + AI.LEVELS[l].label + '</strong><small>' + AI.LEVELS[l].about + '</small></button>'; }).join('') + '</div></div>' : '') +
             '<div class="pl-modes">' +
             mode('solo', 'fa-user', 'Solo', 'Practise at your own pace') +
             mode('quick', 'fa-bolt', 'Quick Match', '1v1 against whoever is online') +
@@ -279,20 +276,6 @@
         DOM.pageContainer.querySelectorAll('[data-mode]').forEach(function (b) {
             b.onclick = function () { startMode(id, b.getAttribute('data-mode')); };
         });
-        if (!AI) return;
-        // The level the host picks decides how hard the AI-written questions are.
-        function drawLevel() {
-            var level = AI.getLevel(), note = $id('pl-level-note');
-            DOM.pageContainer.querySelectorAll('[data-level]').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-level') === level); });
-            if (note) note.innerHTML = AI.ready(id, level) ? '<i class="fas fa-circle-check"></i> Fresh questions ready' : '<i class="fas fa-wand-magic-sparkles"></i> Shepherd is preparing questions…';
-        }
-        DOM.pageContainer.querySelectorAll('[data-level]').forEach(function (b) {
-            b.onclick = function () { AI.setLevel(b.getAttribute('data-level')); AI.refill(id, AI.getLevel()); drawLevel(); };
-        });
-        AI.refill(id, AI.getLevel());
-        drawLevel();
-        var onPool = function (e) { if (!$id('pl-level-note')) { document.removeEventListener('gg-ai-pool', onPool); return; } if (e.detail.game === id) drawLevel(); };
-        document.addEventListener('gg-ai-pool', onPool);
     }
     function mode(key, icon, title, sub) {
         return '<button class="pl-mode" data-mode="' + key + '"><span class="pl-mode-icon"><i class="fas ' + icon + '"></i></span><span><strong>' + title + '</strong><small>' + sub + '</small></span><i class="fas fa-chevron-right"></i></button>';
@@ -303,7 +286,7 @@
         if (busyWithRoom()) return;
         var n = getNet();
         loading(how === 'quick' ? 'Looking for an opponent…' : 'Setting up your room…');
-        var p = how === 'quick' ? n.quickMatch(game, AI ? AI.getLevel() : null) : n.createRoom(game, how === 'duel' ? 'duel' : 'room', false, AI ? AI.getLevel() : null);
+        var p = how === 'quick' ? n.quickMatch(game) : n.createRoom(game, how === 'duel' ? 'duel' : 'room', false);
         p.then(function (r) { go('room', r.roomId, true); }, function (err) { showToast(errorText(err), 'error'); go(game, null, true); });
     }
 
@@ -349,7 +332,7 @@
             if (!live.stage) {
                 if (AppState.sheetOpen && typeof closeSheet === 'function') closeSheet(); // e.g. the invite list, still open when the game starts
                 box.innerHTML = '<div id="pl-stage-box"></div><button class="btn btn-outline btn-sm pl-leave" id="pl-leave"><i class="fas fa-person-walking-arrow-right"></i> Leave game</button>';
-                live.stage = Play.mount($id('pl-stage-box'), s, { names: function (uid) { return nameOf(uid, (s.room.players[uid] || {}).name); } });
+                live.stage = Play.mount($id('pl-stage-box'), s, { names: function (uid) { return nameOf(uid, (s.room.players[uid] || {}).name); }, onPauseFailed: pauseFailed });
                 $id('pl-leave').onclick = confirmLeave;
             }
             lastPhase = view.phase;
@@ -366,42 +349,47 @@
     function renderLobby(box, view) {
         var s = live.session, meta = view.room.meta, g = Core.GAMES[meta.game];
         var max = Core.MAX_PLAYERS[meta.kind], seated = view.seated;
-        var isHost = meta.hostUid === s.uid, level = meta.level && AI && AI.LEVELS[meta.level] ? meta.level : null;
-        var aiReady = !!(level && AI.ready(meta.game, level)), auto = rematchAuto && rematchAuto.roomId === live.roomId ? rematchAuto : null;
-        var key = 'lobby:' + seated.map(function (u) { return u + (view.room.players[u].online === false ? '-' : '+'); }).join(',') + ':' + view.canStart + ':' + aiReady + ':' + !!auto;
+        var isHost = meta.hostUid === s.uid, auto = rematchAuto && rematchAuto.roomId === live.roomId ? rematchAuto : null;
+        // Start was pressed while someone's phone was still opening the room: everyone starts together.
+        var waitingFor = view.waitingFor && view.waitingFor.length ? view.waitingFor : null;
+        // Seated but not in the room yet: "Connecting…" for the first moments after joining, "Away" after that.
+        var clock = getNet().now();
+        var stateOf = function (uid) { var p = view.room.players[uid]; return p.online !== false ? '+' : (clock - (p.joinedAt || 0) < 20000 ? 'c' : '-'); };
+        var key = 'lobby:' + seated.map(function (u) { return u + stateOf(u); }).join(',') + ':' + view.canStart + ':' + !!auto + ':' + (waitingFor ? waitingFor.join(',') : '');
         if (box.getAttribute('data-key') === key) return;
         box.setAttribute('data-key', key);
         var searching = meta.public && seated.length < 2;
         box.innerHTML =
             '<div class="pl-hero pl-game-card-' + meta.game + '"><span class="pl-game-icon"><i class="fas ' + g.icon + '"></i></span><h2>' + esc(g.name) + '</h2>' +
-            '<p>' + (meta.kind === 'duel' ? '1v1' : 'Room · up to ' + max + ' players') + (level ? ' · ' + AI.LEVELS[level].label : '') + '</p></div>' +
+            '<p>' + (meta.kind === 'duel' ? '1v1' : 'Room · up to ' + max + ' players') + '</p></div>' +
             (auto ? '<div class="pl-searching"><div class="pl-spinner"></div><p>Rematch — waiting for the others to rejoin (' + seated.length + '/' + auto.need + ')</p><small>The game starts by itself when everyone is back.</small></div>' : '') +
             (searching ? '<div class="pl-searching"><div class="pl-spinner"></div><p>Looking for an opponent…</p><small>You’ll start automatically when someone joins. You can also invite a Brethren.</small></div>'
                 : '<div class="pl-code-card"><small>Room code</small><div class="pl-code">' + esc(meta.code) + '</div>' +
                   '<div class="pl-code-actions"><button class="btn btn-outline btn-sm" id="pl-copy-code"><i class="fas fa-copy"></i> Copy</button>' +
-                  '<button class="btn btn-sm pl-btn-whatsapp" id="pl-share-room"><i class="fab fa-whatsapp"></i> Share</button></div></div>') +
+                  '<button class="btn btn-sm pl-btn-whatsapp" id="pl-share-room"><i class="fas fa-share-nodes"></i> Share</button></div></div>') +
             '<button class="btn btn-gold btn-block" id="pl-invite"><i class="fas fa-user-plus"></i> Invite Brethren</button>' +
             '<h3 class="pl-section">Players <span>' + seated.length + '/' + max + '</span></h3><div class="card pl-players">' + seated.map(function (uid) {
-                var p = view.room.players[uid];
-                return '<div class="pl-player' + (p.online === false ? ' pl-player-away' : '') + '"><span class="post-avatar pl-avatar">' + esc(nameOf(uid, p.name).charAt(0).toUpperCase()) + '</span>' +
+                var p = view.room.players[uid], st = stateOf(uid);
+                return '<div class="pl-player' + (st === '-' ? ' pl-player-away' : '') + '"><span class="post-avatar pl-avatar">' + esc(nameOf(uid, p.name).charAt(0).toUpperCase()) + '</span>' +
                     '<span class="pl-player-name">' + esc(nameOf(uid, p.name)) + (uid === s.uid ? ' <small>(you)</small>' : '') + '</span>' +
-                    (uid === meta.hostUid ? '<span class="pl-tag">Host</span>' : '') + (p.online === false ? '<span class="pl-tag pl-tag-away">Away</span>' : '') + '</div>';
+                    (uid === meta.hostUid ? '<span class="pl-tag">Host</span>' : '') + (st === 'c' ? '<span class="pl-tag pl-tag-away">Connecting…</span>' : st === '-' ? '<span class="pl-tag pl-tag-away">Away</span>' : '') + '</div>';
             }).join('') + '</div>' +
-            (isHost && level ? '<p class="pl-ai-note"><i class="fas ' + (aiReady ? 'fa-circle-check' : 'fa-wand-magic-sparkles') + '"></i> ' +
-                (aiReady ? 'Fresh ' + AI.LEVELS[level].label.toLowerCase() + ' questions are ready.'
-                    : 'Shepherd is preparing fresh ' + AI.LEVELS[level].label.toLowerCase() + ' questions. If you start first, the game begins as soon as they are ready.') + '</p>' : '') +
-            (meta.public ? '' : (view.canStart ? '<button class="btn btn-primary btn-block pl-start" id="pl-start"><i class="fas fa-play"></i> ' + (auto ? 'Start now' : 'Start game') + '</button>'
+            (waitingFor ? '<div class="pl-searching"><div class="pl-spinner"></div><p>Starting — waiting for ' + esc(waitingFor.map(function (uid) { return nameOf(uid, (view.room.players[uid] || {}).name); }).join(', ')) + ' to connect…</p><small>So everyone starts at the same moment. It begins in a few seconds either way.</small></div>' : '') +
+            (meta.public || waitingFor ? '' : (view.canStart ? '<button class="btn btn-primary btn-block pl-start" id="pl-start"><i class="fas fa-play"></i> ' + (auto ? 'Start now' : 'Start game') + '</button>'
                 : '<p class="pl-waiting">' + (seated.length < 2 ? 'Waiting for at least one more player…' : 'Waiting for the host to start…') + '</p>')) +
             (isHost ? '<button class="btn btn-outline btn-block pl-leave" id="pl-cancel-room"><i class="fas fa-ban"></i> Cancel room</button>'
                 : '<button class="btn btn-outline btn-block pl-leave" id="pl-leave-lobby">Leave</button>') +
-            '<p class="pl-foot">This room is kept for 3 days. You can leave this page and come back — your seat stays.</p>';
-        if (isHost && level && !aiReady) AI.refill(meta.game, level);
+            '<p class="pl-foot">This room is kept for 3 days, until it is played. You can leave this page and come back — your seat stays.</p>';
         var link = playUrl('join/' + meta.code);
         var text = 'Join my ' + g.name + ' game on GraceGuide! 🎮📖\nRoom code: ' + meta.code;
         if ($id('pl-copy-code')) $id('pl-copy-code').onclick = function () {
             (navigator.clipboard ? navigator.clipboard.writeText(meta.code) : Promise.reject()).then(function () { showToast('Code copied', 'success'); }, function () { showToast('Your code is ' + meta.code, 'info'); });
         };
-        if ($id('pl-share-room')) $id('pl-share-room').onclick = function () { share(text, link); };
+        if ($id('pl-share-room')) $id('pl-share-room').onclick = function () {
+            // The branded GraceGuide card (short format) when it is available; plain text otherwise.
+            if (typeof shareGameRoomCard === 'function') shareGameRoomCard({ game: g.name, code: meta.code, kind: meta.kind, url: link, text: text });
+            else share(text, link);
+        };
         $id('pl-invite').onclick = function () { showInviteSheet({ roomId: live.roomId, code: meta.code, game: meta.game, kind: meta.kind }); };
         if ($id('pl-start')) $id('pl-start').onclick = function () {
             $id('pl-start').disabled = true;
@@ -420,22 +408,15 @@
         };
     }
 
-    /** Starts an online game with verified AI questions at the room's level when they are ready, else the built-in bank. */
-    function startRoomGame(s) {
-        return s.start(); // the session itself picks verified AI questions for the room's level when ready
-    }
+    /** Starts an online game with questions from the built-in bank (it first gives players who are still connecting a moment to arrive). */
+    function startRoomGame(s) { return s.start(); }
+    function pauseFailed() { showToast('This game can’t be paused again.', 'info'); }
     /** A rematch room starts by itself once everyone from the last game is back in (the screen that created it does this). */
     function maybeAutoStart(view) {
         var auto = rematchAuto, s = live.session;
         if (!auto || !s || auto.roomId !== live.roomId || auto.started) return;
         if (view.seated.length >= auto.need && view.canStart) { auto.started = true; startRoomGame(s); }
     }
-    // The lobby shows whether the AI questions are ready; redraw when that changes.
-    document.addEventListener('gg-ai-pool', function () {
-        var box = $id('pl-room'), v = live.session && live.session._view;
-        if (box && v && v.phase === 'lobby' && !live.session.solo) renderLobby(box, v);
-    });
-
     function awardedKey() { var u = user(); return 'gg_games_awarded_' + (u ? u.uid : ''); }
     function awardedBefore(roomId) {
         try { return JSON.parse(localStorage.getItem(awardedKey()) || '[]').indexOf(roomId) >= 0; } catch (e) { return false; }
@@ -554,80 +535,19 @@
 
     // ---------- solo ----------
 
-    // ---------- fresh questions from Shepherd (AI), with the classic bank as the last resort ----------
-
-    var STAGES = [['writing', 'Writing new questions'], ['checking', 'Looking up each verse in the Bible'], ['verifying', 'Checking every answer against Scripture'], ['ready', 'Ready to play']];
-    function drawPreparing(game, level) {
-        var box = $id('pl-preparing');
-        if (!box) return;
-        var st = AI.status(game, level) || { stage: 'writing', attempt: 1, attempts: 3, have: 0, need: Core.GAMES[game].rounds };
-        var at = st.stage === 'retrying' ? 0 : Math.max(0, STAGES.map(function (s) { return s[0]; }).indexOf(st.stage));
-        box.innerHTML = STAGES.map(function (s, i) {
-            var state = i < at ? 'done' : i === at ? 'now' : 'todo';
-            var detail = i === at && s[0] === 'checking' && st.of ? ' (' + st.at + ' of ' + st.of + ')' : '';
-            return '<div class="pl-prep-step pl-prep-' + state + '"><span class="pl-prep-dot">' + (state === 'done' ? '<i class="fas fa-check"></i>' : state === 'now' ? '<span class="pl-spinner pl-spinner-sm"></span>' : '') + '</span><span>' + s[1] + detail + '</span></div>';
-        }).join('') +
-            '<p class="pl-prep-note">' + (st.attempt > 1 || st.stage === 'retrying'
-                ? 'Some questions didn’t pass the Scripture check, so Shepherd is writing more (round ' + Math.min(st.attempts, st.attempt + (st.stage === 'retrying' ? 1 : 0)) + ' of ' + st.attempts + '). ' + (st.have || 0) + ' of ' + st.need + ' ready.'
-                : 'Every question is checked against the Bible text before you see it. This usually takes under a minute.') + '</p>';
-    }
-    /**
-     * Resolves this game's questions: a verified fresh set from Shepherd at the chosen level, or
-     * null to play the classic questions — which only happens when the game has no level, the
-     * AI cannot be reached at all, or every attempt to prepare a set has failed. While Shepherd
-     * is still working a dialog shows what it is doing. `cancellable` (solo) adds a Cancel button;
-     * the promise then rejects with { cancelled: true }.
-     */
-    function prepareQuestions(game, level, cancellable) {
-        if (!AI || !level || !AI.LEVELS[level]) return Promise.resolve(null);
-        var ready = AI.take(game, level);
-        if (ready) return Promise.resolve(ready);
-        if (!AI.available()) { showToast('Shepherd can’t be reached right now — playing the classic questions.', 'info'); return Promise.resolve(null); }
-        return new Promise(function (resolve, reject) {
-            var done = false, onProgress = function (e) { if (e.detail.game === game && e.detail.level === level) drawPreparing(game, level); };
-            showModal('<div class="pl-prep"><div class="pl-prep-icon"><i class="fas fa-dove"></i></div><h3>Shepherd is still generating questions</h3>' +
-                '<p class="pl-prep-sub">' + esc(Core.GAMES[game].name) + ' · ' + AI.LEVELS[level].label + '</p><div id="pl-preparing"></div>' +
-                (cancellable ? '<button class="btn btn-outline btn-block" id="pl-prep-cancel">Cancel</button>' : '') + '</div>',
-                { closeOnOverlay: false });
-            drawPreparing(game, level);
-            document.addEventListener('gg-ai-progress', onProgress);
-            if ($id('pl-prep-cancel')) $id('pl-prep-cancel').onclick = function () { finish(null, true); };
-            function finish(custom, cancelled) {
-                if (done) return;
-                done = true;
-                document.removeEventListener('gg-ai-progress', onProgress);
-                if ($id('pl-preparing') && AppState.modalOpen) closeModal();
-                if (cancelled) reject({ cancelled: true }); else resolve(custom);
-            }
-            AI.ensure(game, level).then(function (ok) {
-                var custom = ok ? AI.take(game, level) : null;
-                if (!custom && !done) showToast('Shepherd couldn’t prepare new questions after several tries — playing the classic questions this time.', 'warning');
-                finish(custom, false);
-            });
-        });
-    }
-
     function startSolo(game) {
         closeLive(false);
         if (!Core.GAMES[game]) { go(null, null, true); return; }
-        loading('Getting your questions…');
-        prepareQuestions(game, AI ? AI.getLevel() : null, true).then(function (custom) {
-            if (AppState.currentRoute !== 'play' || !AppState.playRoute || AppState.playRoute.sub !== 'solo' || AppState.playRoute.arg !== game) return;
-            runSolo(game, custom);
-        }, function () { go(game, null, true); });
-    }
-    function runSolo(game, custom) {
         var u = user(), cfg = Core.GAMES[game], n = getNet();
-        var q;
-        if (custom) q = custom.ids;
-        else { q = Core.pickQuestions(BANK, game, cfg.rounds, n.recentQuestions(game)); n.rememberQuestions(game, q); }
-        var s = new Play.LocalSession(game, u ? u.uid : 'guest', u ? u.name : 'You', q, custom ? custom.qs : null);
+        var q = Core.pickQuestions(BANK, game, cfg.rounds, n.recentQuestions(game));
+        n.rememberQuestions(game, q);
+        var s = new Play.LocalSession(game, u ? u.uid : 'guest', u ? u.name : 'You', q);
         live.session = s;
         page('<div id="pl-room"><div id="pl-stage-box"></div></div>');
         var box = $id('pl-room'), runRef = null;
         // With the game server deployed, a solo run is recorded so the server can verify it.
-        if (u) n.serverAlive().then(function (alive) { return alive ? n.startRun(game, q, custom ? custom.qs : null) : null; }).then(function (ref) { runRef = ref; }).catch(function () {});
-        live.stage = Play.mount($id('pl-stage-box'), s, { onNext: function () { s.skipReveal(); } });
+        if (u) n.serverAlive().then(function (alive) { return alive ? n.startRun(game, q) : null; }).then(function (ref) { runRef = ref; }).catch(function () {});
+        live.stage = Play.mount($id('pl-stage-box'), s, { onNext: function () { s.skipReveal(); }, onPauseFailed: pauseFailed });
         s.onUpdate = function (view) {
             if (!$id('pl-room')) return;
             if (view.phase !== 'done') { live.stage.update(view); return; }
@@ -676,7 +596,7 @@
             if (i >= qs.length) { finish(); return; }
             var s = new Play.LocalSession(qs[i].game, u.uid, u.name, [qs[i].id]);
             live.session = s;
-            live.stage = Play.mount($id('pl-stage-box'), s, { roundLabel: 'Daily ' + (i + 1) + ' / ' + qs.length, nextLabel: i + 1 >= qs.length ? 'Finish' : 'Next', onNext: function () { s.skipReveal(); } });
+            live.stage = Play.mount($id('pl-stage-box'), s, { roundLabel: 'Daily ' + (i + 1) + ' / ' + qs.length, nextLabel: i + 1 >= qs.length ? 'Finish' : 'Next', onNext: function () { s.skipReveal(); }, noPause: true });
             s.onUpdate = function (view) {
                 if (!$id('pl-stage-box')) return;
                 if (view.phase !== 'done') { live.stage.update(view); return; }

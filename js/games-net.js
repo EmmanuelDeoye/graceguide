@@ -105,17 +105,30 @@
         function forget(roomId) {
             try { db.ref('games/mine/' + me().uid + '/' + roomId).remove().catch(function () {}); } catch (e) { /* signed out */ }
         }
-        /** My rooms from the last three days, newest first: [{ roomId, game, kind, code, t }]. Older ones are dropped. */
+        /**
+         * My waiting rooms from the last three days, newest first: [{ roomId, game, kind, code, t }].
+         * Only rooms that have not been played yet are kept — once a game has started (or the room
+         * is gone, or it is older than three days) it leaves the list.
+         */
         function myGames() {
             var u = me();
             return val(db.ref('games/mine/' + u.uid)).then(function (all) {
-                var out = [];
+                var fresh = [];
                 Object.keys(all || {}).forEach(function (roomId) {
                     var e = all[roomId] || {};
                     if (now() - (e.t || 0) > KEEP_MS) { forget(roomId); return; }
-                    out.push({ roomId: roomId, game: e.game, kind: e.kind || 'room', code: e.code || '', t: e.t || 0 });
+                    fresh.push({ roomId: roomId, game: e.game, kind: e.kind || 'room', code: e.code || '', t: e.t || 0 });
                 });
-                return out.sort(function (a, b) { return b.t - a.t; });
+                return Promise.all(fresh.map(function (g) {
+                    var ref = roomRef(g.roomId);
+                    return Promise.all([val(ref.child('meta/game')), val(ref.child('plan/startedAt'))]).then(function (r) {
+                        if (r[0] && !r[1]) return g;      // still a lobby
+                        forget(g.roomId);                 // played, or no longer there
+                        return null;
+                    }, function () { return g; });        // could not check (offline): keep showing it
+                })).then(function (rows) {
+                    return rows.filter(Boolean).sort(function (a, b) { return b.t - a.t; });
+                });
             });
         }
         /** Host only: cancels a room for everyone (a lobby at any time; a game once it is over). */
@@ -168,7 +181,10 @@
                 if (plan) throw GameError('started', 'That game has already started.');
                 var max = core.MAX_PLAYERS[meta.kind] || core.MAX_PLAYERS.room;
                 if (core.seatedPlayers(players, meta.kind).length >= max) throw GameError('full', 'That room is full.');
-                return ref.child('players/' + u.uid).set({ name: u.name, joinedAt: TS, online: true }).then(function () {
+                // Seated, but not "online" yet: that is only said once this device has the room open
+                // and is listening (RoomSession.open), so a host never starts ahead of someone who
+                // is still loading.
+                return ref.child('players/' + u.uid).set({ name: u.name, joinedAt: TS, online: false }).then(function () {
                     return val(ref.child('players'));
                 }).then(function (after) {
                     // Two people can take the last seat at once: the server's join order decides.
@@ -481,7 +497,7 @@
          */
         function RoomSession(roomId) {
             this.roomId = roomId;
-            this.room = { meta: null, players: {}, plan: null, answered: {}, answers: {}, official: null, rematch: null };
+            this.room = { meta: null, players: {}, plan: null, answered: {}, answers: {}, official: null, rematch: null, pauses: null };
             this.onUpdate = null;
             this._mine = {};        // round -> answer I submitted (optimistic)
             this._watching = {};    // round -> 'pending' | 'on'
@@ -509,24 +525,30 @@
                 listen('answered', 'answered', {});
                 listen('official', 'official', null);
                 listen('rematch', 'rematch', null);
-
-                // Presence: (re)assert "online" whenever the connection comes back.
-                var conn = db.ref('.info/connected'), mineOnline = ref.child('players/' + u.uid + '/online');
-                var ch = conn.on('value', function (s) {
-                    if (s.val() !== true || self._closed) return;
-                    mineOnline.onDisconnect().set(false).then(function () { if (!self._closed) mineOnline.set(true).catch(function () {}); }).catch(function () {});
-                });
-                self._subs.push(function () { conn.off('value', ch); mineOnline.onDisconnect().cancel().catch(function () {}); });
+                listen('pauses', 'pauses', null);
 
                 // Load who is seated and whether the game has started BEFORE the first view, so a
                 // player rejoining a running game never sees a flash of the lobby. The server clock
                 // must be known too (see clockReady).
-                return Promise.all([val(ref.child('players')), val(ref.child('plan')), clockReady()]).then(function (r) {
+                // (A database still on the rules from before pausing refuses the read of `pauses`:
+                // the game must open all the same — it simply cannot be paused there.)
+                return Promise.all([val(ref.child('players')), val(ref.child('plan')), val(ref.child('pauses')).catch(function () { return null; }), clockReady()]).then(function (r) {
                     self.room.players = r[0] || {};
                     self.room.plan = r[1] || null;
+                    self.room.pauses = r[2] || null;
                     self._ready = true;
                     self._timer = setInterval(function () { self._tick(); }, 250);
                     self._tick();
+
+                    // Presence: say "online" only now — this device is listening and on the server's
+                    // clock, so it will see the game start the moment it does — and (re)assert it
+                    // whenever the connection comes back.
+                    var conn = db.ref('.info/connected'), mineOnline = ref.child('players/' + u.uid + '/online');
+                    var ch = conn.on('value', function (s) {
+                        if (s.val() !== true || self._closed) return;
+                        mineOnline.onDisconnect().set(false).then(function () { if (!self._closed) mineOnline.set(true).catch(function () {}); }).catch(function () {});
+                    });
+                    self._subs.push(function () { conn.off('value', ch); mineOnline.onDisconnect().cancel().catch(function () {}); });
                     return self;
                 });
             });
@@ -552,21 +574,32 @@
             return online[0] === this.uid;
         };
 
+        /** Seated players whose device is not in the room yet (still loading, or away). */
+        RoomSession.prototype.notReady = function () {
+            var room = this.room, me = this.uid;
+            return this.seated().filter(function (uid) { return uid !== me && room.players[uid].online !== true; });
+        };
+
         /**
-         * Starts the game. `custom` = { ids, qs } are verified AI-written questions (js/games-ai.js);
-         * without them the built-in bank is used.
+         * Starts the game with questions from the built-in bank. Everyone should see it start
+         * together, so this first gives players who are still connecting a few seconds to arrive
+         * (`waitMs`, default 6 s) — then starts regardless, so nobody can hold a room up.
+         * `custom` = { ids, qs } supplies the questions instead (tests).
          */
-        RoomSession.prototype.start = function (custom) {
+        RoomSession.prototype.start = function (custom, waitMs) {
             var self = this, cfg = core.GAMES[this.game];
             if (this._starting || this.room.plan) return Promise.resolve(false);
             this._starting = true;
-            // However the game is started (button, quick match, rematch): fresh AI questions at the
-            // room's level. opts.customQuestions may take a while (it waits for the questions to be
-            // written and verified) and resolves null only when that has really failed.
-            var ask = custom ? Promise.resolve(custom)
-                : opts.customQuestions ? Promise.resolve().then(function () { return opts.customQuestions(self.game, self.room.meta.level); }).catch(function () { return null; })
-                : Promise.resolve(null);
-            return ask.then(function (custom) {
+            var deadline = Date.now() + (typeof waitMs === 'number' ? waitMs : 6000);
+            var everyoneIn = new Promise(function (resolve) {
+                (function check() {
+                    if (self._closed || self.room.plan || !self.notReady().length || Date.now() >= deadline) { self.waitingFor = null; resolve(); return; }
+                    self.waitingFor = self.notReady();
+                    self._tick();
+                    setTimeout(check, 200);
+                })();
+            });
+            return everyoneIn.then(function () {
                 if (self._closed || self.room.plan) { self._starting = false; return false; }
                 var plan = { startedAt: TS, secs: cfg.secs, rounds: cfg.rounds };
                 if (custom && custom.ids && custom.ids.length === cfg.rounds) { plan.q = custom.ids; plan.qs = custom.qs; }
@@ -576,6 +609,23 @@
                     return true;
                 }, function () { self._starting = false; return false; }); // someone else started it first
             });
+        };
+
+        /** Pauses the game for everyone (only while a question is on screen). Resolves false if it could not. */
+        RoomSession.prototype.pause = function () {
+            var v = this._view;
+            if (!v || v.phase !== 'question' || this.seated().indexOf(this.uid) < 0) return Promise.resolve(false);
+            var list = core.pausesOf(this.room);
+            if (list.length >= core.MAX_PAUSES) return Promise.resolve(false);
+            return roomRef(this.roomId).child('pauses/' + list.length).set({ s: TS, by: this.uid }).then(function () { return true; }, function () { return false; });
+        };
+        /** How many more times this game can be paused. */
+        RoomSession.prototype.pausesLeft = function () { return Math.max(0, core.MAX_PAUSES - core.pausesOf(this.room).length); };
+        /** Resumes a paused game for everyone. */
+        RoomSession.prototype.resume = function () {
+            var v = this._view;
+            if (!v || v.phase !== 'paused' || this.seated().indexOf(this.uid) < 0) return Promise.resolve(false);
+            return roomRef(this.roomId).child('pauses/' + v.pauseIndex + '/e').set(TS).then(function () { return true; }, function () { return false; });
         };
 
         /** Makes round `r` readable (writing a pass if I never answered it) and listens to it. */
@@ -645,10 +695,13 @@
                 view = core.phaseAt(tl, now());
                 view.timeline = tl;
                 // Rounds that are over (or that I've answered) become readable; needed for scores and reconnects.
-                var upTo = view.phase === 'question' ? view.round - 1 : view.phase === 'countdown' ? -1 : view.round;
+                var asking = view.phase === 'question' || view.phase === 'paused'; // a paused game is frozen on its question
+                var upTo = asking ? view.round - 1 : view.phase === 'countdown' ? -1 : view.round;
                 var clock = now();
+                // The game has begun: it is no longer one of "my games" waiting to be played.
+                if (!this._forgotten) { this._forgotten = true; forget(this.roomId); }
                 for (var r = 0; r <= upTo; r++) this._watchRound(r, 0, clock >= tl.rounds[r].nominalEnd);
-                if (view.phase === 'question' && this._mine[view.round] === undefined && !this._probed[view.round]) {
+                if (asking && this._mine[view.round] === undefined && !this._probed[view.round]) {
                     // After a reload mid-round: did I already answer this one (from here or another tab)?
                     this._probed[view.round] = 'pending';
                     var self = this, rr = view.round;
@@ -662,7 +715,7 @@
                 if (!this._synced) {
                     var settled = true;
                     for (var k = 0; k <= upTo; k++) if (this._watching[k] !== 'on') settled = false;
-                    if (view.phase === 'question') {
+                    if (asking) {
                         // Not answered: wait until the server confirms that. Answered: the round may
                         // already be over, which only its answers can tell — wait for those.
                         if (this._mine[view.round] === undefined ? this._probed[view.round] !== 'done' : this._watching[view.round] !== 'on') settled = false;
@@ -676,6 +729,7 @@
             view.game = this.game;
             view.seated = this.seated();
             view.canStart = this.canStart();
+            view.waitingFor = this.waitingFor || null; // Start was pressed: players still connecting
             view.isHost = room.meta.hostUid === this.uid;
             this._view = view;
             if (this.onUpdate) this.onUpdate(view);

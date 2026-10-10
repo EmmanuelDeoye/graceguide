@@ -2173,3 +2173,44 @@
     .sheet-content .flex:has(> .btn + .btn) > .btn { width: 100%; }
     .profile-actions-row, .flex.gap-2.mb-4[style*="justify-content: center"] { flex-wrap: wrap; }
 }
+
+/* ============================================
+   v1.4 - Spirit Life level-up, update bar, short share cards, Wins stat
+   ============================================ */
+.share-card-preview-wrap:has(.share-card-preview-short) { aspect-ratio: 1 / 1; max-width: 260px; }
+.profile-stats { flex-wrap: wrap; row-gap: 12px; }
+
+.app-update-bar { position: fixed; left: 12px; right: 12px; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); z-index: 900; margin: 0 auto; max-width: 440px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px 10px 16px; border-radius: 14px; background: #1f3327; color: #f8f6f0; box-shadow: 0 12px 32px rgba(0,0,0,0.35); font-size: 14px; font-weight: 600; animation: app-update-in 0.35s ease both; }
+.app-update-bar .btn { flex-shrink: 0; }
+@keyframes app-update-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+
+/* Rising to a higher Spirit Life: a full-screen celebration, grander than a game badge. */
+.spirit-pop { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 20px; overflow: hidden; opacity: 0; transition: opacity 0.3s ease;
+    background: radial-gradient(circle at 50% 30%, #7a6526 0%, #1f5a43 36%, #07160f 82%); }
+.spirit-pop.on { opacity: 1; }
+.spirit-pop-sparks { position: absolute; inset: 0; pointer-events: none; }
+.spirit-pop-sparks i { position: absolute; top: -12px; width: 6px; height: 6px; border-radius: 50%; background: #ffe9a8; box-shadow: 0 0 10px 3px rgba(255,224,138,0.75); transform: scale(var(--s, 1)); animation: spirit-fall linear infinite; opacity: 0; }
+@keyframes spirit-fall { 0% { transform: translateY(-5vh) scale(var(--s, 1)); opacity: 0; } 12% { opacity: 1; } 100% { transform: translateY(108vh) scale(var(--s, 1)); opacity: 0; } }
+.spirit-pop-card { position: relative; width: 100%; max-width: 380px; text-align: center; color: #f8f6f0; padding: 8px 8px 4px; transform: scale(0.7) translateY(24px); transition: transform 0.6s cubic-bezier(0.2, 1.5, 0.4, 1); }
+.spirit-pop.on .spirit-pop-card { transform: none; }
+.spirit-pop-halo { position: relative; width: 210px; height: 210px; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; }
+.spirit-pop-rays { position: absolute; inset: -46px; border-radius: 50%; background: repeating-conic-gradient(from 0deg, rgba(255,224,138,0.5) 0deg 7deg, transparent 7deg 20deg); -webkit-mask: radial-gradient(circle, transparent 30%, #000 34%, transparent 70%); mask: radial-gradient(circle, transparent 30%, #000 34%, transparent 70%); animation: spirit-turn 16s linear infinite; }
+.spirit-pop-rays-2 { inset: -18px; opacity: 0.6; animation-duration: 24s; animation-direction: reverse; background: repeating-conic-gradient(from 10deg, rgba(255,255,255,0.45) 0deg 3deg, transparent 3deg 24deg); }
+@keyframes spirit-turn { to { transform: rotate(360deg); } }
+.spirit-pop-ring { position: absolute; inset: 22px; border-radius: 50%; border: 2px solid rgba(255,224,138,0.75); box-shadow: 0 0 0 10px rgba(255,224,138,0.12), 0 0 44px 10px rgba(255,214,107,0.5); animation: spirit-breathe 2.2s ease-in-out infinite; }
+@keyframes spirit-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+.spirit-pop-sticker { position: relative; width: 132px; height: 132px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 68px; line-height: 1; background: radial-gradient(circle at 35% 30%, #fff7dc, #e9cf8e 55%, #c7a65a); box-shadow: 0 16px 36px rgba(0,0,0,0.45), inset 0 -6px 14px rgba(120,84,20,0.25); animation: spirit-drop 0.9s cubic-bezier(0.2, 1.6, 0.4, 1) both; }
+@keyframes spirit-drop { 0% { transform: scale(0) rotate(-40deg); } 100% { transform: none; } }
+.spirit-pop-eyebrow { font-size: 12px; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; color: #ffe08a; margin-top: 6px; }
+.spirit-pop-title { font-family: "Playfair Display", serif; font-size: 40px; line-height: 1.1; margin: 6px 0 6px; color: #fff; text-shadow: 0 4px 18px rgba(0,0,0,0.45); }
+.spirit-pop-about { font-size: 15px; color: rgba(248,246,240,0.88); margin: 0 auto 14px; max-width: 300px; }
+.spirit-pop-points { display: inline-flex; align-items: baseline; gap: 8px; padding: 8px 20px; border-radius: 999px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,224,138,0.45); }
+.spirit-pop-points strong { font-size: 30px; font-weight: 800; color: #ffe08a; }
+.spirit-pop-points span { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
+.spirit-pop-verse { font-family: "Playfair Display", serif; font-style: italic; font-size: 15px; color: rgba(248,246,240,0.9); margin: 16px auto 18px; max-width: 300px; }
+.spirit-pop-verse small { display: block; font-family: inherit; font-style: normal; font-size: 12px; color: #ffe08a; margin-top: 2px; }
+.spirit-pop-actions { display: flex; flex-direction: column; gap: 8px; max-width: 320px; margin: 0 auto; }
+.spirit-pop-continue { background: transparent; color: #f8f6f0; border: 1px solid rgba(248,246,240,0.4); }
+@media (max-height: 640px) { .spirit-pop-halo { width: 150px; height: 150px; } .spirit-pop-sticker { width: 96px; height: 96px; font-size: 48px; } .spirit-pop-title { font-size: 30px; } .spirit-pop-verse { display: none; } }
+@media (prefers-reduced-motion: reduce) { .spirit-pop-rays, .spirit-pop-ring, .spirit-pop-sparks i, .spirit-pop-sticker { animation: none; } .spirit-pop-sparks i { opacity: 0.5; top: 30%; } }
+@media (max-width: 420px) { .profile-stats { gap: 18px; } }

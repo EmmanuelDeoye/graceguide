@@ -461,3 +461,22 @@
     .pl-tour-actions, .pl-invite-actions { flex-direction: column-reverse; }
     .pl-levels-head { flex-direction: column; gap: 2px; }
 }
+
+/* ============================================
+   v1.4 - pause (for everyone in the game), start-together
+   ============================================ */
+.pl-head { gap: 8px; }
+.pl-pause-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: var(--radius-full); border: 1px solid rgba(0,0,0,0.14); background: transparent; color: var(--text-slate); font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.pl-pause-btn:hover { background: rgba(0,0,0,0.05); }
+.pl-pause-btn:disabled { opacity: 0.5; cursor: default; }
+[data-theme="dark"] .pl-pause-btn { border-color: var(--dark-border); }
+.pl-head .pl-pause-btn + .pl-head-round { margin-left: 0; }
+.pl-paused { gap: 6px; padding: 28px 20px; animation: pl-zoom 0.3s ease both; }
+.pl-paused-icon { width: 72px; height: 72px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 26px; color: #fff; background: var(--accent-muted-gold); box-shadow: 0 0 0 10px rgba(199,166,90,0.18); animation: pl-paused-pulse 1.8s ease-in-out infinite; margin-bottom: 10px; }
+.pl-paused-title { font-family: var(--font-display, inherit); font-size: 22px; margin: 0; }
+.pl-paused-count { font-size: 14px; color: var(--text-slate); margin: 6px 0 14px; }
+.pl-paused-count strong { color: var(--text-charcoal); font-variant-numeric: tabular-nums; }
+.pl-paused .btn { max-width: 320px; }
+.pl-paused-note { font-size: 12px; color: var(--text-slate); margin-top: 12px; }
+@keyframes pl-paused-pulse { 0%, 100% { box-shadow: 0 0 0 8px rgba(199,166,90,0.18); } 50% { box-shadow: 0 0 0 16px rgba(199,166,90,0.06); } }
+@media (prefers-reduced-motion: reduce) { .pl-paused-icon, .pl-paused { animation: none; } }

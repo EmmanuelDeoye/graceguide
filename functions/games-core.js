@@ -315,21 +315,65 @@
         var cfg = GAMES[game], plan = room.plan;
         var n = plan.rounds, D = plan.secs * 1000, reveal = cfg.reveal;
         var uids = seatedPlayers(room.players, (room.meta || {}).kind);
+        var P = pausesOf(room), pi = 0;
         var rounds = [], start = plan.startedAt + COUNTDOWN_MS;
         for (var r = 0; r < n; r++) {
-            var nominal = start + D;
+            var nominal = start + D, held = [];
+            // A pause freezes the question it was called in: the round's clock stops for
+            // everyone and the time is added back. (One called outside a question does nothing.)
+            while (pi < P.length && P[pi].s < start) pi++;
+            while (pi < P.length && P[pi].s < nominal) { held.push(P[pi]); nominal += P[pi].e - P[pi].s; pi++; }
             var end = uids.length ? roundEnd(room, uids, r, start, nominal) : nominal;
-            rounds.push({ start: start, end: end, nominalEnd: nominal });
+            held = held.filter(function (p) { return p.s < end; }); // called after everyone had answered: too late to matter
+            rounds.push({ start: start, end: end, nominalEnd: nominal, pauses: held });
             start = end + reveal;
         }
         return { rounds: rounds, startsAt: plan.startedAt + COUNTDOWN_MS, finishedAt: start, duration: D, reveal: reveal };
+    }
+
+    // ---------- pauses ----------
+    // Any player may pause a game; it is then paused for everyone. A pause is a server-stamped
+    // record { s, by } that gets its end stamp `e` when someone resumes — and ends by itself
+    // after PAUSE_MAX_MS, so a game can never be left frozen. Every client derives the same
+    // schedule from these records, exactly as it does from the answers.
+    var PAUSE_MAX_MS = 60000, MAX_PAUSES = 6;
+    /** The room's pauses in order: [{ s, e, by, open, index }] — `e` is when it ends (or will end by itself). */
+    function pausesOf(room) {
+        var raw = room && room.pauses, out = [], last = -Infinity;
+        if (!raw || typeof raw !== 'object') return out;
+        for (var i = 0; i < MAX_PAUSES; i++) {
+            var p = raw[i] !== undefined ? raw[i] : raw[String(i)];
+            if (!p || typeof p !== 'object' || typeof p.s !== 'number' || p.s < last) break;
+            var cap = p.s + PAUSE_MAX_MS;
+            var open = !(typeof p.e === 'number' && p.e >= p.s);
+            var e = open ? cap : Math.min(p.e, cap);
+            out.push({ s: p.s, e: e, by: typeof p.by === 'string' ? p.by : '', open: open, index: i });
+            last = e;
+        }
+        return out;
+    }
+    /** Playing time used in a round by server time `t` (time spent paused does not count). */
+    function activeMs(round, t) {
+        var ms = t - round.start, held = round.pauses || [];
+        for (var i = 0; i < held.length; i++) {
+            var from = Math.max(held[i].s, round.start), to = Math.min(held[i].e, t);
+            if (to > from) ms -= to - from;
+        }
+        return ms;
     }
     /** What is on screen at server time `now`. */
     function phaseAt(tl, now) {
         if (now < tl.startsAt) return { phase: 'countdown', round: 0, msLeft: tl.startsAt - now };
         for (var r = 0; r < tl.rounds.length; r++) {
             var rd = tl.rounds[r];
-            if (now < rd.end) return { phase: 'question', round: r, msLeft: rd.end - now, elapsed: now - rd.start };
+            if (now < rd.end) {
+                var held = rd.pauses || [];
+                for (var i = 0; i < held.length; i++) {
+                    // Frozen: `msLeft` counts down to when it resumes by itself, `roundLeft` is the question time still to come.
+                    if (now >= held[i].s && now < held[i].e) return { phase: 'paused', round: r, msLeft: held[i].e - now, roundLeft: Math.max(0, rd.end - held[i].e), elapsed: activeMs(rd, held[i].s), by: held[i].by, pauseIndex: held[i].index };
+                }
+                return { phase: 'question', round: r, msLeft: rd.end - now, elapsed: activeMs(rd, now) };
+            }
             if (now < rd.end + tl.reveal) return { phase: 'reveal', round: r, msLeft: rd.end + tl.reveal - now };
         }
         return { phase: 'done', round: tl.rounds.length - 1, msLeft: 0 };
@@ -340,7 +384,7 @@
     function pointsFor(game, plan, round, t, streakBefore, judged) {
         if (!judged.ok) return 0;
         var cfg = GAMES[game], D = plan.secs * 1000;
-        var remaining = Math.max(0, D - (t - round.start));
+        var remaining = Math.max(0, D - activeMs(round, t));
         if (cfg.type === 'wordle') return 300 - 40 * (judged.guesses - 1) + floorDiv(100 * remaining, D);
         return cfg.base + floorDiv(cfg.speed * remaining, D) + 10 * Math.min(streakBefore, 5);
     }
@@ -371,7 +415,7 @@
                 } else streak = 0;
                 if (streak > best) best = streak;
                 score += pts;
-                rounds.push({ a: ans ? ans.a : null, answered: !!ans && ans.a !== -1 && ans.a !== '', ok: judged.ok, pts: pts, guesses: judged.guesses, ms: valid ? ans.t - rd.start : null });
+                rounds.push({ a: ans ? ans.a : null, answered: !!ans && ans.a !== -1 && ans.a !== '', ok: judged.ok, pts: pts, guesses: judged.guesses, ms: valid ? activeMs(rd, ans.t) : null });
             }
             byUid[uid] = { uid: uid, name: cleanName(room.players[uid].name), score: score, correct: correct, units: units, streak: streak, bestStreak: best, minGuesses: minGuesses, rounds: rounds };
         });
@@ -555,6 +599,7 @@
         parseGuesses: parseGuesses, wordleFeedback: wordleFeedback, judge: judge,
         timeline: timeline, phaseAt: phaseAt, pointsFor: pointsFor, seatedPlayers: seatedPlayers, scoreRoom: scoreRoom, scoreDaily: scoreDaily,
         xpFor: xpFor, level: level, xpForLevel: xpForLevel, levelTitle: levelTitle, emptyProfile: emptyProfile, applyResult: applyResult,
-        BADGE_XP_MAX: BADGE_XP_MAX, badgeById: badgeById, claimable: claimable, claimBadge: claimBadge
+        BADGE_XP_MAX: BADGE_XP_MAX, badgeById: badgeById, claimable: claimable, claimBadge: claimBadge,
+        PAUSE_MAX_MS: PAUSE_MAX_MS, MAX_PAUSES: MAX_PAUSES, pausesOf: pausesOf, activeMs: activeMs
     };
 });

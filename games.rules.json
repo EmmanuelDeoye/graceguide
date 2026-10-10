@@ -113,6 +113,54 @@
           ".read": "auth != null",
           ".write": "(auth != null) && (!data.exists() && newData.exists()) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists())",
           ".validate": "newData.isString() && newData.val().length <= 40"
+        },
+        "pauses": {
+          "0": {
+            ".write": "(auth != null) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists()) && (root.child('games/rooms/' + $room).child('plan').exists()) && (newData.exists()) && (!data.child('e').exists())",
+            ".validate": "(newData.hasChildren(['s', 'by'])) && (((!data.exists()) && (newData.child('s').val() == now) && (newData.child('by').val() == auth.uid) && (!newData.child('e').exists()) && (true)) || ((data.exists()) && (newData.child('s').val() == data.child('s').val()) && (newData.child('by').val() == data.child('by').val()) && (newData.child('e').val() == now)))",
+            "$field": {
+              ".validate": "$field == 's' || $field == 'by' || $field == 'e'"
+            }
+          },
+          "1": {
+            ".write": "(auth != null) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists()) && (root.child('games/rooms/' + $room).child('plan').exists()) && (newData.exists()) && (!data.child('e').exists())",
+            ".validate": "(newData.hasChildren(['s', 'by'])) && (((!data.exists()) && (newData.child('s').val() == now) && (newData.child('by').val() == auth.uid) && (!newData.child('e').exists()) && (root.child('games/rooms/' + $room).child('pauses/0').exists() && (root.child('games/rooms/' + $room).child('pauses/0').child('e').exists() || root.child('games/rooms/' + $room).child('pauses/0').child('s').val() < now - 60000))) || ((data.exists()) && (newData.child('s').val() == data.child('s').val()) && (newData.child('by').val() == data.child('by').val()) && (newData.child('e').val() == now)))",
+            "$field": {
+              ".validate": "$field == 's' || $field == 'by' || $field == 'e'"
+            }
+          },
+          "2": {
+            ".write": "(auth != null) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists()) && (root.child('games/rooms/' + $room).child('plan').exists()) && (newData.exists()) && (!data.child('e').exists())",
+            ".validate": "(newData.hasChildren(['s', 'by'])) && (((!data.exists()) && (newData.child('s').val() == now) && (newData.child('by').val() == auth.uid) && (!newData.child('e').exists()) && (root.child('games/rooms/' + $room).child('pauses/1').exists() && (root.child('games/rooms/' + $room).child('pauses/1').child('e').exists() || root.child('games/rooms/' + $room).child('pauses/1').child('s').val() < now - 60000))) || ((data.exists()) && (newData.child('s').val() == data.child('s').val()) && (newData.child('by').val() == data.child('by').val()) && (newData.child('e').val() == now)))",
+            "$field": {
+              ".validate": "$field == 's' || $field == 'by' || $field == 'e'"
+            }
+          },
+          "3": {
+            ".write": "(auth != null) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists()) && (root.child('games/rooms/' + $room).child('plan').exists()) && (newData.exists()) && (!data.child('e').exists())",
+            ".validate": "(newData.hasChildren(['s', 'by'])) && (((!data.exists()) && (newData.child('s').val() == now) && (newData.child('by').val() == auth.uid) && (!newData.child('e').exists()) && (root.child('games/rooms/' + $room).child('pauses/2').exists() && (root.child('games/rooms/' + $room).child('pauses/2').child('e').exists() || root.child('games/rooms/' + $room).child('pauses/2').child('s').val() < now - 60000))) || ((data.exists()) && (newData.child('s').val() == data.child('s').val()) && (newData.child('by').val() == data.child('by').val()) && (newData.child('e').val() == now)))",
+            "$field": {
+              ".validate": "$field == 's' || $field == 'by' || $field == 'e'"
+            }
+          },
+          "4": {
+            ".write": "(auth != null) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists()) && (root.child('games/rooms/' + $room).child('plan').exists()) && (newData.exists()) && (!data.child('e').exists())",
+            ".validate": "(newData.hasChildren(['s', 'by'])) && (((!data.exists()) && (newData.child('s').val() == now) && (newData.child('by').val() == auth.uid) && (!newData.child('e').exists()) && (root.child('games/rooms/' + $room).child('pauses/3').exists() && (root.child('games/rooms/' + $room).child('pauses/3').child('e').exists() || root.child('games/rooms/' + $room).child('pauses/3').child('s').val() < now - 60000))) || ((data.exists()) && (newData.child('s').val() == data.child('s').val()) && (newData.child('by').val() == data.child('by').val()) && (newData.child('e').val() == now)))",
+            "$field": {
+              ".validate": "$field == 's' || $field == 'by' || $field == 'e'"
+            }
+          },
+          "5": {
+            ".write": "(auth != null) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists()) && (root.child('games/rooms/' + $room).child('plan').exists()) && (newData.exists()) && (!data.child('e').exists())",
+            ".validate": "(newData.hasChildren(['s', 'by'])) && (((!data.exists()) && (newData.child('s').val() == now) && (newData.child('by').val() == auth.uid) && (!newData.child('e').exists()) && (root.child('games/rooms/' + $room).child('pauses/4').exists() && (root.child('games/rooms/' + $room).child('pauses/4').child('e').exists() || root.child('games/rooms/' + $room).child('pauses/4').child('s').val() < now - 60000))) || ((data.exists()) && (newData.child('s').val() == data.child('s').val()) && (newData.child('by').val() == data.child('by').val()) && (newData.child('e').val() == now)))",
+            "$field": {
+              ".validate": "$field == 's' || $field == 'by' || $field == 'e'"
+            }
+          },
+          ".read": "auth != null",
+          "$other": {
+            ".validate": "false"
+          }
         }
       }
     },
