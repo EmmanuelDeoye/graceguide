@@ -2430,8 +2430,11 @@ function renderSettingsPage() {
             
             <div class="card mb-3">
                 <h3 style="font-weight: 600; margin-bottom: 16px;">About</h3>
-                <p style="line-height: 1.6; margin-bottom: 8px;">GraceGuide v1.0.0</p>
+                <p style="line-height: 1.6; margin-bottom: 8px;">GraceGuide v${GRACEGUIDE_WEB_VERSION}</p>
                 <p style="font-size: 12px; color: var(--text-slate);">Your AI Christian Companion</p>
+                <button class="btn btn-outline btn-sm btn-block mt-3" onclick="navigateTo('about')">
+                    <i class="fas fa-circle-info"></i> About Us &amp; Contact
+                </button>
                 <button class="btn btn-outline btn-sm btn-block mt-3" onclick="navigateTo('terms')">
                     <i class="fas fa-file-contract"></i> Terms &amp; Conditions
                 </button>
@@ -2588,6 +2591,8 @@ function startRealtimeListeners() {
     if (!AppState.currentUser) return;
     stopRealtimeListeners();
     const uid = AppState.currentUser.uid;
+    // Did I win the last Weekly Quiz? (A moment after sign-in, so it never competes with the page loading.)
+    if (typeof checkQuizPrize === 'function') setTimeout(checkQuizPrize, 3000);
 
     // --- Brethren / connection requests: live, so the list never needs the app to be reopened ---
     let connectionsKey = null;
@@ -3146,3 +3151,128 @@ window.closeModal = closeModal;
 window.closeSheet = closeSheet;
 window.handleLogout = handleLogout;
 window.resendVerificationEmail = resendVerificationEmail;
+
+/* ============================================
+   ABOUT US (#/about) — who we are, and how to reach us
+   Three ways to get in touch: a message straight to the GraceGuide team
+   (it lands in the admin page's Messages tab), WhatsApp, or email.
+   ============================================ */
+const GRACEGUIDE_WEB_VERSION = '1.6.0';
+const CONTACT_EMAIL = 'support@graceguide.com.ng';
+const CONTACT_CATEGORIES = [
+    ['inquiry', 'Inquiry', 'fa-circle-question'],
+    ['partnership', 'Partnership', 'fa-handshake'],
+    ['feedback', 'Feedback', 'fa-comment-dots'],
+    ['complaint', 'Complaint', 'fa-triangle-exclamation']
+];
+
+/** The GraceGuide WhatsApp line (admin page → App Settings). Falls back to the Talk to Someone number. */
+async function getContactWhatsAppNumber() {
+    try {
+        const snap = await database.ref('appConfig/contactWhatsApp').once('value');
+        const digits = String(snap.val() || '').replace(/\D/g, '');
+        if (digits.length >= 7) return digits;
+    } catch (error) { /* fall through */ }
+    return typeof getTalkToSomeoneWhatsAppNumber === 'function' ? getTalkToSomeoneWhatsAppNumber() : null;
+}
+window.getContactWhatsAppNumber = getContactWhatsAppNumber;
+
+function renderAboutPage() {
+    AppState.contactCategory = AppState.contactCategory || 'inquiry';
+    DOM.pageContainer.innerHTML = `
+        <div class="planner-container about-page">
+            <div class="about-hero">
+                <img src="img/logo.png" alt="" onerror="this.style.display='none';">
+                <h2>Grace<span class="brand-guide">Guide</span></h2>
+                <p>Your AI Christian Companion</p>
+            </div>
+
+            <div class="card mb-3">
+                <h3 style="font-weight: 700; margin-bottom: 10px;">About us</h3>
+                <p class="about-text">GraceGuide is a Christian companion app, built to help believers stay in the Word every day and grow together. Read the Bible, ask Shepherd your questions, follow a study plan, share what you are learning in Space, meet other believers in the forums, and sharpen what you know with the Weekly Quiz and Play &amp; Learn.</p>
+                <p class="about-text">We would love to hear from you — a question, an idea, a partnership, or something we got wrong.</p>
+            </div>
+
+            <div class="card mb-3">
+                <h3 style="font-weight: 700; margin-bottom: 4px;">Contact us</h3>
+                <p class="text-muted" style="font-size: 13px; margin-bottom: 14px;">Tell us what it is about, write your message, then choose how to send it.</p>
+
+                <div class="about-categories" id="about-categories">
+                    ${CONTACT_CATEGORIES.map(([id, label, icon]) => `
+                        <button type="button" class="about-category${AppState.contactCategory === id ? ' active' : ''}" data-category="${id}"><i class="fas ${icon}"></i> ${label}</button>
+                    `).join('')}
+                </div>
+
+                <textarea id="about-message" class="form-input" rows="5" maxlength="2000" placeholder="Write your message…" style="margin-top: 12px; resize: vertical;"></textarea>
+                <input type="email" id="about-reply-email" class="form-input" placeholder="Email for our reply (optional)" autocomplete="email" style="margin-top: 8px;">
+
+                <div class="about-send">
+                    <button class="btn btn-primary btn-block" id="about-send-team"><i class="fas fa-paper-plane"></i> Send to the GraceGuide team</button>
+                    <button class="btn btn-block pl-btn-whatsapp" id="about-send-whatsapp"><i class="fab fa-whatsapp"></i> Send on WhatsApp</button>
+                    <a class="btn btn-outline btn-block" id="about-send-email" href="mailto:${CONTACT_EMAIL}"><i class="fas fa-envelope"></i> Email ${CONTACT_EMAIL}</a>
+                </div>
+                <p class="text-muted" style="font-size: 12px; margin-top: 10px;">“Send to the GraceGuide team” goes straight to our admins inside the app. We reply by notification here, or by email if you leave one.</p>
+            </div>
+
+            <p class="text-center text-muted" style="font-size: 12px;">GraceGuide v${GRACEGUIDE_WEB_VERSION} · <a href="#/terms" style="color: inherit;">Terms &amp; Conditions</a></p>
+        </div>
+    `;
+
+    const categoryLabel = () => (CONTACT_CATEGORIES.find(c => c[0] === AppState.contactCategory) || CONTACT_CATEGORIES[0])[1];
+    const message = () => ($('#about-message')?.value || '').trim();
+    const needMessage = () => { if (message()) return false; showToast('Please write your message first.', 'warning'); $('#about-message')?.focus(); return true; };
+    const composed = () => {
+        const name = AppState.userProfile?.username;
+        return `[${categoryLabel()}] ${message()}${name ? `\n\n— ${name} (GraceGuide)` : ''}`;
+    };
+    const syncEmailLink = () => {
+        const link = $('#about-send-email');
+        if (link) link.href = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent('GraceGuide ' + categoryLabel().toLowerCase())}${message() ? '&body=' + encodeURIComponent(composed()) : ''}`;
+    };
+
+    $$('#about-categories .about-category').forEach(btn => btn.addEventListener('click', () => {
+        AppState.contactCategory = btn.dataset.category;
+        $$('#about-categories .about-category').forEach(b => b.classList.toggle('active', b === btn));
+        syncEmailLink();
+    }));
+    $('#about-message').addEventListener('input', syncEmailLink);
+    syncEmailLink();
+
+    $('#about-send-whatsapp').addEventListener('click', async () => {
+        if (needMessage()) return;
+        const number = await getContactWhatsAppNumber();
+        if (!number) { showToast(`Our WhatsApp line isn't available right now — please email ${CONTACT_EMAIL}.`, 'warning'); return; }
+        window.open(`https://wa.me/${number}?text=${encodeURIComponent(composed())}`, '_blank');
+    });
+
+    $('#about-send-team').addEventListener('click', async () => {
+        if (!requireAuth('Sign in to send a message to the GraceGuide team — or use WhatsApp or email below.')) return;
+        if (needMessage()) return;
+        const btn = $('#about-send-team');
+        const replyEmail = ($('#about-reply-email')?.value || '').trim();
+        if (replyEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(replyEmail)) { showToast('That email address does not look right.', 'warning'); return; }
+        btn.disabled = true;
+        const entry = {
+            uid: AppState.currentUser.uid,
+            name: (AppState.userProfile?.username || 'GraceGuide member').slice(0, 60),
+            category: AppState.contactCategory,
+            message: message().slice(0, 2000),
+            createdAt: firebase.database.ServerValue.TIMESTAMP,
+            status: 'new',
+            platform: 'web'
+        };
+        if (replyEmail) entry.replyEmail = replyEmail.slice(0, 120);
+        try {
+            await database.ref('contactMessages').push(entry);
+            $('#about-message').value = '';
+            syncEmailLink();
+            showToast('Thank you — your message has reached the GraceGuide team.', 'success');
+        } catch (error) {
+            console.error('Error sending contact message:', error);
+            showToast(`We couldn't send that just now. Please try WhatsApp or email ${CONTACT_EMAIL}.`, 'error');
+        } finally {
+            btn.disabled = false;
+        }
+    });
+}
+window.renderAboutPage = renderAboutPage;

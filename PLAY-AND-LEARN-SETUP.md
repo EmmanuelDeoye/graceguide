@@ -1,4 +1,4 @@
-# GraceGuide — going live (web v12 shell, Android 1.4.1)
+# GraceGuide — going live (web v14 shell, Android 1.6.0)
 
 Three things have to happen in Firebase before everything works for real
 users. Do them in this order.
@@ -13,12 +13,19 @@ and the others. Do not replace anything that is already there.
 |---|---|---|
 | `games.rules.json` | `"games": { … }` | All multiplayer: rooms, invites, XP, leaderboards, Daily Challenge, "My games". (Solo still works.) |
 | `community.rules.json` | `"publicProfiles": { … }` | Community → Users shows "Couldn't load people". |
+| `contact.rules.json` (new in 1.6.0) | `"contactMessages": { … }` | About Us → "Send to the GraceGuide team" fails (it tells the person to use WhatsApp or email instead), and the admin page's Messages tab cannot load. |
 
-**The `"games"` block changed again in 1.4.0 — replace the one you pasted before:**
+**The `"games"` block changed again in 1.5.0 — replace the one you pasted before:**
 
-- `"games"` → `rooms/{id}/pauses`: lets a player pause a running game for
-  everyone (and anyone in it resume). Until this is live, games play normally
-  but tapping **Pause** only says "This game can't be paused".
+- `seen` (new): each player's question history, so games can be dealt from
+  questions nobody at the table has seen. Until this is live the apps fall
+  back to each phone's own short memory of recent questions — games still
+  work, but the history does not follow the account or cover the other players.
+- `invites`: a rematch may invite anyone who was in the game just played,
+  not only Brethren. Until this is live, rematch invitations reach Brethren
+  only (the others get an ordinary notification instead).
+- `rooms/{id}/pauses` is gone: nobody can pause a game any more, whatever
+  version of the app they are on.
 
 **Both blocks changed in 1.3.0 (still needed if you have not pasted them yet):**
 
@@ -69,14 +76,107 @@ firebase deploy --only functions
 
 ## 3. Publish
 
-- Web: upload the `graceguide` folder (including `index.html`, `sw.js` and everything in `js/` and `css/`). `sw.js` is at cache version v12. Upload `admin.html`, `css/admin.css` and `js/admin.js` too — the admin page was repaired in 1.4.1. `js/games-ai.js` is gone — delete it from the server too.
+- Web: upload the `graceguide` folder (including `index.html`, `sw.js` and everything in `js/` and `css/`). `sw.js` is at cache version v14. Upload `admin.html`, `css/admin.css` and `js/admin.js` too — the admin page was repaired in 1.4.1. `js/games-ai.js` is gone — delete it from the server too.
 - Android: `graceguide-android/app/build/outputs/bundle/release/app-release.aab`
-  or `…/apk/release/app-release.apk` — version 1.4.1 (code 6). Set the admin
-  page's "Android latest version" to 1.4.1.
+  or `…/apk/release/app-release.apk` — version 1.6.0 (code 8). Set the admin
+  page's "Android latest version" to 1.6.0.
 - Release web and Android together, and ask players to update: a phone still on
   an older version does not know the new questions (it shows "This question
   isn't available in your version of the app") and does not freeze when someone
   pauses, so it would fall out of step in a shared room.
+
+## What changed in 1.6.0
+
+Nothing in the `"games"` rules or the Cloud Functions changed. One new rule
+block to add: `contact.rules.json` (table above). Also check that an account
+can write its own `users/{uid}/quizPrizeClaims` (it can if it can already
+write its own `users/{uid}` data).
+
+**Set this once:** admin page → App Settings → **GraceGuide WhatsApp line**.
+It is the number behind About Us → "Send on WhatsApp" and the quiz winner's
+"Claim your prize". If it is left blank the Talk to Someone number is used;
+if both are blank, people are pointed to the support email.
+
+- **Weekly Quiz winner.** When a round is over, the player at the top of its
+  leaderboard (highest score, fastest on a tie) — and nobody else — sees a
+  full-screen celebration with **Claim your prize**, which opens WhatsApp with
+  a ready-written message. It appears once each time they open the app until
+  they tap the button; after that it never appears again. A card at the top
+  of the Quiz page offers the same button, and stays as "Prize claimed"
+  afterwards. The offer lasts 14 days after the round closes.
+- **About Us** (menu → About Us, also in Settings): who we are, and a contact
+  form with four kinds of message (inquiry, partnership, feedback, complaint)
+  and three ways to send it — to the GraceGuide team inside the app, on
+  WhatsApp, or by email to support@graceguide.com.ng.
+- **Admin → Messages** (new tab): everything sent to the team, with search,
+  filters by kind and status, Reply in the app (a notification to the
+  sender), Reply by email (when they left an address), Mark read, Resolve and
+  Delete. The sidebar shows how many are new.
+- **Space** has two arrangements, **Latest** (newest first — the default) and
+  **For you** (by the reader's interests). The last choice is remembered on
+  the device.
+- **Reacting to a Space post no longer reloads it** (web): only the row of
+  buttons is redrawn, so a video keeps playing. (On Android a video opens in
+  its own player, so it never had this problem.)
+- **My Profile is no longer in the menu** — it is always in the top bar.
+  On the web the top-bar picture now carries the Spirit Life sticker too.
+- **Share cards: one brand, five designs.** Same colours and glass panel, a
+  different feel for each family: verses (centred, opening with a large
+  quotation mark), devotionals and plans (rays of light, a gold spine), Space
+  / forums / profiles (a round medallion, drifting circles), games / quizzes
+  / streaks (an icon tile, a field of dots), Spirit Life (a medallion with
+  light radiating behind it).
+- **"Recommended for You" is removed from Home.**
+
+## What changed in 1.5.0 (Play & Learn only)
+
+Redeploy the **rules** (above) and the **functions** with this release: the
+server's copy of the engine and bank changed (levels, the frozen Daily
+Challenge pool).
+
+- **Pause is removed.** There is no Pause button on web or Android. (If a
+  player still on 1.4.x pauses before the new rules are in, everyone stays in
+  step and anyone can tap Resume — that is the only place the old screen can
+  still appear.)
+- **Rematch stays in the same room.** The host's Rematch button reopens the
+  room with the same code, the same players and the same level, and new
+  questions. Players still on the results screen are taken back in
+  automatically; anyone who has left gets an invitation (in the app and as a
+  phone notification) a few seconds later. It starts by itself when everyone
+  is back, or the host can tap Start now. Only the host can call a rematch —
+  unless the host has left, then any player can. Underneath, each game still
+  has its own answer record: that is what keeps scores tamper-proof and lets
+  the server re-check them.
+- **Easy / Medium / Hard is back**, on each game's page, and now works from
+  the question bank: every question is tagged, the host's choice is saved in
+  the room and shown in the lobby, and it applies to solo games too.
+- **Fair questions.** Each account keeps a history of the questions it has
+  been shown (on any device). A game is dealt from questions no seated player
+  has seen; when those run out, the least-seen ones. A rematch never repeats
+  the game before it. Solo play uses the same history. The histories load in
+  the background while players are in the lobby — starting a game never waits
+  for them.
+- **The Daily Challenge is frozen** against bank growth: it draws from a fixed
+  part of the bank, so adding questions never changes a day's five questions.
+
+## The question bank: growing it safely
+
+- Add questions **only at the end** of the arrays in
+  `graceguide-games-tests/bank-src-2.js`. Ids come from position, and
+  `bank-lock.json` now refuses a build in which an existing id has come to
+  mean a different question.
+- Set difficulty in `bank-levels.js` (anything not listed is Medium).
+- `npm run bank` writes the web, server and Android copies together;
+  `npm run check` reports mistakes (duplicates, unknown books or chapters,
+  bad Wordle words, hints that give the word away), the count per game and
+  level, and whether every copy of the bank and of the engine is identical.
+- The bank holds **531 questions today** (Emoji 86, Wordle 89, Who Am I? 81,
+  Bible or Not? 101, Bible Battle 174). The apps are built and tested for a
+  thousand per game: lookups are indexed, the web copy loads as one JSON
+  string, and Android reads it off the main thread.
+- The checker confirms a reference names a real book and chapter. It does
+  **not** know how many verses each chapter has, and it cannot tell whether
+  an answer is right — new questions still need a human read-through.
 
 ## What changed in 1.4.1
 

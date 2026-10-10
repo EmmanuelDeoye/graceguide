@@ -799,3 +799,16 @@ body {
     cursor: pointer;
 }
 .admin-push-toggle input { margin-top: 3px; accent-color: #30483A; }
+
+/* ---- Messages tab (About Us → "Send to the GraceGuide team") ---- */
+.admin-nav-count { margin-left: auto; min-width: 22px; padding: 1px 7px; border-radius: 999px; background: var(--accent-terracotta); color: #fff; font-size: 11px; font-weight: 800; text-align: center; }
+.admin-message-card { border: 1px solid rgba(0,0,0,0.08); border-radius: var(--radius-md); padding: 14px; margin-bottom: 12px; background: var(--card-white); }
+.admin-message-card.new { border-color: var(--accent-muted-gold); box-shadow: 0 0 0 2px rgba(199,166,90,0.18); }
+.admin-message-card.resolved { opacity: 0.7; }
+.admin-message-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.admin-message-when { font-size: 12px; color: var(--text-slate); margin-right: auto; }
+.admin-message-body { white-space: pre-wrap; word-break: break-word; line-height: 1.55; margin-bottom: 8px; }
+.admin-message-email { font-size: 13px; color: var(--text-slate); margin-bottom: 8px; word-break: break-all; }
+.admin-message-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.admin-message-actions .btn { text-decoration: none; }
+@media (max-width: 600px) { .admin-message-actions { flex-direction: column; align-items: stretch; } .admin-message-actions .admin-icon-btn { width: 100%; } }

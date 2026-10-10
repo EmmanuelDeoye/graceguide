@@ -642,7 +642,8 @@ async function renderQuizPage() {
     const data = await fetchQuizCompetition();
     if (AppState.currentRoute !== 'quiz') return; // navigated away while loading
     quizPageData = data;
-    renderQuizPageForState();
+    await renderQuizPageForState();
+    fillQuizPrizeCard(); // only the winner of the last round ever sees it
 }
 
 async function renderQuizPageForState() {
@@ -1034,3 +1035,134 @@ window.showFullAllTimeLeaderboardModal = showFullAllTimeLeaderboardModal;
 window.startQuizAttempt = startQuizAttempt;
 window.selectQuizAnswer = selectQuizAnswer;
 window.submitQuizAttempt = submitQuizAttempt;
+
+/* ============================================
+   THE WINNER'S PRIZE
+   When a Weekly Quiz round is over, the player at the top of its
+   leaderboard — and nobody else — sees a celebration with a "Claim your
+   prize" button that opens our WhatsApp line. Until that button has been
+   tapped, a card on the Quiz page offers it again; once it has, the
+   celebration never pops up again (the card stays as a quiet reminder).
+   The claim is remembered on the account (users/{uid}/quizPrizeClaims)
+   and on this device.
+   ============================================ */
+const QUIZ_PRIZE_CLAIM_DAYS = 14;
+let quizPrizeShownThisVisit = false;
+
+/** The most recent round that is over and that someone took: { id, round } or null. */
+async function latestFinishedQuizRound() {
+    const data = await fetchQuizCompetition();
+    if (getQuizState(data) === 'ended' && Object.keys(data.participants || {}).length > 0) return { id: data.startTime, round: data };
+    const history = await fetchQuizHistory();
+    const last = history.find(r => Object.keys(r.participants || {}).length > 0 && r.startTime + QUIZ_WINDOW_MS <= Date.now());
+    return last ? { id: last.startTime, round: last } : null;
+}
+function quizPrizeKey(uid, id) { return `gg_quiz_prize_${uid}_${id}`; }
+
+/** Null unless I won the last finished round and it is still within the claim window. */
+async function quizPrizeStatus() {
+    const uid = AppState.currentUser?.uid;
+    if (!uid) return null;
+    try {
+        const latest = await latestFinishedQuizRound();
+        if (!latest) return null;
+        const ranked = getSortedParticipants(latest.round);
+        if (!ranked.length || ranked[0].uid !== uid) return null;
+        if (Date.now() - (latest.id + QUIZ_WINDOW_MS) > QUIZ_PRIZE_CLAIM_DAYS * 86400000) return null;
+        let claimed = false;
+        try { claimed = !!localStorage.getItem(quizPrizeKey(uid, latest.id)); } catch (e) { /* private mode */ }
+        if (!claimed) {
+            try { claimed = (await database.ref(`users/${uid}/quizPrizeClaims/${latest.id}`).once('value')).exists(); } catch (e) { /* not readable: go by this device */ }
+        }
+        return { id: latest.id, score: ranked[0].score, total: ranked[0].total, players: ranked.length, claimed };
+    } catch (error) {
+        console.error('Error checking the quiz prize:', error);
+        return null;
+    }
+}
+
+/** "Claim your prize": remembered at once (so the celebration never returns), then on to WhatsApp. */
+async function claimQuizPrize(id, score, total) {
+    const uid = AppState.currentUser?.uid;
+    if (!uid) return;
+    try { localStorage.setItem(quizPrizeKey(uid, id), '1'); } catch (e) { /* private mode */ }
+    database.ref(`users/${uid}/quizPrizeClaims/${id}`).set(firebase.database.ServerValue.TIMESTAMP).catch(() => {});
+    const pop = document.getElementById('quiz-winner-pop');
+    if (pop) pop.remove();
+    fillQuizPrizeCard();
+    const number = typeof getContactWhatsAppNumber === 'function' ? await getContactWhatsAppNumber() : null;
+    if (!number) { showToast("Our WhatsApp line isn't available right now — please email support@graceguide.com.ng to claim your prize.", 'warning'); return; }
+    const name = AppState.userProfile?.username || 'a GraceGuide member';
+    const when = new Date(Number(id)).toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' });
+    const text = `Hello GraceGuide! I won the Weekly Bible Quiz of ${when} with ${score}/${total}. My username is ${name}. I would like to claim my prize.`;
+    window.open(`https://wa.me/${number}?text=${encodeURIComponent(text)}`, '_blank');
+}
+window.claimQuizPrize = claimQuizPrize;
+
+function showQuizWinnerModal(status) {
+    if (document.getElementById('quiz-winner-pop')) return;
+    let sparks = '';
+    for (let i = 0; i < 40; i++) {
+        sparks += `<i style="left:${Math.round(Math.random() * 100)}%; animation-delay:${(Math.random() * 2.4).toFixed(2)}s; animation-duration:${(2.6 + Math.random() * 2.4).toFixed(2)}s; --s:${(0.5 + Math.random()).toFixed(2)};"></i>`;
+    }
+    const el = document.createElement('div');
+    el.id = 'quiz-winner-pop';
+    el.className = 'spirit-pop quiz-winner-pop';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'You won the Weekly Bible Quiz');
+    el.innerHTML = `
+        <div class="spirit-pop-sparks">${sparks}</div>
+        <div class="spirit-pop-card">
+            <div class="spirit-pop-halo"><div class="spirit-pop-rays"></div><div class="spirit-pop-rays spirit-pop-rays-2"></div>
+                <div class="spirit-pop-ring"></div><div class="spirit-pop-sticker">🏆</div></div>
+            <div class="spirit-pop-eyebrow">Weekly Bible Quiz · 1st place</div>
+            <h2 class="spirit-pop-title">You won!</h2>
+            <p class="spirit-pop-about">You finished at the top of the leaderboard${status.players > 1 ? `, ahead of ${status.players - 1} other${status.players === 2 ? '' : 's'}` : ''}. Congratulations!</p>
+            <div class="spirit-pop-points"><strong>${status.score}/${status.total}</strong><span>Your score</span></div>
+            <p class="spirit-pop-verse">“So run, that ye may obtain.” <small>1 Corinthians 9:24</small></p>
+            <div class="spirit-pop-actions">
+                <button class="btn btn-block pl-btn-whatsapp" id="quiz-winner-claim"><i class="fab fa-whatsapp"></i> Claim your prize</button>
+                <button class="btn btn-block spirit-pop-continue" id="quiz-winner-later">Later</button>
+            </div>
+        </div>`;
+    document.body.appendChild(el);
+    setTimeout(() => el.classList.add('on'), 30);
+    if (typeof playFanfare === 'function') { try { playFanfare(); } catch (e) { /* no sound */ } }
+    document.getElementById('quiz-winner-later').onclick = () => { el.classList.remove('on'); setTimeout(() => el.remove(), 320); };
+    document.getElementById('quiz-winner-claim').onclick = () => claimQuizPrize(status.id, status.score, status.total);
+}
+
+/** After sign-in: the celebration, once per visit, until the prize has been claimed. */
+async function checkQuizPrize() {
+    if (quizPrizeShownThisVisit || !AppState.currentUser) return;
+    const status = await quizPrizeStatus();
+    if (!status || status.claimed || quizPrizeShownThisVisit) return;
+    if (AppState.modalOpen || AppState.sheetOpen || document.getElementById('spirit-pop')) { setTimeout(checkQuizPrize, 8000); return; } // not on top of something else
+    if (typeof quizAttempt !== 'undefined' && quizAttempt) return;
+    quizPrizeShownThisVisit = true;
+    showQuizWinnerModal(status);
+}
+window.checkQuizPrize = checkQuizPrize;
+
+/** The winner's card at the top of the Quiz page (nobody else gets one). */
+async function fillQuizPrizeCard() {
+    const status = await quizPrizeStatus();
+    const container = document.querySelector('.quiz-page-container');
+    const old = document.getElementById('quiz-prize-card');
+    if (old) old.remove();
+    if (!status || !container || AppState.currentRoute !== 'quiz' || (typeof quizAttempt !== 'undefined' && quizAttempt)) return;
+    const card = document.createElement('div');
+    card.id = 'quiz-prize-card';
+    card.className = 'quiz-prize-card' + (status.claimed ? ' claimed' : '');
+    card.innerHTML = `
+        <div class="quiz-prize-trophy">🏆</div>
+        <div class="quiz-prize-main">
+            <strong>${status.claimed ? 'Prize claimed' : 'You won the Weekly Bible Quiz!'}</strong>
+            <span>${status.claimed ? 'We have your message — we will be in touch on WhatsApp.' : `${status.score}/${status.total} — top of the leaderboard. Your prize is waiting.`}</span>
+        </div>
+        <button class="btn btn-sm ${status.claimed ? 'btn-outline' : 'pl-btn-whatsapp'}" onclick="claimQuizPrize(${status.id}, ${status.score}, ${status.total})">
+            <i class="fab fa-whatsapp"></i> ${status.claimed ? 'Message us again' : 'Claim your prize'}
+        </button>`;
+    container.insertBefore(card, container.firstChild);
+}
+window.fillQuizPrizeCard = fillQuizPrizeCard;

@@ -1,0 +1,45 @@
+{
+  "contactMessages": {
+    ".read": "auth != null && (root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com')",
+    ".indexOn": [
+      "createdAt"
+    ],
+    "$id": {
+      ".write": "auth != null && ((!data.exists() && newData.exists() && newData.child('uid').val() == auth.uid) || (root.child('admins').child(auth.uid).exists() || auth.token.email == 'godledtech@gmail.com'))",
+      ".validate": "newData.hasChildren(['uid', 'category', 'message', 'createdAt'])",
+      "uid": {
+        ".validate": "newData.isString() && newData.val().length <= 128"
+      },
+      "name": {
+        ".validate": "newData.isString() && newData.val().length <= 60"
+      },
+      "category": {
+        ".validate": "newData.isString() && newData.val().matches(/^(inquiry|partnership|feedback|complaint)$/)"
+      },
+      "message": {
+        ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 2000"
+      },
+      "replyEmail": {
+        ".validate": "newData.isString() && newData.val().length <= 120"
+      },
+      "platform": {
+        ".validate": "newData.isString() && newData.val().length <= 12"
+      },
+      "createdAt": {
+        ".validate": "data.exists() ? newData.val() == data.val() : newData.val() == now"
+      },
+      "status": {
+        ".validate": "newData.isString() && newData.val().matches(/^(new|read|resolved)$/)"
+      },
+      "handledBy": {
+        ".validate": "newData.isString() && newData.val().length <= 160"
+      },
+      "handledAt": {
+        ".validate": "newData.isNumber()"
+      },
+      "$other": {
+        ".validate": "false"
+      }
+    }
+  }
+}

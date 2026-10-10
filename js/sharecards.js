@@ -156,6 +156,43 @@ function shareCardHeroGlyph(config) {
         default: return null; // today's verse keeps the sparkles
     }
 }
+/**
+ * One brand, five designs. Every card keeps the same emerald field, gold accents, header,
+ * footer and frosted-glass panel — what changes is the feel of each family:
+ *   scripture   verses: centred, opens with a large quotation mark, the words first and the reference beneath
+ *   guide       devotionals and plans: left-aligned, rays of morning light, a gold spine down the panel
+ *   fellowship  Space, forums, profiles: centred under a round medallion, soft drifting circles
+ *   play        games, quizzes, streaks: left-aligned with an icon tile, a field of dots, a dashed rule
+ *   crown       Spirit Life: centred medallion with light radiating from behind the panel
+ * (Mirrored by styleOf() in the Android app's ShareCards.kt.)
+ */
+const SHARE_CARD_STYLES = {
+    scripture: { name: 'scripture', deco: 'rings', align: 'center', hero: 'quote', rule: 'diamond', spine: false },
+    guide: { name: 'guide', deco: 'rays-corner', align: 'left', hero: 'inline', rule: 'bar', spine: true },
+    fellowship: { name: 'fellowship', deco: 'bubbles', align: 'center', hero: 'medallion', rule: 'diamond', spine: false },
+    play: { name: 'play', deco: 'dots', align: 'left', hero: 'tile', rule: 'dashes', spine: false },
+    crown: { name: 'crown', deco: 'rays-center', align: 'center', hero: 'medallion', rule: 'bar', spine: false }
+};
+function shareCardStyle(config) {
+    const S = SHARE_CARD_STYLES;
+    if (isStreakCard(config)) return S.play;
+    switch (config.kind) {
+        case 'verse': case 'dailyVerse': return config.body ? S.scripture : S.guide;
+        case 'space': case 'forum': case 'profile': return S.fellowship;
+        case 'game': case 'quiz': return S.play;
+        case 'spirit': return S.crown;
+        default: return S.guide; // devotional, plan
+    }
+}
+// A wedge of light from (cx, cy) between two angles (radians).
+function wedgePath(ctx, cx, cy, a0, a1, r) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + r * Math.cos(a0), cy + r * Math.sin(a0));
+    ctx.lineTo(cx + r * Math.cos(a1), cy + r * Math.sin(a1));
+    ctx.closePath();
+}
+
 // Wraps into at most `max` lines, ending with an ellipsis when cut.
 function wrapCanvasTextMax(ctx, text, maxWidth, max) {
     const all = wrapCanvasText(ctx, text, maxWidth);
@@ -219,6 +256,7 @@ async function renderShareCardOntoCanvas(canvas, config) {
     const W = SHARE_CARD_WIDTH, H = shareCardHeight(config);
     const C = SHARE_CARD_COLORS;
     const marginX = 84;
+    const style = shareCardStyle(config);
 
     // ---- Background: deep emerald with a warm gold glow in the top-right ----
     const bg = ctx.createLinearGradient(0, 0, W, H);
@@ -239,12 +277,42 @@ async function renderShareCardOntoCanvas(canvas, config) {
     ctx.fillStyle = glow2;
     ctx.fillRect(0, 0, W, H);
 
-    // ---- Decorative gold rings + sparkle stars ----
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = 'rgba(227,196,111,0.6)';
-    ctx.beginPath(); ctx.arc(W - 30, 30, 200, 0, Math.PI * 2); ctx.stroke();
-    ctx.strokeStyle = 'rgba(227,196,111,0.35)';
-    ctx.beginPath(); ctx.arc(46, H - 200, 190, 0, Math.PI * 2); ctx.stroke();
+    // ---- Decoration behind the panel: different for each design ----
+    if (style.deco === 'rings') {
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = 'rgba(227,196,111,0.6)';
+        ctx.beginPath(); ctx.arc(W - 30, 30, 200, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = 'rgba(227,196,111,0.35)';
+        ctx.beginPath(); ctx.arc(46, H - 200, 190, 0, Math.PI * 2); ctx.stroke();
+    } else if (style.deco === 'rays-corner') {
+        // Morning light fanning out of the top-right corner.
+        ctx.fillStyle = 'rgba(227,196,111,0.085)';
+        for (let i = 0; i < 9; i++) {
+            const a = (92 + i * 10) * Math.PI / 180;
+            wedgePath(ctx, W + 20, -20, a, a + 5 * Math.PI / 180, 1500); ctx.fill();
+        }
+    } else if (style.deco === 'rays-center') {
+        // Light radiating from behind the panel.
+        ctx.fillStyle = 'rgba(227,196,111,0.07)';
+        for (let i = 0; i < 18; i++) {
+            const a = (i * 20) * Math.PI / 180;
+            wedgePath(ctx, W / 2, H * 0.46, a, a + 9 * Math.PI / 180, 1300); ctx.fill();
+        }
+    } else if (style.deco === 'bubbles') {
+        // Soft circles drifting up from the lower-left and down from the upper-right.
+        [[70, H - 230, 150], [250, H - 120, 86], [150, H - 420, 46], [W - 110, 250, 120], [W - 270, 170, 54]].forEach((b, i) => {
+            ctx.fillStyle = i % 2 ? 'rgba(95,211,165,0.07)' : 'rgba(255,255,255,0.05)';
+            ctx.beginPath(); ctx.arc(b[0], b[1], b[2], 0, Math.PI * 2); ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(227,196,111,0.32)';
+            ctx.stroke();
+        });
+    } else if (style.deco === 'dots') {
+        // A field of dots in two corners, like a game board.
+        ctx.fillStyle = 'rgba(227,196,111,0.3)';
+        for (let r = 0; r < 7; r++) for (let c = 0; c < 9; c++) { ctx.beginPath(); ctx.arc(W - 60 - c * 44, 190 + r * 44, 3.5, 0, Math.PI * 2); ctx.fill(); }
+        for (let r = 0; r < 6; r++) for (let c = 0; c < 6; c++) { ctx.beginPath(); ctx.arc(60 + c * 44, H - 420 + r * 44, 3.5, 0, Math.PI * 2); ctx.fill(); }
+    }
     const star = ctx.createLinearGradient(W * 0.7, H * 0.65, W, H);
     star.addColorStop(0, 'rgba(167,178,74,0.4)');
     star.addColorStop(1, 'rgba(104,128,58,0.2)');
@@ -306,7 +374,11 @@ async function renderShareCardOntoCanvas(canvas, config) {
     const textW = cardR - cardL - pad * 2;
     const areaTop = headerY + 80, areaBottom = footY - 60;
     const pillH = 76;
-    let titleSize = 92, bodySize = 46;
+    const quoteFirst = style.hero === 'quote';
+    const heroH = { inline: 56, quote: 100, medallion: 150, tile: 0 }[style.hero];
+    // Scripture cards lead with the words; the reference is the smaller line beneath.
+    let titleSize = quoteFirst ? 64 : 92, bodySize = quoteFirst ? 50 : 46;
+    const minTitle = quoteFirst ? 44 : 56;
     let titleLines, bodyLines, footLines, contentH;
     for (;;) {
         ctx.font = `700 ${titleSize}px "Playfair Display", serif`;
@@ -315,11 +387,11 @@ async function renderShareCardOntoCanvas(canvas, config) {
         bodyLines = config.body ? wrapCanvasTextMax(ctx, config.body, textW, config.short ? 4 : 9) : [];
         ctx.font = '600 30px "Inter", sans-serif';
         footLines = config.footer ? wrapCanvasTextMax(ctx, config.footer, textW, 2) : [];
-        contentH = pillH + 48 + 56 + titleLines.length * titleSize * 1.12 + 34 + 12
+        contentH = pillH + 48 + heroH + titleLines.length * titleSize * 1.12 + 34 + 12
             + (bodyLines.length ? 44 + bodyLines.length * bodySize * 1.42 : 0)
             + (footLines.length ? 30 + footLines.length * 42 : 0);
-        if (contentH + pad * 2 <= areaBottom - areaTop || (titleSize <= 56 && bodySize <= 30)) break;
-        titleSize = Math.max(56, titleSize - 6);
+        if (contentH + pad * 2 <= areaBottom - areaTop || (titleSize <= minTitle && bodySize <= 30)) break;
+        titleSize = Math.max(minTitle, titleSize - (quoteFirst ? 2 : 6));
         bodySize = Math.max(30, bodySize - 2);
     }
     const cardH = Math.min(areaBottom - areaTop, Math.max(config.short ? 480 : 560, contentH + pad * 2));
@@ -371,18 +443,35 @@ async function renderShareCardOntoCanvas(canvas, config) {
     roundRectPath(ctx, cardL, cardT, cardR - cardL, cardH, radius);
     ctx.stroke();
 
+    // The gold spine down the left of the panel (guide cards).
+    if (style.spine) {
+        const spine = ctx.createLinearGradient(0, cardT + 70, 0, cardB - 70);
+        spine.addColorStop(0, '#FFD66B');
+        spine.addColorStop(1, 'rgba(199,166,90,0.25)');
+        ctx.fillStyle = spine;
+        roundRectPath(ctx, cardL + 22, cardT + 70, 9, cardH - 140, 4.5);
+        ctx.fill();
+    }
+
     // ---- Card content ----
+    const centered = style.align === 'center';
     const x = cardL + pad;
+    const tx = centered ? (cardL + cardR) / 2 : x; // where text is anchored
     let y = cardT + pad + Math.max(0, cardH - pad * 2 - contentH) / 2;
+    const gold = (x0, y0, x1, y1) => { const g = ctx.createLinearGradient(x0, y0, x1, y1); g.addColorStop(0, '#FFE08A'); g.addColorStop(1, '#E0A93A'); return g; };
+    const hero = shareCardHeroGlyph(config);
+
     // Label pill: glyph | EYEBROW
     const label = (config.eyebrow || 'GraceGuide').toUpperCase();
     const glyph = shareCardGlyph(config);
+    ctx.textAlign = 'left';
     ctx.font = '900 30px "Font Awesome 6 Free"';
     const glyphW = ctx.measureText(glyph).width;
     ctx.font = '600 25px "Inter", sans-serif';
     const pillW = 34 + glyphW + 56 + spacedTextWidth(ctx, label, 5) + 38;
+    const pillX = centered ? tx - pillW / 2 : x;
     ctx.fillStyle = 'rgba(255,255,255,0.10)';
-    roundRectPath(ctx, x, y, pillW, pillH, pillH / 2);
+    roundRectPath(ctx, pillX, y, pillW, pillH, pillH / 2);
     ctx.fill();
     ctx.strokeStyle = 'rgba(95,211,165,0.4)';
     ctx.lineWidth = 2;
@@ -390,53 +479,77 @@ async function renderShareCardOntoCanvas(canvas, config) {
     const mid = y + pillH / 2;
     ctx.font = '900 30px "Font Awesome 6 Free"';
     ctx.fillStyle = C.goldBright;
-    ctx.fillText(glyph, x + 34, mid + 11);
-    const divX = x + 34 + glyphW + 28;
+    ctx.fillText(glyph, pillX + 34, mid + 11);
+    const divX = pillX + 34 + glyphW + 28;
     ctx.strokeStyle = C.goldBright;
     ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.moveTo(divX, mid - 18); ctx.lineTo(divX, mid + 18); ctx.stroke();
     ctx.font = '600 25px "Inter", sans-serif';
     ctx.fillStyle = C.creamSolid;
     drawSpacedText(ctx, label, divX + 28, mid + 9, 5);
-    y += pillH + 48;
-    // Sparkles above the title.
-    const spark = ctx.createLinearGradient(x, y, x + 50, y + 56);
-    spark.addColorStop(0, '#FFE08A');
-    spark.addColorStop(1, '#E0A93A');
-    ctx.fillStyle = spark;
-    const hero = shareCardHeroGlyph(config);
-    if (hero) {
-        ctx.font = '900 46px "Font Awesome 6 Free"';
-        ctx.fillText(hero, x, y + 48);
-    } else {
-        sparklePath(ctx, x + 22, y + 32, 24); ctx.fill();
-        sparklePath(ctx, x + 50, y + 10, 11); ctx.fill();
+
+    // Play cards: the subject icon sits in a glass tile at the panel's top-right corner.
+    if (style.hero === 'tile') {
+        const side = 112, tileX = cardR - pad - side, tileY = y - 18;
+        ctx.fillStyle = 'rgba(255,255,255,0.10)';
+        roundRectPath(ctx, tileX, tileY, side, side, 28);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(227,196,111,0.75)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.fillStyle = gold(tileX, tileY, tileX + side, tileY + side);
+        ctx.textAlign = 'center';
+        if (hero) { ctx.font = '900 54px "Font Awesome 6 Free"'; ctx.fillText(hero, tileX + side / 2, tileY + side / 2 + 20); }
+        else { sparklePath(ctx, tileX + side / 2, tileY + side / 2, 30); ctx.fill(); }
     }
-    y += 56;
-    // Title
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.35)';
-    ctx.shadowBlur = 10;
-    ctx.shadowOffsetY = 4;
-    ctx.font = `700 ${titleSize}px "Playfair Display", serif`;
-    ctx.fillStyle = '#FFFFFF';
-    titleLines.forEach(line => {
-        ctx.fillText(line, x, y + titleSize * 0.92);
-        y += titleSize * 1.12;
-    });
-    ctx.restore();
-    // Gold underline
-    y += 22;
-    const bar = ctx.createLinearGradient(x, y, x + 116, y);
-    bar.addColorStop(0, '#FFD66B');
-    bar.addColorStop(1, C.gold);
-    ctx.fillStyle = bar;
-    roundRectPath(ctx, x, y, 116, 11, 5.5);
-    ctx.fill();
-    y += 12;
-    // Body (italic serif quote)
-    if (bodyLines.length) {
-        y += 44;
+    y += pillH + 48;
+
+    // The hero above the text.
+    if (style.hero === 'inline') {
+        ctx.textAlign = 'left';
+        ctx.fillStyle = gold(x, y, x + 50, y + 56);
+        if (hero) { ctx.font = '900 46px "Font Awesome 6 Free"'; ctx.fillText(hero, x, y + 48); }
+        else { sparklePath(ctx, x + 22, y + 32, 24); ctx.fill(); sparklePath(ctx, x + 50, y + 10, 11); ctx.fill(); }
+    } else if (style.hero === 'medallion') {
+        const cy = y + 60;
+        const disc = ctx.createRadialGradient(tx, cy - 20, 6, tx, cy, 60);
+        disc.addColorStop(0, 'rgba(255,255,255,0.20)');
+        disc.addColorStop(1, 'rgba(255,255,255,0.05)');
+        ctx.fillStyle = disc;
+        ctx.beginPath(); ctx.arc(tx, cy, 60, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = 'rgba(232,205,122,0.95)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(232,205,122,0.35)';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(tx, cy, 74, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = gold(tx - 30, cy - 30, tx + 30, cy + 30);
+        ctx.textAlign = 'center';
+        if (hero) { ctx.font = '900 52px "Font Awesome 6 Free"'; ctx.fillText(hero, tx, cy + 19); }
+        else { sparklePath(ctx, tx, cy, 30); ctx.fill(); }
+    } else if (style.hero === 'quote') {
+        ctx.textAlign = 'center';
+        ctx.font = '700 200px "Playfair Display", serif';
+        ctx.fillStyle = gold(tx - 60, y, tx + 60, y + 100);
+        ctx.fillText('\u201C', tx, y + 168);
+    }
+    y += heroH;
+
+    ctx.textAlign = centered ? 'center' : 'left';
+    const drawTitle = () => {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.35)';
+        ctx.shadowBlur = 10;
+        ctx.shadowOffsetY = 4;
+        ctx.font = `700 ${titleSize}px "Playfair Display", serif`;
+        ctx.fillStyle = quoteFirst ? C.goldBright : '#FFFFFF';
+        titleLines.forEach(line => {
+            ctx.fillText(line, tx, y + titleSize * 0.92);
+            y += titleSize * 1.12;
+        });
+        ctx.restore();
+    };
+    const drawBody = () => {
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.3)';
         ctx.shadowBlur = 8;
@@ -444,20 +557,56 @@ async function renderShareCardOntoCanvas(canvas, config) {
         ctx.font = `italic 400 ${bodySize}px "Playfair Display", serif`;
         ctx.fillStyle = C.creamSolid;
         bodyLines.forEach(line => {
-            ctx.fillText(line, x, y + bodySize * 0.95);
+            ctx.fillText(line, tx, y + bodySize * 0.95);
             y += bodySize * 1.42;
         });
         ctx.restore();
+    };
+    // The rule between the two blocks of text: a bar, a row of dashes, or a diamond between two lines.
+    const drawRule = () => {
+        y += 22;
+        if (style.rule === 'diamond') {
+            const cx = centered ? tx : x + 110, cy = y + 5.5;
+            ctx.strokeStyle = C.goldBright;
+            ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(cx - 110, cy); ctx.lineTo(cx - 22, cy); ctx.moveTo(cx + 22, cy); ctx.lineTo(cx + 110, cy); ctx.stroke();
+            ctx.fillStyle = C.goldBright;
+            ctx.beginPath(); ctx.moveTo(cx, cy - 11); ctx.lineTo(cx + 11, cy); ctx.lineTo(cx, cy + 11); ctx.lineTo(cx - 11, cy); ctx.closePath(); ctx.fill();
+        } else if (style.rule === 'dashes') {
+            ctx.fillStyle = C.goldBright;
+            for (let d = 0; d < 6; d++) { roundRectPath(ctx, x + d * 40, y, 26, 9, 4.5); ctx.fill(); }
+        } else {
+            const bx = centered ? tx - 58 : x;
+            const bar = ctx.createLinearGradient(bx, y, bx + 116, y);
+            bar.addColorStop(0, '#FFD66B');
+            bar.addColorStop(1, C.gold);
+            ctx.fillStyle = bar;
+            roundRectPath(ctx, bx, y, 116, 11, 5.5);
+            ctx.fill();
+        }
+        y += 12;
+    };
+
+    if (quoteFirst) {
+        drawBody();
+        drawRule();
+        y += 44;
+        drawTitle();
+    } else {
+        drawTitle();
+        drawRule();
+        if (bodyLines.length) { y += 44; drawBody(); }
     }
     if (footLines.length) {
         y += 30;
         ctx.font = '600 30px "Inter", sans-serif';
         ctx.fillStyle = C.goldBright;
         footLines.forEach(line => {
-            ctx.fillText(line, x, y + 30);
+            ctx.fillText(line, tx, y + 30);
             y += 42;
         });
     }
+    ctx.textAlign = 'left';
 }
 
 /* ============================================

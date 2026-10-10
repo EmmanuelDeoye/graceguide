@@ -21,7 +21,15 @@
     var live = { session: null, stage: null, roomId: null, finished: false, results: null, award: null };
     var invites = { stop: null, cards: {} };
     var profileCache = null;
-    var rematchAuto = null; // { roomId, need }: the rematch room this screen created; it starts once that many players are in
+    var rematchAuto = null; // { roomId, need, prev, prevRoom }: the rematch this screen started; it begins once that many players are back in
+    var LEVEL_INFO = { easy: ['Easy', 'The best-known stories'], medium: ['Medium', 'A fair mix'], hard: ['Hard', 'For those who know it well'] };
+    /** The difficulty I last chose (used for solo games and for the games I start). */
+    function gameLevel() {
+        var l = null;
+        try { l = localStorage.getItem('gg_games_level'); } catch (e) { /* private mode */ }
+        return Core.isLevel(l) ? l : 'medium';
+    }
+    function setGameLevel(l) { if (Core.isLevel(l)) { try { localStorage.setItem('gg_games_level', l); } catch (e) { /* private mode */ } } }
     var openTicket = 0; // only the latest openRoom() call may attach its session
 
     var esc = function (s) { return escapeHtml(String(s == null ? '' : s)); };
@@ -182,6 +190,7 @@
         input.addEventListener('keydown', function (e) { if (e.key === 'Enter') joinTyped(); });
         if (!u) return;
         var n = getNet();
+        n.warmSeen(); // my question history, ready before I start a game
         n.loadProfile(u.uid).then(function (p) {
             profileCache = p;
             var slot = $id('pl-level-slot'); if (slot) slot.innerHTML = levelCard(p);
@@ -223,7 +232,7 @@
         ['fa-gamepad', 'Welcome to Play & Learn', 'Five Bible games that send you back to the Word. Every answer shows its Scripture — tap the reference to read it.'],
         ['fa-compass', 'Finding your way', 'Pick a game, then how to play: <strong>Solo</strong>, <strong>Quick Match</strong> (1v1 with whoever is online), <strong>Challenge a Brethren</strong>, or <strong>Create a Room</strong> for up to 8 with a code. Have a code? Type it under the games and tap Join.'],
         ['fa-stopwatch', 'The rules', 'Everyone gets the same question and the same timer. Right answers score; faster answers and streaks score more. You can’t change an answer once it is locked in. In Bible Wordle you have six guesses.'],
-        ['fa-pause', 'Pause when you need to', 'Tap Pause during a question and the game stops for everyone playing — the question is covered until someone taps Resume (or a minute passes).'],
+        ['fa-layer-group', 'Pick your level', 'Choose <strong>Easy</strong>, <strong>Medium</strong> or <strong>Hard</strong> on a game’s page. You won’t be asked a question you have already seen until you have been through them all — and neither will anyone you play with.'],
         ['fa-fire', 'Come back daily', 'The Daily Challenge is five questions, one try. Playing each day keeps your streak, earns XP and badges, and counts toward your Spirit Life.']
     ];
     function showTour(step) {
@@ -269,6 +278,10 @@
         page(
             '<div class="pl-hero pl-game-card-' + id + '"><span class="pl-game-icon"><i class="fas ' + g.icon + '"></i></span><h2>' + esc(g.name) + '</h2><p>' + esc(g.tagline) + '</p>' +
             '<small>' + g.rounds + ' round' + (g.rounds === 1 ? '' : 's') + ' · ' + g.secs + ' seconds each</small></div>' +
+            '<div class="pl-levels"><div class="pl-levels-head"><strong>Difficulty</strong><small>For solo games and the games you start</small></div>' +
+            '<div class="pl-level-pick" id="pl-level-pick">' + Core.LEVELS.map(function (l) {
+                return '<button type="button" data-level="' + l + '"' + (l === gameLevel() ? ' class="on"' : '') + '><strong>' + LEVEL_INFO[l][0] + '</strong><small>' + LEVEL_INFO[l][1] + '</small></button>';
+            }).join('') + '</div></div>' +
             '<div class="pl-modes">' +
             mode('solo', 'fa-user', 'Solo', 'Practise at your own pace') +
             mode('quick', 'fa-bolt', 'Quick Match', '1v1 against whoever is online') +
@@ -277,6 +290,12 @@
             '</div><p class="pl-foot">Every answer comes with its Scripture — read it after you play.</p>');
         DOM.pageContainer.querySelectorAll('[data-mode]').forEach(function (b) {
             b.onclick = function () { startMode(id, b.getAttribute('data-mode')); };
+        });
+        DOM.pageContainer.querySelectorAll('#pl-level-pick [data-level]').forEach(function (b) {
+            b.onclick = function () {
+                setGameLevel(b.getAttribute('data-level'));
+                DOM.pageContainer.querySelectorAll('#pl-level-pick [data-level]').forEach(function (x) { x.classList.toggle('on', x === b); });
+            };
         });
     }
     function mode(key, icon, title, sub) {
@@ -288,7 +307,7 @@
         if (busyWithRoom()) return;
         var n = getNet();
         loading(how === 'quick' ? 'Looking for an opponent…' : 'Setting up your room…');
-        var p = how === 'quick' ? n.quickMatch(game) : n.createRoom(game, how === 'duel' ? 'duel' : 'room', false);
+        var p = how === 'quick' ? n.quickMatch(game, gameLevel()) : n.createRoom(game, how === 'duel' ? 'duel' : 'room', false, gameLevel());
         p.then(function (r) { go('room', r.roomId, true); }, function (err) { showToast(errorText(err), 'error'); go(game, null, true); });
     }
 
@@ -329,12 +348,13 @@
         s.onUpdate = function (view) {
             if (!$id('pl-room')) return;
             if (view.room.rematch && live.finished && !live.followed) offerRematch(view.room.rematch);
+            else if (live.finished) syncRematchButton();
             if (view.phase === 'lobby') { if (live.stage) { live.stage.destroy(); live.stage = null; } renderLobby(box, view); maybeAutoStart(view); lastPhase = 'lobby'; return; }
             if (view.phase === 'done' && s.resultsReady()) { finishRoom(box); return; }
             if (!live.stage) {
                 if (AppState.sheetOpen && typeof closeSheet === 'function') closeSheet(); // e.g. the invite list, still open when the game starts
                 box.innerHTML = '<div id="pl-stage-box"></div><button class="btn btn-outline btn-sm pl-leave" id="pl-leave"><i class="fas fa-person-walking-arrow-right"></i> Leave game</button>';
-                live.stage = Play.mount($id('pl-stage-box'), s, { names: function (uid) { return nameOf(uid, (s.room.players[uid] || {}).name); }, onPauseFailed: pauseFailed });
+                live.stage = Play.mount($id('pl-stage-box'), s, { names: function (uid) { return nameOf(uid, (s.room.players[uid] || {}).name); } });
                 $id('pl-leave').onclick = confirmLeave;
             }
             lastPhase = view.phase;
@@ -357,14 +377,15 @@
         // Seated but not in the room yet: "Connecting…" for the first moments after joining, "Away" after that.
         var clock = getNet().now();
         var stateOf = function (uid) { var p = view.room.players[uid]; return p.online !== false ? '+' : (clock - (p.joinedAt || 0) < 20000 ? 'c' : '-'); };
-        var key = 'lobby:' + seated.map(function (u) { return u + stateOf(u); }).join(',') + ':' + view.canStart + ':' + !!auto + ':' + (waitingFor ? waitingFor.join(',') : '');
+        var key = 'lobby:' + seated.map(function (u) { return u + stateOf(u); }).join(',') + ':' + view.canStart + ':' + !!auto + ':' + (auto ? auto.invited || 0 : '') + ':' + (waitingFor ? waitingFor.join(',') : '');
         if (box.getAttribute('data-key') === key) return;
         box.setAttribute('data-key', key);
         var searching = meta.public && seated.length < 2;
         box.innerHTML =
             '<div class="pl-hero pl-game-card-' + meta.game + '"><span class="pl-game-icon"><i class="fas ' + g.icon + '"></i></span><h2>' + esc(g.name) + '</h2>' +
-            '<p>' + (meta.kind === 'duel' ? '1v1' : 'Room · up to ' + max + ' players') + '</p></div>' +
-            (auto ? '<div class="pl-searching"><div class="pl-spinner"></div><p>Rematch — waiting for the others to rejoin (' + seated.length + '/' + auto.need + ')</p><small>The game starts by itself when everyone is back.</small></div>' : '') +
+            '<p>' + (meta.kind === 'duel' ? '1v1' : 'Room · up to ' + max + ' players') + (Core.isLevel(meta.level) ? ' · ' + LEVEL_INFO[meta.level][0] : '') + '</p></div>' +
+            (auto ? '<div class="pl-searching"><div class="pl-spinner"></div><p>Rematch — same room, new questions. Waiting for the others (' + seated.length + '/' + auto.need + ')</p><small>' +
+                (auto.invited ? 'Anyone who had left has been sent an invitation to come back. ' : '') + 'The game starts by itself when everyone is back' + (view.canStart ? ' — or tap Start now.' : '.') + '</small></div>' : '') +
             (searching ? '<div class="pl-searching"><div class="pl-spinner"></div><p>Looking for an opponent…</p><small>You’ll start automatically when someone joins. You can also invite a Brethren.</small></div>'
                 : '<div class="pl-code-card"><small>Room code</small><div class="pl-code">' + esc(meta.code) + '</div>' +
                   '<div class="pl-code-actions"><button class="btn btn-outline btn-sm" id="pl-copy-code"><i class="fas fa-copy"></i> Copy</button>' +
@@ -412,8 +433,23 @@
 
     /** Starts an online game with questions from the built-in bank (it first gives players who are still connecting a moment to arrive). */
     function startRoomGame(s) { return s.start(); }
-    function pauseFailed() { showToast('This game can’t be paused again.', 'info'); }
-    /** A rematch room starts by itself once everyone from the last game is back in (the screen that created it does this). */
+    /**
+     * A few seconds into a rematch: whoever from the last game is not back in the room yet gets
+     * an invitation to join (players still on the results screen have followed by themselves).
+     */
+    function inviteBackLater(auto) {
+        setTimeout(function () {
+            var s = live.session;
+            if (rematchAuto !== auto || !s || live.roomId !== auto.roomId || s.room.plan) return;
+            var here = s.seated(), missing = auto.prev.filter(function (uid) { return here.indexOf(uid) < 0; });
+            if (!missing.length) return;
+            var meta = s.room.meta;
+            getNet().inviteBack({ roomId: auto.roomId, code: meta.code, game: meta.game, kind: meta.kind }, missing, auto.prevRoom).catch(function () {});
+            auto.invited = missing.length;
+            if (s._view && s.onUpdate) s.onUpdate(s._view);
+        }, 4000);
+    }
+    /** A rematch starts by itself once everyone from the last game is back in (the screen that called it does this). */
     function maybeAutoStart(view) {
         var auto = rematchAuto, s = live.session;
         if (!auto || !s || auto.roomId !== live.roomId || auto.started) return;
@@ -449,8 +485,8 @@
             .catch(function () {});
     }
     /**
-     * Someone tapped Rematch: everyone still looking at the results goes with them into the
-     * new room (same people, no searching). "Stay here" opts out.
+     * The host called a rematch: everyone still looking at the results goes with them, back
+     * into the room (same people, same code, new questions). "Stay here" opts out.
      */
     function offerRematch(newRoomId) {
         var btn = $id('pl-rematch');
@@ -462,7 +498,19 @@
         note.innerHTML = '<span><i class="fas fa-rotate-right"></i> Rematch! Taking you back in…</span><button class="btn btn-outline btn-sm" id="pl-rematch-stay">Stay here</button>';
         btn.parentNode.insertBefore(note, btn);
         $id('pl-rematch-stay').onclick = function () { clearTimeout(live.rematchTimer); live.rematchTimer = 'declined'; note.remove(); };
-        live.rematchTimer = setTimeout(function () { var b = $id('pl-rematch'); if (b && !b.disabled && $id('pl-results')) b.click(); }, 3000);
+        btn.disabled = false;
+        live.rematchTimer = setTimeout(function () { var b = $id('pl-rematch'); if (b && !b.disabled && $id('pl-results')) b.click(); }, 1500);
+    }
+    /** The Rematch button belongs to the host; the others wait for it (or take over if the host has gone). */
+    function rematchLabel(can) { return can ? '<i class="fas fa-rotate-right"></i> Rematch' : '<i class="fas fa-hourglass-half"></i> Waiting for the host to start a rematch'; }
+    function syncRematchButton() {
+        var btn = $id('pl-rematch'), s = live.session;
+        if (!btn || !s || s.solo || live.followed || btn.getAttribute('data-room')) return;
+        var can = s.canRematch();
+        if (btn.getAttribute('data-can') === String(can)) return;
+        btn.setAttribute('data-can', String(can));
+        btn.disabled = !can;
+        btn.innerHTML = rematchLabel(can);
     }
 
     // ---------- results (shared by rooms, solo and the daily challenge) ----------
@@ -504,7 +552,7 @@
         }).filter(Boolean);
         var headline = !mine ? 'Game over' : multi ? (mine.win ? (res.ranking.filter(function (u) { return res.byUid[u].win; }).length > 1 ? 'It’s a tie!' : 'You won! 🎉') : ordinal(mine.rank) + ' place')
             : (mine.units >= res.totalUnits ? 'Flawless! 🌟' : mine.correct ? 'Well played' : 'Good try');
-        var rematchRoom = s.room.rematch;
+        var rematchRoom = s.room.rematch, canRematch = !s.solo && s.canRematch();
         box.removeAttribute('data-key');
         box.innerHTML = '<div id="pl-results"><div class="pl-hero pl-game-card-' + s.game + '"><span class="pl-game-icon"><i class="fas ' + g.icon + '"></i></span><h2>' + esc(headline) + '</h2>' +
             (mine ? '<div class="pl-final-score">' + mine.score + '<small> points</small></div><p>' + mine.correct + ' of ' + s.room.plan.rounds + ' correct' + (mine.bestStreak > 1 ? ' · best streak ' + mine.bestStreak : '') + '</p>' : '') + '</div>' +
@@ -513,7 +561,8 @@
             scriptureHtml(items) +
             '<div class="pl-result-actions">' +
             (s.solo ? '<button class="btn btn-primary btn-block" id="pl-again"><i class="fas fa-rotate-right"></i> Play again</button>'
-                : '<button class="btn btn-primary btn-block' + (rematchRoom ? ' pl-pulse' : '') + '" id="pl-rematch"' + (rematchRoom ? ' data-room="' + esc(rematchRoom) + '"' : '') + '><i class="fas fa-rotate-right"></i> ' + (rematchRoom ? 'Join the rematch' : 'Rematch') + '</button>') +
+                : '<button class="btn btn-primary btn-block' + (rematchRoom ? ' pl-pulse' : '') + '" id="pl-rematch"' + (rematchRoom ? ' data-room="' + esc(rematchRoom) + '"' : ' data-can="' + canRematch + '"' + (canRematch ? '' : ' disabled')) + '>' +
+                  (rematchRoom ? '<i class="fas fa-rotate-right"></i> Join the rematch' : rematchLabel(canRematch)) + '</button>') +
             '<button class="btn btn-block pl-btn-whatsapp" id="pl-share-result"><i class="fab fa-whatsapp"></i> Challenge a friend</button>' +
             '<button class="btn btn-outline btn-block" onclick="GamesUI.go()">Back to Play &amp; Learn</button></div></div>';
         $id('pl-share-result').onclick = function () {
@@ -524,11 +573,13 @@
             var btn = $id('pl-rematch'); btn.disabled = true; live.followed = true;
             if (typeof live.rematchTimer === 'number') clearTimeout(live.rematchTimer);
             var target = btn.getAttribute('data-room');
-            // Whoever taps first hosts the rematch; it starts by itself once the same players are back.
+            // The host's rematch: it starts by itself once the same players are back, and
+            // anyone who is not back within a few seconds is invited.
             var need = res.ranking.filter(function (uid) { var p = s.room.players[uid]; return p && typeof p.leftAt !== 'number'; }).length;
+            var others = res.ranking.filter(function (uid) { return uid !== s.uid; }), prevRoom = live.roomId;
             (target ? getNet().joinRoom(target).then(function () { return { id: target, mine: false }; }) : s.rematch().then(function (id) { return { id: id, mine: s.rematchHosted === true }; })).then(function (r) {
                 closeLive(false);
-                if (r.mine && !target) rematchAuto = { roomId: r.id, need: Math.max(2, need) };
+                if (r.mine && !target) { rematchAuto = { roomId: r.id, need: Math.max(2, need), prev: others, prevRoom: prevRoom }; inviteBackLater(rematchAuto); }
                 go('room', r.id, true);
             }, function (err) { btn.disabled = false; live.followed = false; showToast(errorText(err), 'error'); });
         };
@@ -541,15 +592,14 @@
         closeLive(false);
         if (!Core.GAMES[game]) { go(null, null, true); return; }
         var u = user(), cfg = Core.GAMES[game], n = getNet();
-        var q = Core.pickQuestions(BANK, game, cfg.rounds, n.recentQuestions(game));
-        n.rememberQuestions(game, q);
+        var q = n.dealSolo(game, gameLevel());
         var s = new Play.LocalSession(game, u ? u.uid : 'guest', u ? u.name : 'You', q);
         live.session = s;
         page('<div id="pl-room"><div id="pl-stage-box"></div></div>');
         var box = $id('pl-room'), runRef = null;
         // With the game server deployed, a solo run is recorded so the server can verify it.
         if (u) n.serverAlive().then(function (alive) { return alive ? n.startRun(game, q) : null; }).then(function (ref) { runRef = ref; }).catch(function () {});
-        live.stage = Play.mount($id('pl-stage-box'), s, { onNext: function () { s.skipReveal(); }, onPauseFailed: pauseFailed });
+        live.stage = Play.mount($id('pl-stage-box'), s, { onNext: function () { s.skipReveal(); } });
         s.onUpdate = function (view) {
             if (!$id('pl-room')) return;
             if (view.phase !== 'done') { live.stage.update(view); return; }
@@ -585,7 +635,7 @@
                 '<button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="GamesUI.go()">Not now</button>');
             $id('pl-daily-start').onclick = function () {
                 $id('pl-daily-start').disabled = true;
-                (run ? Promise.resolve() : n.dailyStart(day)).then(function () { playDaily(day, qs); }, function (err) { showToast(errorText(err), 'error'); go(null, null, true); });
+                (run ? Promise.resolve() : n.dailyStart(day).then(function () { qs.forEach(function (d) { n.markSeen(d.game, [d.id]); }); })).then(function () { playDaily(day, qs); }, function (err) { showToast(errorText(err), 'error'); go(null, null, true); });
             };
         }, function (err) { roomError(err); });
     }
@@ -598,7 +648,7 @@
             if (i >= qs.length) { finish(); return; }
             var s = new Play.LocalSession(qs[i].game, u.uid, u.name, [qs[i].id]);
             live.session = s;
-            live.stage = Play.mount($id('pl-stage-box'), s, { roundLabel: 'Daily ' + (i + 1) + ' / ' + qs.length, nextLabel: i + 1 >= qs.length ? 'Finish' : 'Next', onNext: function () { s.skipReveal(); }, noPause: true });
+            live.stage = Play.mount($id('pl-stage-box'), s, { roundLabel: 'Daily ' + (i + 1) + ' / ' + qs.length, nextLabel: i + 1 >= qs.length ? 'Finish' : 'Next', onNext: function () { s.skipReveal(); } });
             s.onUpdate = function (view) {
                 if (!$id('pl-stage-box')) return;
                 if (view.phase !== 'done') { live.stage.update(view); return; }
@@ -837,7 +887,7 @@
         if (!g) return;
         var card = document.createElement('div');
         card.className = 'pl-invite-card';
-        card.innerHTML = '<div class="pl-invite-icon"><i class="fas ' + g.icon + '"></i></div><div class="pl-invite-main"><strong>' + esc(nameOf(invite.from, invite.fromName)) + ' challenged you to ' + esc(g.name) + '!</strong>' +
+        card.innerHTML = '<div class="pl-invite-icon"><i class="fas ' + g.icon + '"></i></div><div class="pl-invite-main"><strong>' + esc(nameOf(invite.from, invite.fromName)) + (invite.prev ? ' started a rematch of ' + esc(g.name) + ' — join in!' : ' challenged you to ' + esc(g.name) + '!') + '</strong>' +
             '<small>' + (invite.kind === 'duel' ? '1v1' : 'Room') + ' · code ' + esc(invite.code) + '</small><div class="pl-invite-timer"><div></div></div>' +
             '<div class="pl-invite-actions"><button class="btn btn-outline btn-sm" data-act="decline">Decline</button><button class="btn btn-gold btn-sm" data-act="accept">Accept</button></div></div>';
         document.body.appendChild(card);

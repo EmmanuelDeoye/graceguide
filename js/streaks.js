@@ -170,6 +170,7 @@
             database.ref('users/' + AppState.currentUser.uid + '/profile/faith').set(rec).catch(function () {});
             var score = scoreFromRecords(rec);
             noteSpiritLevel(AppState.currentUser.uid, score);
+            if (typeof updateProfileNavIcon === 'function') updateProfileNavIcon();
             return score;
         } catch (e) { return null; }
     }
@@ -252,6 +253,7 @@
         if (mySticker) mySticker.innerHTML = stickerHTML(score);
     }
     root.showSpiritLevelUp = showSpiritLevelUp;
+    root.playFanfare = fanfare;
 
     function streakRow(icon, label, days, hint) {
         return '<div class="faith-row"><span class="faith-row-icon"><i class="fas ' + icon + '"></i></span><span class="faith-row-label">' + label +

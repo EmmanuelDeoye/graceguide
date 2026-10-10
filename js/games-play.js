@@ -65,23 +65,6 @@
         this._tick();
         return Promise.resolve(true);
     };
-    /** Pause / resume: the same records an online room keeps, so the engine freezes the clock the same way. */
-    LocalSession.prototype.pausesLeft = function () { return Math.max(0, Core.MAX_PAUSES - Core.pausesOf(this.room).length); };
-    LocalSession.prototype.pause = function () {
-        var v = this._view, list = Core.pausesOf(this.room);
-        if (!v || v.phase !== 'question' || list.length >= Core.MAX_PAUSES) return Promise.resolve(false);
-        if (!this.room.pauses) this.room.pauses = {};
-        this.room.pauses[list.length] = { s: this.now(), by: this.uid };
-        this._tick();
-        return Promise.resolve(true);
-    };
-    LocalSession.prototype.resume = function () {
-        var v = this._view;
-        if (!v || v.phase !== 'paused') return Promise.resolve(false);
-        this.room.pauses[v.pauseIndex].e = this.now();
-        this._tick();
-        return Promise.resolve(true);
-    };
     /** Solo only: jump past the reveal screen ("Next"). */
     LocalSession.prototype.skipReveal = function () {
         var v = this._view;
@@ -151,11 +134,8 @@
 
         function headerHtml(view) {
             var total = view.room.plan.rounds;
-            // Pause: for everyone in the game at once (the Daily Challenge is timed and cannot be paused).
-            var canPause = view.phase === 'question' && !opts.noPause && typeof session.pause === 'function' && session.pausesLeft() > 0;
             return '<div class="pl-head">' +
                 '<span class="pl-head-game"><i class="fas ' + cfg.icon + '"></i> ' + esc(cfg.name) + '</span>' +
-                (canPause ? '<button class="pl-pause-btn" id="pl-pause" aria-label="Pause the game"><i class="fas fa-pause"></i> Pause</button>' : '') +
                 '<span class="pl-head-round">' + esc(opts.roundLabel || ((view.round + 1) + ' / ' + total)) + '</span></div>' +
                 '<div class="pl-timer"><div class="pl-timer-fill" id="pl-timer-fill"></div></div>';
         }
@@ -297,9 +277,11 @@
             }
             if (view.phase === 'done') { container.innerHTML = '<div class="pl-stage pl-center"><div class="pl-spinner"></div><p class="pl-waiting">Adding up the scores…</p></div>'; return; }
             if (view.phase === 'paused') {
-                // The question is covered while the clock is stopped, so a pause is never extra thinking time.
+                // Pausing was removed from the game. This screen only appears if a player who is
+                // still on an older version of the app pauses: everyone stays in step, and anyone
+                // can carry on at once.
                 lastScene = 'paused:' + view.round;
-                var who = view.by === me ? 'You paused the game' : esc(nameOf(view.by)) + ' paused the game';
+                var who = esc(nameOf(view.by)) + ' paused the game from an older version of the app';
                 container.innerHTML = '<div class="pl-stage pl-center pl-paused">' +
                     '<div class="pl-paused-icon"><i class="fas fa-pause"></i></div>' +
                     '<h3 class="pl-paused-title">Game paused</h3>' +
@@ -358,14 +340,8 @@
             var keyBtn = e.target.closest('[data-key]');
             if (keyBtn) { wordleKey(keyBtn.getAttribute('data-key'), lastView); return; }
             if (e.target.closest('#pl-next') && opts.onNext) { opts.onNext(); return; }
-            var pauseBtn = e.target.closest('#pl-pause');
-            if (pauseBtn && lastView.phase === 'question') {
-                pauseBtn.disabled = true;
-                session.pause().then(function (ok) { if (!ok && !destroyed) { pauseBtn.disabled = false; if (opts.onPauseFailed) opts.onPauseFailed(); } });
-                return;
-            }
             var resumeBtn = e.target.closest('#pl-resume');
-            if (resumeBtn && lastView.phase === 'paused') { resumeBtn.disabled = true; session.resume().then(function (ok) { if (!ok && !destroyed) resumeBtn.disabled = false; }); }
+            if (resumeBtn && lastView.phase === 'paused' && typeof session.resume === 'function') { resumeBtn.disabled = true; session.resume().then(function (ok) { if (!ok && !destroyed) resumeBtn.disabled = false; }); }
         }
         container.addEventListener('click', onClick);
         document.addEventListener('keydown', onKeydown);

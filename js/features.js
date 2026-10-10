@@ -2129,6 +2129,11 @@ async function renderSpacePage() {
         <div class="space-container" style="max-width: 640px; margin: 0 auto; padding: 12px;">
             <div id="space-streak-slot">${renderSpaceStreakBanner()}</div>
 
+            <div class="space-mode-toggle" id="space-mode-toggle" role="tablist" aria-label="How Space is arranged">
+                <button class="space-mode-btn${getSpaceMode() === 'latest' ? ' active' : ''}" data-mode="latest" role="tab"><i class="fas fa-clock"></i> Latest</button>
+                <button class="space-mode-btn${getSpaceMode() === 'foryou' ? ' active' : ''}" data-mode="foryou" role="tab"><i class="fas fa-wand-magic-sparkles"></i> For you</button>
+            </div>
+
             <div class="space-search-bar">
                 <i class="fas fa-magnifying-glass"></i>
                 <input type="text" id="space-search-input" placeholder="Search Space...">
@@ -2151,6 +2156,22 @@ async function renderSpacePage() {
     $('#space-search-input').addEventListener('input', (e) => {
         AppState.spaceSearchQuery = e.target.value;
         applySpaceFilters();
+    });
+
+    $$('#space-mode-toggle .space-mode-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            if (btn.classList.contains('active')) return;
+            setSpaceMode(btn.dataset.mode);
+            $$('#space-mode-toggle .space-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+            // Re-arranged from the posts already loaded — no new download.
+            if (AppState.spacePostsLoaded) {
+                AppState.spacePosts = arrangeSpacePosts(AppState.spacePostsLoaded);
+                applySpaceFilters();
+                initSpaceCarouselObservers();
+                const feed = $('#space-feed');
+                if (feed) feed.scrollIntoView({ block: 'nearest' });
+            }
+        });
     });
 
     $$('#space-filter-pills .space-filter-pill').forEach((pill) => {
@@ -2176,6 +2197,39 @@ async function renderSpacePage() {
     if (streakSlot) streakSlot.innerHTML = renderSpaceStreakBanner();
 
     await postsPromise;
+}
+
+/* ---- How Space is arranged: "Latest" (newest first, the default) or "For you" ---- */
+const SPACE_MODE_KEY = 'graceguide_space_mode';
+/** The arrangement last chosen on this device ('latest' until someone picks "For you"). */
+function getSpaceMode() {
+    try { return localStorage.getItem(SPACE_MODE_KEY) === 'foryou' ? 'foryou' : 'latest'; } catch (e) { return 'latest'; }
+}
+function setSpaceMode(mode) {
+    try { localStorage.setItem(SPACE_MODE_KEY, mode === 'foryou' ? 'foryou' : 'latest'); } catch (e) { /* private mode */ }
+}
+/**
+ * Posts in the order the current mode asks for.
+ *   Latest:  newest first.
+ *   For you: scored against the reader's interests (topics, books, how much a post is being
+ *            talked about), while the three newest still appear near the top so it never
+ *            feels stale.
+ */
+function arrangeSpacePosts(posts) {
+    const newestFirst = [...posts].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    if (getSpaceMode() !== 'foryou') return newestFirst;
+    const ranked = posts.map(post => ({
+        post,
+        score: scoreForInterest(post.tags, post.sourceBook, post.timestamp, Object.keys(post.amens || {}).length + Object.keys(post.comments || {}).length)
+    })).sort((a, b) => b.score - a.score).map(s => s.post);
+    newestFirst.slice(0, 3).map(p => p.id).forEach(id => {
+        const idx = ranked.findIndex(p => p.id === id);
+        if (idx > 5) {
+            const [item] = ranked.splice(idx, 1);
+            ranked.splice(Math.min(2, ranked.length), 0, item);
+        }
+    });
+    return ranked;
 }
 
 /** Text used to match a post against the Space search bar. */
@@ -2270,27 +2324,10 @@ async function loadSpacePosts() {
             return;
         }
 
-        // Personalized ranking: score every post against the user's interest
-        // profile, but always keep the handful of newest posts near the top
-        // too, so Space never feels stale or like a total echo chamber.
-        const scored = posts.map(post => ({
-            post,
-            score: scoreForInterest(post.tags, post.sourceBook, post.timestamp, Object.keys(post.amens || {}).length + Object.keys(post.comments || {}).length)
-        })).sort((a, b) => b.score - a.score);
-
-        const newest = [...posts].sort((a, b) => b.timestamp - a.timestamp).slice(0, 3).map(p => p.id);
-        const ranked = [...scored.map(s => s.post)];
-        // Ensure the 3 newest posts appear within the first 6 cards even if
-        // their personalization score is low (freshness guarantee).
-        newest.forEach(id => {
-            const idx = ranked.findIndex(p => p.id === id);
-            if (idx > 5) {
-                const [item] = ranked.splice(idx, 1);
-                ranked.splice(Math.min(2, ranked.length), 0, item);
-            }
-        });
-
-        AppState.spacePosts = ranked;
+        // Arranged the way the reader last chose: newest first ("Latest", the default) or by
+        // their interests ("For you") — see arrangeSpacePosts().
+        AppState.spacePostsLoaded = posts;
+        AppState.spacePosts = arrangeSpacePosts(posts);
         applySpaceFilters();
         initSpaceCarouselObservers();
     } catch (error) {
@@ -2334,10 +2371,6 @@ function renderSpaceSlides(post) {
 
 function renderSpaceCard(post) {
     const uid = AppState.currentUser?.uid;
-    const isAmen = uid && post.amens && post.amens[uid];
-    const isSaved = uid && post.saves && post.saves[uid];
-    const amenCount = post.amens ? Object.keys(post.amens).length : 0;
-    const commentCount = post.comments ? Object.keys(post.comments).length : 0;
     // The stored authorName is only a fallback — the name shown always
     // comes from the author's current profile (see hydrateUserNames()).
     const authorId = escapeHtml(post.authorId || '');
@@ -2391,7 +2424,19 @@ function renderSpaceCard(post) {
             ${mediaHTML}
             ${readChapterBtn}
 
-            <div class="space-actions">
+            <div class="space-actions">${spaceActionsHTML(post)}</div>
+        </div>
+    `;
+}
+
+/** The Amen / Comment / Save / Share row of a Space card (redrawn on its own when one is tapped). */
+function spaceActionsHTML(post) {
+    const uid = AppState.currentUser?.uid;
+    const isAmen = uid && post.amens && post.amens[uid];
+    const isSaved = uid && post.saves && post.saves[uid];
+    const amenCount = post.amens ? Object.keys(post.amens).length : 0;
+    const commentCount = post.comments ? Object.keys(post.comments).length : 0;
+    return `
                 <button class="space-action-btn ${isAmen ? 'active' : ''}" onclick="toggleSpaceAmen('${post.id}')" aria-label="Amen">
                     <i class="fas fa-hands-praying"></i> <span>Amen${amenCount > 0 ? ` · ${amenCount}` : ''}</span>
                 </button>
@@ -2399,7 +2444,7 @@ function renderSpaceCard(post) {
                     <i class="fas fa-comment"></i> <span>${commentCount > 0 ? commentCount : 'Comment'}</span>
                 </button>
                 <button class="space-action-btn ${isSaved ? 'active' : ''}" onclick="toggleSpaceSave('${post.id}')" aria-label="Save">
-                    <i class="fas ${isSaved ? 'fa-bookmark' : 'fa-bookmark'}"></i> <span>${isSaved ? 'Saved' : 'Save'}</span>
+                    <i class="fas fa-bookmark"></i> <span>${isSaved ? 'Saved' : 'Save'}</span>
                 </button>
                 <button class="space-action-btn" onclick="shareSpacePost('${post.id}')" aria-label="Share">
                     <i class="fas fa-share"></i>
@@ -2409,8 +2454,6 @@ function renderSpaceCard(post) {
                         <i class="fas fa-trash"></i>
                     </button>
                 ` : ''}
-            </div>
-        </div>
     `;
 }
 
@@ -2508,14 +2551,20 @@ function initSpaceCarouselObservers() {
     });
 }
 
+/**
+ * A post was reacted to, saved or commented on: only its row of buttons is redrawn. The rest of
+ * the card — above all a video that is playing — is left exactly as it is. (Redrawing the whole
+ * card used to reload the video and send it back to the start.)
+ */
 function updateSpaceCardDOM(postId) {
     const post = AppState.spacePosts.find(p => p.id === postId);
     const el = document.getElementById(`space-${postId}`);
-    if (post && el) {
-        el.outerHTML = renderSpaceCard(post);
-        initSpaceCarouselObservers();
-        hydrateUserNames(document.getElementById(`space-${postId}`));
-    }
+    if (!post || !el) return;
+    const actions = el.querySelector('.space-actions');
+    if (actions) { actions.innerHTML = spaceActionsHTML(post); return; }
+    el.outerHTML = renderSpaceCard(post);
+    initSpaceCarouselObservers();
+    hydrateUserNames(document.getElementById(`space-${postId}`));
 }
 
 /* ---- Creating a post ---- */

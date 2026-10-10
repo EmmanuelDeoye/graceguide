@@ -471,7 +471,7 @@ function initAuth() {
     // patterns (#/profile/ID, #/bible/BOOK/CH/VS, etc) is valid too —
     // this is what makes those URLs work after a hard refresh, not just
     // when navigated to from inside the app.
-    const VALID_INITIAL_ROUTES = ['home', 'bible', 'ask', 'space', 'community', 'planner', 'messages', 'profile', 'settings', 'talk-to-someone', 'terms'];
+    const VALID_INITIAL_ROUTES = ['home', 'bible', 'ask', 'space', 'community', 'planner', 'messages', 'profile', 'settings', 'talk-to-someone', 'terms', 'about'];
     const DEEP_LINK_ROUTE_MARKERS = ['deep-profile', 'deep-space-post', 'deep-planner', 'deep-bible', 'deep-quiz', 'deep-devotional', 'deep-play', 'deep-forum'];
     const hashRoute = window.location.hash.replace(/^#\//, '');
     const bootParsedRoute = parseAppRoute(window.location.hash);
@@ -1159,6 +1159,17 @@ function updateProfileNavIcon() {
     } else {
         avatarEl.innerHTML = `<i class="fas fa-user"></i>`;
     }
+
+    // My Spirit Life sticker sits on the corner of the picture (on the button, not inside the
+    // round picture, which would clip it).
+    const holder = avatarEl.parentElement;
+    if (holder) {
+        const old = holder.querySelector(':scope > .spirit-sticker');
+        if (old) old.remove();
+        const sticker = AppState.currentUser && typeof spiritStickerFor === 'function'
+            ? spiritStickerFor(AppState.currentUser.uid, AppState.userProfile, 'spirit-on-avatar spirit-on-nav') : '';
+        if (sticker) { holder.classList.add('has-spirit'); holder.insertAdjacentHTML('beforeend', sticker); }
+    }
 }
 
 function handleProfileNavClick() {
@@ -1496,6 +1507,9 @@ function navigateTo(route, options = {}) {
         case 'terms':
             renderResult = renderTermsPage();
             break;
+        case 'about':
+            renderResult = typeof renderAboutPage === 'function' ? renderAboutPage() : renderHomePage();
+            break;
         case 'play':
             renderResult = typeof renderPlayPage === 'function' ? renderPlayPage() : renderHomePage();
             break;
@@ -1585,6 +1599,7 @@ function updateNavigation(route) {
         'shared-quiz': 'Shared Quiz Result',
         'shared-devotional': 'Shared Devotional',
         terms: 'Terms & Conditions',
+        about: 'About Us',
         play: 'Play & Learn'
     };
     const titleText = titles[route] || 'GraceGuide';
@@ -1923,22 +1938,6 @@ async function renderHomePage() {
         console.error('Error loading daily verse:', error);
     }
 
-    let recommendationsHTML;
-    try {
-        recommendationsHTML = getPersonalizedRecommendations().map(rec => `
-            <div class="flex items-center justify-between p-2" style="border-bottom: 1px solid rgba(0,0,0,0.06); cursor: pointer;" onclick="openBibleChapter('${rec.book}', ${rec.chapter})">
-                <div>
-                    <div style="font-weight: 600;">${rec.title}</div>
-                    <div style="font-size: 12px; color: var(--text-slate);">${rec.reference} • ${rec.duration} min read</div>
-                </div>
-                <i class="fas fa-chevron-right" style="color: var(--text-slate);"></i>
-            </div>
-        `).join('');
-    } catch (error) {
-        console.error('Error building recommendations:', error);
-        recommendationsHTML = '';
-    }
-
     // Bail out if the user navigated away while the above was resolving.
     if (AppState.currentRoute !== 'home') return;
 
@@ -2019,13 +2018,6 @@ async function renderHomePage() {
             <!-- Play & Learn (Bible games) — below the reading/devotional content on purpose -->
             ${window.GamesUI ? GamesUI.homeCardHtml() : ''}
             
-            <!-- Recommended Reading -->
-            <div class="card">
-                <h3 style="font-weight: 700; margin-bottom: 16px;">Recommended for You</h3>
-                <div id="recommendations-list">
-                    ${recommendationsHTML}
-                </div>
-            </div>
         </div>
     `;
 

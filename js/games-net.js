@@ -71,11 +71,73 @@
         }
         function writeJson(key, value) { try { storage.set(key, JSON.stringify(value)); } catch (e) { /* storage full / private mode */ } }
 
-        // ---------- question memory (so games don't repeat recent questions) ----------
+        // ---------- question memory (so games don't repeat questions) ----------
+        // This device's own short list of recent questions. It also serves guests, and a database
+        // that does not have the history rules yet.
         function recentQuestions(game) { return readJson('gg_games_seen_' + game, []); }
         function rememberQuestions(game, ids) {
             var keep = Math.max(0, ((bank[game] || []).length) - core.GAMES[game].rounds * 2);
             writeJson('gg_games_seen_' + game, recentQuestions(game).concat(ids).slice(-keep || -1).slice(-200));
+        }
+        /** The questions of the game last played on this device: a rematch never repeats them. */
+        function lastGame(game) { return recentQuestions(game).slice(-core.GAMES[game].rounds); }
+
+        // Question history that follows the ACCOUNT (every device it signs in on):
+        //   games/seen/{uid}/{game}/{questionId} = how many times that player has been shown it.
+        // Whoever starts a game deals from the questions no seated player has seen and, once
+        // those run out, the ones seen least (GamesCore.dealQuestions). Histories are fetched in
+        // the background while people sit in the lobby. Starting a game NEVER waits for one:
+        // whatever has arrived by then is used.
+        var seenCache = {};   // uid -> game -> { id: count }
+        var seenAsked = {};   // uid/game -> time of the last fetch
+        function myUid() { try { return me().uid; } catch (e) { return null; } }
+        function loadSeen(uid, game, fresh) {
+            var key = uid + '/' + game;
+            if (!uid || !core.GAMES[game] || (!fresh && seenAsked[key] && Date.now() - seenAsked[key] < 60000)) return;
+            seenAsked[key] = Date.now();
+            val(db.ref('games/seen/' + uid + '/' + game)).then(function (stored) {
+                var map = {}, known = (seenCache[uid] || {})[game] || {};
+                Object.keys(stored || {}).forEach(function (id) { if (typeof stored[id] === 'number' && stored[id] > 0) map[id] = stored[id]; });
+                // Marks made here while the answer was on its way must not be lost.
+                Object.keys(known).forEach(function (id) { if (!(map[id] >= known[id])) map[id] = known[id]; });
+                (seenCache[uid] = seenCache[uid] || {})[game] = map;
+            }, function () { /* not readable (older rules, offline): this device's own list still applies */ });
+        }
+        /** What is known right now about what a player has seen of a game (never waits). */
+        function seenBy(uid, game) {
+            var map = {}, known = (uid && seenCache[uid] && seenCache[uid][game]) || {};
+            Object.keys(known).forEach(function (id) { map[id] = known[id]; });
+            if (!uid || uid === myUid()) recentQuestions(game).forEach(function (id) { if (!map[id]) map[id] = 1; });
+            return map;
+        }
+        /** I am being shown these questions: remember it on this device and on my account. */
+        function markSeen(game, ids) {
+            ids = (ids || []).filter(function (id) { return typeof id === 'string' && /^[a-z][0-9]{3,6}$/.test(id); });
+            if (!ids.length || !core.GAMES[game]) return;
+            rememberQuestions(game, ids);
+            var uid = myUid();
+            if (!uid || !opts.ServerValue.increment) return;
+            var mine = (seenCache[uid] = seenCache[uid] || {}), map = (mine[game] = mine[game] || {}), update = {};
+            ids.forEach(function (id) { map[id] = (map[id] || 0) + 1; update[id] = opts.ServerValue.increment(1); });
+            db.ref('games/seen/' + uid + '/' + game).update(update).catch(function () {});
+        }
+        /** The same, once per room (so reloading mid-game does not count the questions twice). */
+        function markRoomSeen(roomId, game, ids) {
+            var done = readJson('gg_games_marked', []);
+            if (done.indexOf(roomId) >= 0) return;
+            done.push(roomId);
+            writeJson('gg_games_marked', done.slice(-40));
+            markSeen(game, ids);
+        }
+        /** Fetches my own history for every game (called when Play & Learn opens). */
+        function warmSeen() { var uid = myUid(); if (uid) core.GAME_IDS.forEach(function (g) { loadSeen(uid, g); }); }
+        /** Questions for a solo game: the same no-repeat history as multiplayer. */
+        function dealSolo(game, level) {
+            var uid = myUid();
+            var q = core.dealQuestions(bank, game, core.GAMES[game].rounds, { level: level, seen: [seenBy(uid, game)], avoid: lastGame(game) });
+            markSeen(game, q);
+            if (uid) loadSeen(uid, game);
+            return q;
         }
 
         // ---------- rooms ----------
@@ -131,11 +193,17 @@
                 });
             });
         }
+        /** Frees a room code — but only if it still leads to this room (a rematch keeps its room's code). */
+        function releaseCode(code, roomId) {
+            if (!code) return Promise.resolve();
+            var ref = db.ref('games/codes/' + code);
+            return val(ref).then(function (entry) { if (entry && entry.room === roomId) return ref.remove(); }).catch(function () {});
+        }
         /** Host only: cancels a room for everyone (a lobby at any time; a game once it is over). */
         function cancelRoom(roomId) {
             return val(roomRef(roomId).child('meta/code')).then(function (code) {
                 return roomRef(roomId).remove().then(function () {
-                    if (code) db.ref('games/codes/' + code).remove().catch(function () {});
+                    releaseCode(code, roomId);
                     forget(roomId);
                 });
             });
@@ -149,13 +217,27 @@
             });
         }
 
-        /** Creates a lobby and seats me in it. kind: 'duel' (2 players) | 'room' (up to 8). */
-        function createRoom(game, kind, isPublic, level) {
+        /** A rematch keeps its room's code: point my own code at the next game (a fresh code if that fails). */
+        function takeOverCode(code, roomId, uid) {
+            var ref = db.ref('games/codes/' + code);
+            return val(ref).then(function (entry) {
+                if (!entry || entry.uid !== uid) throw GameError('not-mine');
+                return ref.remove();
+            }).then(function () { return ref.set({ room: roomId, uid: uid, t: TS }); }).then(function () { return code; });
+        }
+
+        /**
+         * Creates a lobby and seats me in it. kind: 'duel' (2 players) | 'room' (up to 8).
+         * level: 'easy' | 'medium' | 'hard' (the difficulty of the questions; none = every level).
+         * keepCode: a rematch passes the code of the game just played, so the room keeps it.
+         */
+        function createRoom(game, kind, isPublic, level, keepCode) {
             var u = me();
             if (!core.GAMES[game]) return Promise.reject(GameError('bad-game'));
             sweepMyOldRooms();
             var ref = db.ref('games/rooms').push(), id = ref.key;
-            return reserveCode(id, u.uid).then(function (code) {
+            var code = keepCode ? takeOverCode(keepCode, id, u.uid).catch(function () { return reserveCode(id, u.uid); }) : reserveCode(id, u.uid);
+            return code.then(function (code) {
                 var update = {};
                 update.meta = { game: game, kind: kind === 'duel' ? 'duel' : 'room', hostUid: u.uid, code: code, createdAt: TS, public: !!isPublic };
                 if (level === 'easy' || level === 'medium' || level === 'hard') update.meta.level = level;
@@ -225,7 +307,7 @@
                 var alone = Object.keys(players).length <= 1;
                 forget(roomId);
                 if (meta.hostUid === u.uid && alone) {
-                    db.ref('games/codes/' + meta.code).remove().catch(function () {});
+                    releaseCode(meta.code, roomId);
                     return ref.remove();
                 }
                 return ref.child('players/' + u.uid).remove();
@@ -442,21 +524,39 @@
         }
 
         // ---------- invites ----------
+        /** room.prev: the game just played together — a rematch invitation (it may go to any of that game's players). */
         function sendInvite(toUid, room) {
             var u = me(), ref = db.ref('games/invites/' + toUid).push();
             var exp = now() + INVITE_TTL_MS - 5000; // rules compare against the server stamp
             var invite = { from: u.uid, fromName: u.name, game: room.game, kind: room.kind, room: room.roomId, code: room.code, t: TS, exp: exp };
+            if (room.prev) invite.prev = room.prev;
             return ref.set(invite).then(function () {
                 if (opts.notify) {
                     opts.notify(toUid, {
                         type: 'game_invite', fromUid: u.uid, fromName: u.name, inviteId: ref.key, game: room.game, code: room.code, expiresAt: exp,
                         route: 'play/join/' + room.code,
-                        title: 'Game invite',
-                        message: u.name + ' challenged you to ' + core.GAMES[room.game].name + '!'
+                        title: room.prev ? 'Rematch' : 'Game invite',
+                        message: room.prev ? u.name + ' started a rematch of ' + core.GAMES[room.game].name + ' — join in!' : u.name + ' challenged you to ' + core.GAMES[room.game].name + '!'
                     });
                 }
                 return { id: ref.key, toUid: toUid, exp: exp };
             });
+        }
+        /**
+         * A rematch has started: tell the players of the last game who are not back in the room
+         * yet. Each gets an invitation (Accept / Decline, wherever they are in the app, and a
+         * notification on their phone); where an invitation cannot be sent, a plain notification
+         * that leads to the room.
+         */
+        function inviteBack(room, uids, prevRoomId) {
+            var u = me();
+            return Promise.all((uids || []).map(function (toUid) {
+                return sendInvite(toUid, { roomId: room.roomId, code: room.code, game: room.game, kind: room.kind, prev: prevRoomId }).catch(function () {
+                    if (opts.notify) opts.notify(toUid, { type: 'game_rematch', fromUid: u.uid, fromName: u.name, game: room.game, code: room.code, route: 'play/join/' + room.code,
+                        title: 'Rematch', message: u.name + ' started a rematch of ' + core.GAMES[room.game].name + ' — join in!' });
+                    return null;
+                });
+            }));
         }
         function respondInvite(id, status) { var u = me(); return db.ref('games/invites/' + u.uid + '/' + id + '/status').set(status); }
         function dismissInvite(id) { var u = me(); return db.ref('games/invites/' + u.uid + '/' + id).remove().catch(function () {}); }
@@ -581,7 +681,8 @@
         };
 
         /**
-         * Starts the game with questions from the built-in bank. Everyone should see it start
+         * Starts the game with questions from the built-in bank (see dealQuestions: fresh for
+         * every seated player, at the room's level). Everyone should see it start
          * together, so this first gives players who are still connecting a few seconds to arrive
          * (`waitMs`, default 6 s) — then starts regardless, so nobody can hold a room up.
          * `custom` = { ids, qs } supplies the questions instead (tests).
@@ -603,7 +704,16 @@
                 if (self._closed || self.room.plan) { self._starting = false; return false; }
                 var plan = { startedAt: TS, secs: cfg.secs, rounds: cfg.rounds };
                 if (custom && custom.ids && custom.ids.length === cfg.rounds) { plan.q = custom.ids; plan.qs = custom.qs; }
-                else plan.q = core.pickQuestions(bank, self.game, cfg.rounds, recentQuestions(self.game));
+                else {
+                    // Questions nobody at the table has seen (then the least-seen), of the host's
+                    // chosen level, and never the game just played. Uses the histories that have
+                    // arrived so far — it does not wait for any.
+                    plan.q = core.dealQuestions(bank, self.game, cfg.rounds, {
+                        level: self.room.meta.level,
+                        seen: self.seated().map(function (uid) { return seenBy(uid, self.game); }),
+                        avoid: lastGame(self.game)
+                    });
+                }
                 return roomRef(self.roomId).child('plan').set(plan).then(function () {
                     if (waiting && waiting.roomId === self.roomId) stopWaiting();
                     return true;
@@ -611,17 +721,10 @@
             });
         };
 
-        /** Pauses the game for everyone (only while a question is on screen). Resolves false if it could not. */
-        RoomSession.prototype.pause = function () {
-            var v = this._view;
-            if (!v || v.phase !== 'question' || this.seated().indexOf(this.uid) < 0) return Promise.resolve(false);
-            var list = core.pausesOf(this.room);
-            if (list.length >= core.MAX_PAUSES) return Promise.resolve(false);
-            return roomRef(this.roomId).child('pauses/' + list.length).set({ s: TS, by: this.uid }).then(function () { return true; }, function () { return false; });
-        };
-        /** How many more times this game can be paused. */
-        RoomSession.prototype.pausesLeft = function () { return Math.max(0, core.MAX_PAUSES - core.pausesOf(this.room).length); };
-        /** Resumes a paused game for everyone. */
+        // Pausing was removed from the game (1.5.0): nothing here can start a pause. A player
+        // still on an older version of the app might, until the database rules are updated — the
+        // engine then keeps everyone in step, and anyone can end it at once:
+        /** Ends a pause started from an older version of the app. */
         RoomSession.prototype.resume = function () {
             var v = this._view;
             if (!v || v.phase !== 'paused' || this.seated().indexOf(this.uid) < 0) return Promise.resolve(false);
@@ -688,6 +791,10 @@
             var room = this.room, view;
             if (!room.plan) {
                 view = { phase: 'lobby', round: 0, msLeft: 0, syncing: false };
+                // In the background: the question history of everyone at the table (mine too — I
+                // may have played on another device). Fetched afresh once for each room.
+                var game = this.game, asked = this._seenAsked || (this._seenAsked = {});
+                this.seated().forEach(function (uid) { if (!asked[uid]) { asked[uid] = true; loadSeen(uid, game, true); } });
                 // Quick-match rooms start themselves as soon as the second player sits down.
                 if (room.meta.public && room.meta.hostUid === this.uid && this.seated().length >= 2) this.start();
             } else {
@@ -723,7 +830,7 @@
                     if (settled) this._synced = true;
                 }
                 view.syncing = !this._synced;
-                if (view.phase !== 'countdown' && !this._remembered) { this._remembered = true; rememberQuestions(this.game, room.plan.q || []); }
+                if (view.phase !== 'countdown' && !this._remembered) { this._remembered = true; markRoomSeen(this.roomId, this.game, room.plan.q || []); }
             }
             view.room = room;
             view.game = this.game;
@@ -743,13 +850,23 @@
         };
         RoomSession.prototype.results = function (upToRound) { return core.scoreRoom(this.game, bank, this.room, upToRound); };
 
-        /** First tap creates the next room; everyone else follows `rematch`. Resolves the new room id. */
+        /** Who may call a rematch: the host — or anyone seated, if the host is no longer in the room. */
+        RoomSession.prototype.canRematch = function () {
+            var room = this.room, host = room.players[room.meta.hostUid];
+            if (this.seated().indexOf(this.uid) < 0) return false;
+            return room.meta.hostUid === this.uid || !host || host.online !== true || typeof host.leftAt === 'number';
+        };
+
+        /**
+         * Rematch: the same room goes again — same code, same players, same level, new questions.
+         * (Each game keeps its own answer record underneath, which is what makes scores
+         * tamper-proof; players never see that.) Everyone still on the results follows
+         * `rematch` into it; the others are invited back (see inviteBack). Resolves the id to open.
+         */
         RoomSession.prototype.rematch = function () {
-            var self = this, ref = roomRef(this.roomId).child('rematch');
+            var self = this, ref = roomRef(this.roomId).child('rematch'), meta = this.room.meta;
             if (this.room.rematch) return joinRoom(this.room.rematch).then(function () { return self.room.rematch; });
-            // A private room for the same people: it is not offered to anyone else, and the screen
-            // that created it starts the game as soon as the others are back in (see games.js).
-            return createRoom(this.game, this.room.meta.kind, false, this.room.meta.level).then(function (room) {
+            return createRoom(this.game, meta.kind, false, meta.level, meta.hostUid === this.uid ? meta.code : null).then(function (room) {
                 return ref.set(room.roomId).then(function () { self.rematchHosted = true; return room.roomId; }, function () {
                     // Someone beat me to it: drop my spare room and join theirs.
                     return leaveRoom(room.roomId).then(function () { return val(ref); }).then(function (id) { return joinRoom(id).then(function () { return id; }); });
@@ -768,6 +885,7 @@
             sendInvite: sendInvite, respondInvite: respondInvite, dismissInvite: dismissInvite, cancelInvite: cancelInvite,
             inviteLive: inviteLive, watchInvites: watchInvites, watchInviteReply: watchInviteReply,
             recentQuestions: recentQuestions, rememberQuestions: rememberQuestions,
+            dealSolo: dealSolo, warmSeen: warmSeen, markSeen: markSeen, seenBy: seenBy, inviteBack: inviteBack,
             dispose: function () { stopWaiting(); offsetRef.off('value'); }
         };
     }

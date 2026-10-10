@@ -142,11 +142,29 @@
 
     // ---------- bank ----------
 
+    /**
+     * The question with this id. Looked up through an index built once per game list (and
+     * rebuilt if the list has grown), so it stays instant with a thousand questions a game.
+     */
     function questionById(bank, game, id) {
         var list = (bank && bank[game]) || [];
-        for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
-        return null;
+        var index = list.__byId;
+        if (!index || index.size !== list.length) {
+            index = { size: list.length, map: {} };
+            for (var i = 0; i < list.length; i++) if (list[i] && !index.map[list[i].id]) index.map[list[i].id] = list[i];
+            try { Object.defineProperty(list, '__byId', { value: index, writable: true, configurable: true, enumerable: false }); } catch (e) { /* a frozen list: just not remembered */ }
+        }
+        return (typeof id === 'string' && Object.prototype.hasOwnProperty.call(index.map, id)) ? index.map[id] : null;
     }
+
+    // ---------- difficulty ----------
+    // A bank question may carry `l`: 1 easy, 2 medium, 3 hard (no `l` = medium).
+    var LEVELS = ['easy', 'medium', 'hard'];
+    function levelOf(question) {
+        var l = question ? question.l : 0;
+        return l === 1 ? 'easy' : l === 3 ? 'hard' : 'medium';
+    }
+    function isLevel(level) { return level === 'easy' || level === 'medium' || level === 'hard'; }
 
     // ---------- custom (AI-written) questions ----------
     // A game may carry its own questions in plan.qs = { id: question } (written once by the host
@@ -219,13 +237,61 @@
         return pool.slice(0, n);
     }
 
+    /**
+     * Deals `n` question ids for a game — fairly, for everyone who is about to play it.
+     *   opts.level   'easy' | 'medium' | 'hard' (anything else: every level)
+     *   opts.seen    one { id: timesSeen } map per player in the game (their question history)
+     *   opts.avoid   ids that must not come up again if it can be helped (the game just played)
+     *   opts.random  () => [0, 1)
+     * In order of importance: not in `avoid`; of the chosen level; seen by nobody; and once
+     * fresh questions have run out, the ones seen least (all players' counts added together).
+     * Whatever is still equal is decided at random. If the chosen level has too few questions
+     * the rest come from the other levels, by the same rules.
+     */
+    function dealQuestions(bank, game, n, opts) {
+        var o = opts || {}, rnd = o.random || Math.random, list = (bank && bank[game]) || [];
+        var seen = o.seen || [], want = isLevel(o.level) ? o.level : null, avoid = {}, i;
+        (o.avoid || []).forEach(function (id) { avoid[id] = true; });
+        var rows = [];
+        for (i = 0; i < list.length; i++) {
+            var q = list[i], times = 0;
+            for (var s = 0; s < seen.length; s++) {
+                var c = seen[s] ? seen[s][q.id] : 0;
+                if (typeof c === 'number' && c > 0) times += c;
+            }
+            rows.push({ id: q.id, avoid: avoid[q.id] ? 1 : 0, off: want && levelOf(q) !== want ? 1 : 0, times: times, order: 0 });
+        }
+        for (i = rows.length - 1; i > 0; i--) {
+            var j = Math.floor(rnd() * (i + 1));
+            var t = rows[i]; rows[i] = rows[j]; rows[j] = t;
+        }
+        for (i = 0; i < rows.length; i++) rows[i].order = i;
+        rows.sort(function (a, b) { return (a.avoid - b.avoid) || (a.off - b.off) || (a.times - b.times) || (a.order - b.order); });
+        return rows.slice(0, n).map(function (r) { return r.id; });
+    }
+
     /** The Daily Challenge: the same five questions for everyone on a given day. */
     var DAILY_SLOTS = ['emoji', 'whoami', 'bibleornot', 'battle', 'battle'];
     var DAILY_LIMIT_MS = 100000;
+    /**
+     * The Daily Challenge draws from a FROZEN part of the bank: the first `size` questions of
+     * each game. Adding questions to the bank therefore never changes a day's five questions
+     * (on any device, or for the server that scores them). To let newer questions into the
+     * Daily Challenge, add an entry with a start day in the future — never edit an old one.
+     */
+    var DAILY_POOLS = [
+        { from: '', size: { emoji: 86, whoami: 81, bibleornot: 101, battle: 174 } }
+    ];
+    function dailyPool(day) {
+        var pool = DAILY_POOLS[0];
+        for (var i = 1; i < DAILY_POOLS.length; i++) if (String(day) >= DAILY_POOLS[i].from) pool = DAILY_POOLS[i];
+        return pool.size;
+    }
     function dailyQuestions(bank, day) {
-        var out = [], used = {};
+        var out = [], used = {}, sizes = dailyPool(day);
         for (var s = 0; s < DAILY_SLOTS.length; s++) {
-            var game = DAILY_SLOTS[s], list = bank[game] || [];
+            var game = DAILY_SLOTS[s], all = bank[game] || [];
+            var list = sizes[game] && all.length > sizes[game] ? all.slice(0, sizes[game]) : all;
             if (!list.length) continue;
             var idx = hash(day + ':' + s + ':' + game) % list.length;
             while (used[list[idx].id]) idx = (idx + 1) % list.length;
@@ -596,6 +662,7 @@
         WORDLE_MAX_GUESSES: WORDLE_MAX_GUESSES, WORDLE_UNITS: WORDLE_UNITS, DAILY_SLOTS: DAILY_SLOTS, DAILY_LIMIT_MS: DAILY_LIMIT_MS,
         hash: hash, previousDay: previousDay, isDayString: isDayString, makeCode: makeCode, parseCode: parseCode, cleanName: cleanName,
         questionById: questionById, cleanQuestion: cleanQuestion, roomQuestion: roomQuestion, pickQuestions: pickQuestions, dailyQuestions: dailyQuestions,
+        LEVELS: LEVELS, levelOf: levelOf, isLevel: isLevel, dealQuestions: dealQuestions, DAILY_POOLS: DAILY_POOLS,
         parseGuesses: parseGuesses, wordleFeedback: wordleFeedback, judge: judge,
         timeline: timeline, phaseAt: phaseAt, pointsFor: pointsFor, seatedPlayers: seatedPlayers, scoreRoom: scoreRoom, scoreDaily: scoreDaily,
         xpFor: xpFor, level: level, xpForLevel: xpForLevel, levelTitle: levelTitle, emptyProfile: emptyProfile, applyResult: applyResult,

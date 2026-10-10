@@ -160,6 +160,7 @@ function enterDashboard(user, isMaster) {
     $('#admin-current-user-avatar').textContent = (user.displayName || user.email || 'A')[0].toUpperCase();
     $('#admin-current-user-role').textContent = isMaster ? 'Master Admin' : 'Admin';
     $('#admin-nav-admins').classList.toggle('hidden', !isMaster);
+    refreshMessagesCount();
 
     renderTab('overview');
 }
@@ -229,6 +230,7 @@ const TAB_TITLES = {
     overview: 'Overview',
     users: 'Users',
     notifications: 'Notifications',
+    messages: 'Messages',
     quiz: 'Weekly Quiz',
     space: 'Space Moderation',
     settings: 'App Settings',
@@ -247,6 +249,7 @@ function renderTab(tab) {
         overview: renderOverviewTab,
         users: renderUsersTab,
         notifications: renderNotificationsTab,
+        messages: renderMessagesTab,
         quiz: renderQuizTab,
         space: renderSpaceTab,
         settings: renderSettingsTab,
@@ -1592,6 +1595,11 @@ async function renderSettingsTab() {
                     <p class="admin-settings-note">Shown in the Android app's Settings → Contact Support.</p>
                 </div>
                 <div class="admin-form-row">
+                    <label>GraceGuide WhatsApp line</label>
+                    <input type="tel" id="cfg-contact-whatsapp" class="form-input" placeholder="e.g. 2348012345678 (country code, digits only)" value="${escapeHtml(cfg.contactWhatsApp || '')}">
+                    <p class="admin-settings-note">Used by About Us → “Send on WhatsApp” and by the Weekly Quiz winner's “Claim your prize” button. If left blank, the Talk to Someone number below is used.</p>
+                </div>
+                <div class="admin-form-row">
                     <label>"Talk to Someone" WhatsApp number</label>
                     <input type="tel" id="cfg-whatsapp" class="form-input" placeholder="e.g. 2348012345678 (country code, digits only)" value="${escapeHtml(cfg.talkToSomeoneWhatsApp || '')}">
                     <p class="admin-settings-note">Where the Talk to Someone page connects people (web and Android). Leave blank to hide the WhatsApp hand-off.</p>
@@ -1627,10 +1635,13 @@ async function renderSettingsTab() {
 
     $('#cfg-save-btn').addEventListener('click', async () => {
         const whatsapp = $('#cfg-whatsapp').value.replace(/\D/g, '');
+        const contactWhatsapp = $('#cfg-contact-whatsapp').value.replace(/\D/g, '');
+        if (contactWhatsapp && contactWhatsapp.length < 7) { showAdminToast('The GraceGuide WhatsApp line looks too short.', 'error'); return; }
         const code = parseInt($('#cfg-android-code').value, 10);
         const update = {
             supportEmail: $('#cfg-support-email').value.trim() || 'support@graceguide.com.ng',
             talkToSomeoneWhatsApp: whatsapp || null,
+            contactWhatsApp: contactWhatsapp || null,
             androidLatestVersionCode: Number.isFinite(code) && code > 0 ? code : null,
             androidLatestVersionName: $('#cfg-android-name').value.trim() || null,
             androidDownloadUrl: $('#cfg-android-url').value.trim() || null,
@@ -1767,3 +1778,153 @@ document.addEventListener('DOMContentLoaded', () => {
     initSidebarNav();
     initAccessGate();
 });
+
+/* ============================================
+   MESSAGES TAB — /contactMessages
+   What people send from About Us → "Send to the GraceGuide team" (web and
+   Android): inquiries, partnership requests, feedback and complaints.
+   ============================================ */
+const MESSAGE_CATEGORIES = { inquiry: 'Inquiry', partnership: 'Partnership', feedback: 'Feedback', complaint: 'Complaint' };
+const messagesView = { category: 'all', status: 'open', query: '' };
+
+async function fetchContactMessages() {
+    const snap = await database.ref('contactMessages').orderByChild('createdAt').limitToLast(500).once('value');
+    const list = [];
+    snap.forEach(child => { list.push({ id: child.key, ...child.val() }); });
+    return list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+
+/** The little number beside "Messages" in the sidebar: messages nobody has opened yet. */
+async function refreshMessagesCount(known) {
+    const badge = $('#admin-nav-messages-count');
+    if (!badge) return;
+    try {
+        const list = known || await fetchContactMessages();
+        const fresh = list.filter(m => (m.status || 'new') === 'new').length;
+        badge.textContent = fresh > 99 ? '99+' : String(fresh);
+        badge.classList.toggle('hidden', fresh === 0);
+    } catch (error) {
+        badge.classList.add('hidden'); // not readable yet (rule not added): the tab itself explains
+    }
+}
+
+async function renderMessagesTab() {
+    let messages;
+    try {
+        messages = await fetchContactMessages();
+    } catch (error) {
+        console.error('Error loading contact messages:', error);
+        $('#admin-content').innerHTML = `
+            <div class="admin-empty-state">
+                <i class="fas fa-envelope-open-text"></i>
+                <p>Messages can't be read yet.</p>
+                <p style="font-size:12px; max-width:420px; margin:8px auto 0;">Add the <code>"contactMessages"</code> block from <code>contact.rules.json</code> to your live database rules (see PLAY-AND-LEARN-SETUP.md), then reload this page.</p>
+                <button class="btn btn-outline btn-sm mt-2" onclick="renderTab('messages')">Retry</button>
+            </div>`;
+        return;
+    }
+    refreshMessagesCount(messages);
+    await fetchUserDirectory().catch(() => ({}));
+
+    $('#admin-content').innerHTML = `
+        <div class="admin-panel">
+            <div class="admin-panel-header">
+                <h2 style="margin:0;">Messages (${messages.length})</h2>
+                <button class="btn btn-outline btn-sm" onclick="renderTab('messages')"><i class="fas fa-rotate-right"></i> Refresh</button>
+            </div>
+            <div class="admin-users-tools">
+                <div class="admin-users-search">
+                    <i class="fas fa-magnifying-glass"></i>
+                    <input type="search" id="msg-search-input" class="admin-search-input" placeholder="Search messages or names…" autocomplete="off" value="${escapeHtml(messagesView.query)}">
+                </div>
+                <select id="msg-category-select" class="admin-sort-select" aria-label="Kind of message">
+                    <option value="all">All kinds</option>
+                    ${Object.entries(MESSAGE_CATEGORIES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}
+                </select>
+                <select id="msg-status-select" class="admin-sort-select" aria-label="Status">
+                    <option value="open">Open (new + read)</option>
+                    <option value="new">New only</option>
+                    <option value="resolved">Resolved</option>
+                    <option value="all">Everything</option>
+                </select>
+            </div>
+            <div class="admin-users-count" id="msg-count"></div>
+            <div id="msg-list"></div>
+        </div>
+    `;
+
+    const draw = () => {
+        const q = messagesView.query.trim().toLowerCase();
+        const shown = messages.filter(m => {
+            const status = m.status || 'new';
+            if (messagesView.category !== 'all' && m.category !== messagesView.category) return false;
+            if (messagesView.status === 'open' && status === 'resolved') return false;
+            if ((messagesView.status === 'new' || messagesView.status === 'resolved') && status !== messagesView.status) return false;
+            return !q || (m.message || '').toLowerCase().includes(q) || adminDisplayName(m.uid, m.name || '').toLowerCase().includes(q);
+        });
+        $('#msg-count').textContent = `Showing ${shown.length} of ${messages.length}`;
+        $('#msg-list').innerHTML = shown.length ? shown.map(messageCardHTML).join('') : `<p class="admin-loading-row">No messages here.</p>`;
+    };
+    $('#msg-category-select').value = messagesView.category;
+    $('#msg-status-select').value = messagesView.status;
+    $('#msg-search-input').addEventListener('input', (e) => { messagesView.query = e.target.value; draw(); });
+    $('#msg-category-select').addEventListener('change', (e) => { messagesView.category = e.target.value; draw(); });
+    $('#msg-status-select').addEventListener('change', (e) => { messagesView.status = e.target.value; draw(); });
+    draw();
+}
+
+function messageCardHTML(m) {
+    const status = m.status || 'new';
+    const name = adminDisplayName(m.uid, m.name || 'GraceGuide member');
+    const safeName = escapeHtml(name.replace(/'/g, "\\'"));
+    const kind = MESSAGE_CATEGORIES[m.category] || 'Message';
+    const email = m.replyEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(m.replyEmail) ? m.replyEmail : '';
+    return `
+        <div class="admin-message-card ${status}">
+            <div class="admin-message-head">
+                <span class="admin-badge ${m.category === 'complaint' ? 'admin-badge-danger' : m.category === 'partnership' ? 'admin-badge-gold' : ''}">${escapeHtml(kind)}</span>
+                <strong>${escapeHtml(name)}</strong>
+                <span class="admin-message-when">${formatDate(m.createdAt)} · ${escapeHtml(m.platform || 'app')}</span>
+                ${status === 'new' ? '<span class="admin-badge admin-badge-danger">New</span>' : status === 'resolved' ? '<span class="admin-badge">Resolved</span>' : ''}
+            </div>
+            <p class="admin-message-body">${escapeHtml(m.message || '')}</p>
+            ${email ? `<p class="admin-message-email"><i class="fas fa-envelope"></i> Reply to: ${escapeHtml(email)}</p>` : ''}
+            <div class="admin-message-actions">
+                <button class="btn btn-primary btn-sm" onclick="replyToMessage('${m.id}', '${escapeHtml(m.uid || '')}', '${safeName}')"><i class="fas fa-bell"></i> Reply in the app</button>
+                ${email ? `<a class="btn btn-outline btn-sm" href="mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent('Re: your GraceGuide ' + kind.toLowerCase())}"><i class="fas fa-envelope"></i> Reply by email</a>` : ''}
+                ${status === 'new' ? `<button class="btn btn-outline btn-sm" onclick="setMessageStatus('${m.id}', 'read')"><i class="fas fa-envelope-open"></i> Mark read</button>` : ''}
+                ${status !== 'resolved' ? `<button class="btn btn-outline btn-sm" onclick="setMessageStatus('${m.id}', 'resolved')"><i class="fas fa-check"></i> Resolve</button>`
+                    : `<button class="btn btn-outline btn-sm" onclick="setMessageStatus('${m.id}', 'read')"><i class="fas fa-rotate-left"></i> Reopen</button>`}
+                <button class="admin-icon-btn danger" title="Delete" onclick="deleteContactMessage('${m.id}')"><i class="fas fa-trash"></i></button>
+            </div>
+        </div>`;
+}
+
+async function setMessageStatus(id, status) {
+    try {
+        await database.ref(`contactMessages/${id}`).update({ status, handledBy: AdminState.user.email || AdminState.user.uid, handledAt: Date.now() });
+        if (AdminState.activeTab === 'messages') renderTab('messages');
+    } catch (error) {
+        console.error(error);
+        showAdminToast('Could not update that message.', 'error');
+    }
+}
+
+/** Opens the notification composer addressed to the sender (and marks the message read). */
+async function replyToMessage(id, uid, name) {
+    if (!uid) { showAdminToast('This message has no account to reply to.', 'error'); return; }
+    database.ref(`contactMessages/${id}`).update({ status: 'read', handledBy: AdminState.user.email || AdminState.user.uid, handledAt: Date.now() }).catch(() => {});
+    jumpToNotifyUser(uid, name);
+}
+
+async function deleteContactMessage(id) {
+    if (!confirm('Delete this message? This cannot be undone.')) return;
+    try {
+        await database.ref(`contactMessages/${id}`).remove();
+        showAdminToast('Message deleted.', 'success');
+        if (AdminState.activeTab === 'messages') renderTab('messages');
+    } catch (error) {
+        console.error(error);
+        showAdminToast('Could not delete that message.', 'error');
+    }
+}
