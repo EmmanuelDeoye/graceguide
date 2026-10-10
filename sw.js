@@ -17,7 +17,7 @@
 
 // Bump this whenever the shell list below changes so old caches get
 // cleaned up and clients pick up the new files.
-const CACHE_VERSION = 'graceguide-shell-v11';
+const CACHE_VERSION = 'graceguide-shell-v12';
 
 const APP_SHELL = [
   '/',

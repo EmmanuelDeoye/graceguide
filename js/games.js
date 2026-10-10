@@ -140,11 +140,14 @@
 
     // ---------- hub ----------
 
+    /** "How to play": a small help icon in the top corner of the hub (it reopens the tour). */
+    var HOW_TO_PLAY_ICON = '<button class="pl-help-btn" type="button" aria-label="How to play" title="How to play" onclick="GamesUI.showTour()"><i class="fas fa-circle-question"></i></button>';
+
     function levelCard(profile) {
         var u = user();
         if (!u) {
             return '<div class="pl-level pl-level-guest"><div><h3>Play &amp; Learn</h3><p>Sign in to save your XP, earn badges and play with Brethren.</p></div>' +
-                '<button class="btn btn-gold btn-sm" onclick="showAuthModal({ message: \'Sign in to save your progress.\' })">Sign in</button></div>';
+                '<button class="btn btn-gold btn-sm" onclick="showAuthModal({ message: \'Sign in to save your progress.\' })">Sign in</button>' + HOW_TO_PLAY_ICON + '</div>';
         }
         var p = profile || Core.emptyProfile(u.name), lvl = Core.level(p.xp || 0);
         var from = Core.xpForLevel(lvl), to = Core.xpForLevel(lvl + 1);
@@ -153,7 +156,7 @@
             '<div class="pl-level-title">' + esc(Core.levelTitle(lvl)) + ' <span>Level ' + lvl + '</span></div>' +
             '<div class="pl-xpbar"><div class="pl-xpbar-fill" style="width:' + pct + '%"></div></div>' +
             '<div class="pl-level-sub">' + (p.xp || 0) + ' XP · ' + (to - (p.xp || 0)) + ' to level ' + (lvl + 1) + '</div></div>' +
-            '<div class="pl-streak" title="Days played in a row"><i class="fas fa-fire"></i><strong>' + (p.streak || 0) + '</strong></div></div>';
+            '<div class="pl-streak" title="Days played in a row"><i class="fas fa-fire"></i><strong>' + (p.streak || 0) + '</strong></div>' + HOW_TO_PLAY_ICON + '</div>';
     }
 
     function renderHub() {
@@ -172,8 +175,7 @@
                     '<span class="pl-game-name">' + esc(g.name) + '</span><span class="pl-game-tag">' + esc(g.tagline) + '</span></button>';
             }).join('') + '</div>' +
             '<div class="pl-row-links"><button class="btn btn-outline btn-sm" onclick="GamesUI.go(\'leaderboard\')"><i class="fas fa-ranking-star"></i> Leaderboard</button>' +
-            '<button class="btn btn-outline btn-sm" onclick="GamesUI.showBadges()"><i class="fas fa-award"></i> Badges</button>' +
-            '<button class="btn btn-outline btn-sm" onclick="GamesUI.showTour()"><i class="fas fa-circle-question"></i> How to play</button></div>' +
+            '<button class="btn btn-outline btn-sm" onclick="GamesUI.showBadges()"><i class="fas fa-award"></i> Badges</button></div>' +
             '<div id="pl-mine-slot"></div><div id="pl-top-slot"></div>');
         maybeShowTour();
         var input = $id('pl-code-input');

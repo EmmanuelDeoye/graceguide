@@ -1,4 +1,4 @@
-# GraceGuide — going live (web v11 shell, Android 1.4.0)
+# GraceGuide — going live (web v12 shell, Android 1.4.1)
 
 Three things have to happen in Firebase before everything works for real
 users. Do them in this order.
@@ -69,14 +69,40 @@ firebase deploy --only functions
 
 ## 3. Publish
 
-- Web: upload the `graceguide` folder (including `index.html`, `sw.js` and everything in `js/` and `css/`). `sw.js` is at cache version v11. `js/games-ai.js` is gone — delete it from the server too.
+- Web: upload the `graceguide` folder (including `index.html`, `sw.js` and everything in `js/` and `css/`). `sw.js` is at cache version v12. Upload `admin.html`, `css/admin.css` and `js/admin.js` too — the admin page was repaired in 1.4.1. `js/games-ai.js` is gone — delete it from the server too.
 - Android: `graceguide-android/app/build/outputs/bundle/release/app-release.aab`
-  or `…/apk/release/app-release.apk` — version 1.4.0 (code 5). Set the admin
-  page's "Android latest version" to 1.4.0.
+  or `…/apk/release/app-release.apk` — version 1.4.1 (code 6). Set the admin
+  page's "Android latest version" to 1.4.1.
 - Release web and Android together, and ask players to update: a phone still on
   an older version does not know the new questions (it shows "This question
   isn't available in your version of the app") and does not freeze when someone
   pauses, so it would fall out of step in a shared room.
+
+## What changed in 1.4.1
+
+Nothing in the database rules or the Cloud Functions changed in 1.4.1 — only
+the web files and the Android app.
+
+- **Admin page repaired.** It could not scroll and was squeezed into a narrow
+  strip, because the iPhone fix in the main app (which pins the page body)
+  also applied to the admin page. The graphs never drew because the page asked
+  for a version of the chart library that does not exist on that host (the
+  link returned "not found"); it now loads a version that does, with a second
+  host as a fallback.
+- **Admin → Users**: search by name or email, a Sort menu (newest, oldest,
+  recently active, least recently active, name, email), sortable column
+  headings and a Refresh button.
+- **"How to play"** is now a help icon in the top corner of the Play & Learn
+  page (on the level card) instead of a full-width button.
+- **Spirit Life sticker (Android)** sits on the edge of the profile picture.
+  It was being cut off by the round clipping of the top bar and of the
+  profile picture's shadow.
+- **Chat and forum messages are no longer listed under the bell** and do not
+  count in its number. Instead, a dot shows on the three-line menu icon
+  whenever a chat or a forum has unread messages (the drawer's Chats and
+  Community links keep their own dots). Phone pop-up notifications for
+  messages are unchanged.
+- Web version stamp is `?v=1.4.1`, service worker cache `v12`.
 
 ## What changed in 1.4.0
 
@@ -112,7 +138,7 @@ firebase deploy --only functions
   serve saved scripts first and refresh them in the background, so a new
   release took several visits to appear. It now asks the network first and
   uses the saved copy only when offline; `index.html` also stamps every
-  script and stylesheet with the version (`?v=1.4.0`). A tab that is already
+  script and stylesheet with the version (`?v=1.4.0` at the time). A tab that is already
   open when you publish shows a small "GraceGuide has been updated — Refresh"
   bar. **When you publish future versions, change that `?v=` stamp in
   `index.html` and bump `CACHE_VERSION` in `sw.js`.** People still on the

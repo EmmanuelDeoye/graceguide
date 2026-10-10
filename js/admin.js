@@ -407,7 +407,13 @@ async function renderOverviewTab() {
     if (overviewChartInstance) { overviewChartInstance.forEach(c => c.destroy()); }
     overviewChartInstance = [];
     try {
-        if (typeof Chart === 'undefined') throw new Error('Chart.js did not load');
+        await ensureChartLibrary();
+        // The admin may have moved to another tab while the library was loading.
+        if (!$('#chart-active-users') || !$('#chart-signups')) return;
+        const axes = {
+            x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
+            y: { beginAtZero: true, ticks: { precision: 0 } }
+        };
         overviewChartInstance = [
             new Chart($('#chart-active-users'), {
                 type: 'line',
@@ -422,7 +428,7 @@ async function renderOverviewTab() {
                         tension: 0.3
                     }]
                 },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: axes }
             }),
             new Chart($('#chart-signups'), {
                 type: 'bar',
@@ -434,7 +440,7 @@ async function renderOverviewTab() {
                         backgroundColor: '#C7A65A'
                     }]
                 },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: axes }
             })
         ];
     } catch (error) {
@@ -443,45 +449,114 @@ async function renderOverviewTab() {
         // with it. Just show a small inline note where the charts would be.
         console.error('Error rendering charts:', error);
         $$('.admin-chart-wrap').forEach(wrap => {
-            wrap.innerHTML = `<p class="text-muted" style="padding-top:20px;">Charts couldn't load.</p>`;
+            wrap.innerHTML = `<p class="text-muted" style="padding-top:20px;">Charts couldn't load. Check your connection and <a href="#" onclick="renderTab('overview'); return false;">try again</a>.</p>`;
         });
     }
+}
+
+/** Chart.js normally arrives with the page (admin.html). If that host was
+    unreachable, try a second one before giving up on the graphs. */
+let chartLibraryLoading = null;
+function ensureChartLibrary() {
+    if (typeof Chart !== 'undefined') return Promise.resolve();
+    if (!chartLibraryLoading) {
+        chartLibraryLoading = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
+            script.onload = () => (typeof Chart !== 'undefined' ? resolve() : reject(new Error('Chart.js did not load')));
+            script.onerror = () => reject(new Error('Chart.js did not load'));
+            document.head.appendChild(script);
+        }).catch(error => { chartLibraryLoading = null; throw error; });
+    }
+    return chartLibraryLoading;
 }
 
 /* ============================================
    USERS TAB
    ============================================ */
+const USER_SORTS = {
+    newest: { label: 'Newest first', column: 'createdAt', compare: (a, b) => (b.createdAt || 0) - (a.createdAt || 0) },
+    oldest: { label: 'Oldest first', column: 'createdAt', compare: (a, b) => (a.createdAt || Infinity) - (b.createdAt || Infinity) },
+    active: { label: 'Recently active', column: 'lastActiveAt', compare: (a, b) => (b.lastActiveAt || 0) - (a.lastActiveAt || 0) },
+    inactive: { label: 'Least recently active', column: 'lastActiveAt', compare: (a, b) => (a.lastActiveAt || 0) - (b.lastActiveAt || 0) },
+    nameAz: { label: 'Name A–Z', column: 'username', compare: (a, b) => userSortName(a).localeCompare(userSortName(b)) },
+    nameZa: { label: 'Name Z–A', column: 'username', compare: (a, b) => userSortName(b).localeCompare(userSortName(a)) },
+    emailAz: { label: 'Email A–Z', column: 'email', compare: (a, b) => (!a.email - !b.email) || (a.email || '').toLowerCase().localeCompare((b.email || '').toLowerCase()) },
+    emailZa: { label: 'Email Z–A', column: 'email', compare: (a, b) => (b.email || '').toLowerCase().localeCompare((a.email || '').toLowerCase()) }
+};
+// Tapping a column heading flips between that column's two orders.
+const USER_COLUMN_SORTS = { username: ['nameAz', 'nameZa'], email: ['emailAz', 'emailZa'], createdAt: ['newest', 'oldest'], lastActiveAt: ['active', 'inactive'] };
+const usersView = { query: '', sort: 'newest' };
+
+function userSortName(u) { return (u.username || 'User').trim().toLowerCase(); }
+
 async function renderUsersTab() {
     const userDirectory = await fetchUserDirectory();
     const users = Object.entries(userDirectory).map(([uid, u]) => ({ uid, ...u }));
-    users.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    if (!USER_SORTS[usersView.sort]) usersView.sort = 'newest';
+
+    const heading = (column, label) => `<th class="sortable" data-sort-column="${column}">${label}<i class="fas fa-sort"></i></th>`;
 
     $('#admin-content').innerHTML = `
         <div class="admin-panel">
             <div class="admin-panel-header">
-                <h2>Users (${users.length})</h2>
-                <input type="text" id="user-search-input" class="admin-search-input" placeholder="Search by name or email...">
+                <h2 style="margin:0;">Users (${users.length})</h2>
+                <button class="btn btn-outline btn-sm" id="users-refresh-btn"><i class="fas fa-rotate-right"></i> Refresh</button>
             </div>
+            <div class="admin-users-tools">
+                <div class="admin-users-search">
+                    <i class="fas fa-magnifying-glass"></i>
+                    <input type="search" id="user-search-input" class="admin-search-input" placeholder="Search by name or email…" autocomplete="off" value="${escapeHtml(usersView.query)}">
+                </div>
+                <select id="user-sort-select" class="admin-sort-select" aria-label="Sort users">
+                    ${Object.entries(USER_SORTS).map(([key, s]) => `<option value="${key}">Sort: ${s.label}</option>`).join('')}
+                </select>
+            </div>
+            <div class="admin-users-count" id="users-count"></div>
             <div class="admin-table-wrap">
                 <table class="admin-table">
                     <thead>
-                        <tr><th>Username</th><th>Email</th><th>Joined</th><th>Last Active</th><th></th></tr>
+                        <tr>${heading('username', 'Username')}${heading('email', 'Email')}${heading('createdAt', 'Joined')}${heading('lastActiveAt', 'Last Active')}<th></th></tr>
                     </thead>
-                    <tbody id="users-table-body">
-                        ${usersTableRowsHTML(users)}
-                    </tbody>
+                    <tbody id="users-table-body"></tbody>
                 </table>
             </div>
         </div>
     `;
 
-    $('#user-search-input').addEventListener('input', (e) => {
-        const q = e.target.value.trim().toLowerCase();
-        const filtered = !q ? users : users.filter(u =>
+    const draw = () => {
+        const q = usersView.query.trim().toLowerCase();
+        const sort = USER_SORTS[usersView.sort];
+        const shown = (!q ? users.slice() : users.filter(u =>
             (u.username || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q)
-        );
-        $('#users-table-body').innerHTML = usersTableRowsHTML(filtered);
+        )).sort((a, b) => sort.compare(a, b) || userSortName(a).localeCompare(userSortName(b)));
+        $('#users-table-body').innerHTML = usersTableRowsHTML(shown);
+        $('#users-count').textContent = q
+            ? `Showing ${shown.length} of ${users.length} · ${sort.label}`
+            : `${users.length} ${users.length === 1 ? 'user' : 'users'} · ${sort.label}`;
+        $('#user-sort-select').value = usersView.sort;
+        $$('#admin-content th.sortable').forEach(th => {
+            const pair = USER_COLUMN_SORTS[th.dataset.sortColumn];
+            const at = pair.indexOf(usersView.sort);
+            th.classList.toggle('sorted', at >= 0);
+            // "Up" = small-to-large: A–Z for text, oldest first for dates.
+            const up = usersView.sort === 'nameAz' || usersView.sort === 'emailAz' || usersView.sort === 'oldest' || usersView.sort === 'inactive';
+            th.querySelector('i').className = 'fas ' + (at < 0 ? 'fa-sort' : (up ? 'fa-sort-up' : 'fa-sort-down'));
+        });
+    };
+
+    $('#user-search-input').addEventListener('input', (e) => { usersView.query = e.target.value; draw(); });
+    $('#user-sort-select').addEventListener('change', (e) => { usersView.sort = e.target.value; draw(); });
+    $$('#admin-content th.sortable').forEach(th => th.addEventListener('click', () => {
+        const pair = USER_COLUMN_SORTS[th.dataset.sortColumn];
+        usersView.sort = usersView.sort === pair[0] ? pair[1] : pair[0];
+        draw();
+    }));
+    $('#users-refresh-btn').addEventListener('click', async () => {
+        await fetchUserDirectory(true);
+        if (AdminState.activeTab === 'users') renderTab('users');
     });
+    draw();
 }
 
 function usersTableRowsHTML(users) {

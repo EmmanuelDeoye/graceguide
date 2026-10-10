@@ -2486,9 +2486,16 @@ async function loadNotifications() {
     }
 }
 
+/** Chat and forum messages are not listed under the bell: the menu icon and
+    the drawer's Chats / Community links show a dot for them instead. (The
+    entries are still written — they are what the push server sends from.) */
+function isMessageNotification(n) {
+    return !!n && (n.type === 'dm_message' || n.type === 'group_message');
+}
+
 function updateNotificationBadge() {
     // Request notifications aren't counted twice — the pending request itself is.
-    const unreadNotifs = AppState.notifications.filter(n => !n.read && n.type !== 'connection_request').length;
+    const unreadNotifs = AppState.notifications.filter(n => !n.read && n.type !== 'connection_request' && !isMessageNotification(n)).length;
     const pendingRequests = Array.from(AppState.userConnections.values()).filter(s => s === 'pending_received').length;
     const unreadCount = unreadNotifs + pendingRequests;
     if (unreadCount > 0) {
@@ -2675,6 +2682,9 @@ function stopRealtimeListeners() {
     _groupMsgRefs = {};
     _notifKnownKeys = new Set();
     AppState.unreadForumGroupIds = new Set();
+    AppState.unreadChatsCount = 0;
+    updateChatDrawerBadge();
+    updateForumDrawerBadge();
 }
 
 function attachGroupUnreadListeners(uid, groupIds) {
@@ -2716,12 +2726,28 @@ function attachGroupUnreadListeners(uid, groupIds) {
 function updateChatDrawerBadge() {
     const badge = document.getElementById('drawer-badge-messages');
     if (badge) badge.classList.toggle('hidden', !AppState.unreadChatsCount);
+    updateMenuUnreadDot();
 }
 
 function updateForumDrawerBadge() {
     const badge = document.getElementById('drawer-badge-community');
     if (badge) badge.classList.toggle('hidden', !(AppState.unreadForumGroupIds && AppState.unreadForumGroupIds.size > 0));
+    updateMenuUnreadDot();
 }
+
+/** The dot on the three-line menu icon: on whenever a chat or a forum has unread messages. */
+function updateMenuUnreadDot() {
+    const dot = document.getElementById('menu-unread-dot');
+    if (!dot) return;
+    const signedIn = !!AppState.currentUser;
+    const chats = signedIn ? (AppState.unreadChatsCount || 0) : 0;
+    const forums = signedIn && AppState.unreadForumGroupIds ? AppState.unreadForumGroupIds.size : 0;
+    const unread = chats + forums > 0;
+    dot.classList.toggle('hidden', !unread);
+    const btn = document.getElementById('menu-btn');
+    if (btn) btn.setAttribute('aria-label', unread ? 'Menu — unread messages' : 'Menu');
+}
+window.updateMenuUnreadDot = updateMenuUnreadDot;
 
 /* ============================================
    EVENT LISTENERS
@@ -2946,7 +2972,7 @@ async function renderNotificationPanelContent() {
         </div>
     ` : '';
 
-    const generalNotifs = AppState.notifications.filter(n => n.type !== 'connection_request');
+    const generalNotifs = AppState.notifications.filter(n => n.type !== 'connection_request' && !isMessageNotification(n));
     const unreadKeys = generalNotifs.filter(n => !n.read && n.key).map(n => n.key);
 
     const sheetContent = `

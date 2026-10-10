@@ -969,3 +969,17 @@ body {
     min-height: 100px;
 }
 
+
+/* v1.4.1 — unread chat / forum messages: a dot on the three-line menu icon */
+.menu-unread-dot {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 11px;
+    height: 11px;
+    border-radius: var(--radius-full);
+    background: var(--accent-terracotta);
+    border: 2px solid var(--card-white);
+    pointer-events: none;
+}
+.menu-unread-dot.hidden { display: none; }

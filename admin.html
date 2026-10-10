@@ -7,9 +7,9 @@
     <meta name="robots" content="noindex, nofollow">
     <title>GraceGuide — Admin</title>
     <link rel="icon" type="image/png" sizes="192x192" href="img/icons/icon-192.png">
-    <link rel="stylesheet" href="css/base.css">
-    <link rel="stylesheet" href="css/features.css">
-    <link rel="stylesheet" href="css/admin.css">
+    <link rel="stylesheet" href="css/base.css?v=1.4.1">
+    <link rel="stylesheet" href="css/features.css?v=1.4.1">
+    <link rel="stylesheet" href="css/admin.css?v=1.4.1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -103,9 +103,11 @@
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/chart.js/4.4.4/chart.umd.min.js"></script>
+    <!-- Charts for the Overview tab. (4.4.4 was never published on cdnjs, so the old link
+         returned "not found" and no graph could draw; admin.js also falls back to a second host.) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 
     <script src="js/config.js"></script>
-    <script src="js/admin.js"></script>
+    <script src="js/admin.js?v=1.4.1"></script>
 </body>
 </html>
