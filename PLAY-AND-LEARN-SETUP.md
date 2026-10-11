@@ -1,4 +1,4 @@
-# GraceGuide — going live (web v16 shell, Android 1.8.0)
+# GraceGuide — going live (web v17 shell, Android 1.9.0)
 
 Three things have to happen in Firebase before everything works for real
 users. Do them in this order.
@@ -15,7 +15,18 @@ and the others. Do not replace anything that is already there.
 | `community.rules.json` | `"publicProfiles": { … }` | Community → Users shows "Couldn't load people". |
 | `contact.rules.json` (new in 1.6.0) | `"contactMessages": { … }` | About Us → "Send to the GraceGuide team" fails (it tells the person to use WhatsApp or email instead), and the admin page's Messages tab cannot load. |
 
-**Both blocks changed in 1.8.0 — replace the ones you pasted before:**
+**The `"games"` block changed again in 1.9.0 — replace the one you pasted before:**
+
+- `profiles`: one game may now add up to 400 XP (200 of its own, as before, and
+  up to 200 in bonuses — still 2,000 a day), and a profile may hold `winStreak`,
+  `freezes` (grace days) and `quests`. **Until this is live the new bonuses do
+  not pay**: every game still saves, with its own XP, exactly as before (the
+  apps notice the refusal and save it the old way). Once a device has saved a
+  game that way it leaves the "Today" card off the Play page, rather than
+  promise XP the database will not accept; the card comes back by itself with
+  the first game saved after the new block is live.
+
+**Both blocks changed in 1.8.0 (still needed if you have not pasted them yet):**
 
 - `"games"`: `rooms/{id}/players/{uid}/beat` (a heartbeat each device sends
   during a game) and `rooms/{id}/pauses` (a pause the database only accepts
@@ -89,14 +100,55 @@ firebase deploy --only functions
 
 ## 3. Publish
 
-- Web: upload the `graceguide` folder (including `index.html`, `sw.js` and everything in `js/` and `css/`). `sw.js` is at cache version v16. New files to upload in 1.8.0: `css/desktop.css` and `js/presence.js`. New in 1.7.0: `js/games-boot.js` and `img/icons/badge-96.png` (and the much larger `js/games-bank.js`). Upload `admin.html`, `css/admin.css` and `js/admin.js` too — the admin page was repaired in 1.4.1. `js/games-ai.js` is gone — delete it from the server too.
+- Web: upload the `graceguide` folder (including `index.html`, `sw.js` and everything in `js/` and `css/`). `sw.js` is at cache version v17. No new files in 1.9.0. New in 1.8.0: `css/desktop.css` and `js/presence.js`. New in 1.7.0: `js/games-boot.js` and `img/icons/badge-96.png` (and the much larger `js/games-bank.js`). Upload `admin.html`, `css/admin.css` and `js/admin.js` too — the admin page was repaired in 1.4.1. `js/games-ai.js` is gone — delete it from the server too.
 - Android: `graceguide-android/app/build/outputs/bundle/release/app-release.aab`
-  or `…/apk/release/app-release.apk` — version 1.8.0 (code 10). Set the admin
-  page's "Android latest version" to 1.8.0 (code 10).
+  or `…/apk/release/app-release.apk` — version 1.9.0 (code 11). Set the admin
+  page's "Android latest version" to 1.9.0 (code 11).
 - Release web and Android together, and ask players to update: a phone still on
   an older version does not know the new questions (it shows "This question
   isn't available in your version of the app") and does not freeze when someone
   pauses, so it would fall out of step in a shared room.
+
+## What changed in 1.9.0 (Play & Learn: reasons to come back every day)
+
+One rule block changed (`games.rules.json` — see section 1). If you run the
+Cloud Functions, **redeploy them**: the referee pays the bonuses from its own
+copy of the engine, and one that is not redeployed pays each game's own XP
+only and drops the win streak, grace days and quests from the profile.
+
+All six are worked out in one place — the shared engine (`js/games-core.js`,
+`GamesCore.kt`, `functions/games-core.js`) — from the profile and the finished
+game, and are saved in the same write as the game. Nothing is promised on
+screen that the engine does not pay.
+
+- **Daily chest.** The first game of each day opens it: +10 XP, growing by 5
+  for every day of the streak, up to +50 from the ninth day.
+- **Grace days (streak freeze).** Every 7th day of a streak earns one; two can
+  be kept. Miss one day and it is used by itself the next time you play, so
+  the streak carries on. Two missed days in a row start it again.
+- **Three daily quests**, the same for everyone that day, chosen from the
+  date: an easy one (play 2 or 3 games, or get 10 or 15 answers right), a
+  particular one (play a named game, finish the Daily Challenge, or play two
+  different games) and a stretch (80% right in one game, every answer right,
+  or a game with someone else). +15 XP each and +30 for all three.
+- **Win streak.** Winning against other players in a row adds +10 for the
+  second win, +20, +30, then +40 for every win after. A loss ends it; solo
+  games do not touch it. From two wins a flame and the number show beside the
+  player's name in the lobby and on the scoreboard.
+- **Near miss.** Losing by a whisker (within 150 points or 10% of the winner)
+  or finishing one answer short of a clean sheet says so on the results, and
+  the Rematch / Go again button is highlighted.
+- **Welcome back.** After three whole days without a game, the first game
+  back is worth double its own XP.
+- The Play page has a **Today** card (chest, streak, grace days, quests), and
+  the results list where the XP came from.
+- Limits: bonuses on one game never exceed 200 XP, and the day's limit of
+  2,000 XP is unchanged. A date earlier than the last one played earns
+  nothing, so a day cannot be collected twice.
+- Also fixed (left over from 1.8.0): when an opponent left in the middle of a
+  question, the player who stayed could wait up to that question's full timer
+  before seeing the result. It now ends at once.
+- Shepherd was not touched, so it does not yet know about these six.
 
 ## What changed in 1.8.0
 

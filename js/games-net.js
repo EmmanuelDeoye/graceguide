@@ -409,29 +409,35 @@
         }
         function loadProfile(uid) { return val(db.ref('games/profiles/' + uid)); }
 
+        // Wins in a row (1.9), shown as a flame beside a player's name: read once for each room.
+        var flames = {};
+        function loadFlame(uid) {
+            val(db.ref('games/profiles/' + uid + '/winStreak')).then(function (n) { flames[uid] = typeof n === 'number' && n > 0 ? Math.floor(n) : 0; }, function () { /* older rules or offline: no flame */ });
+        }
+        function flameOf(uid) { return flames[uid] || 0; }
+
         function writeOwnProfile(result, attempt) {
             var u = me(), ref = db.ref('games/profiles/' + u.uid);
             return val(ref).then(function (current) {
-                var applied = core.applyResult(current, Object.assign({}, result, { name: u.name }), now());
-                var data = Object.assign({}, applied.profile, { updatedAt: TS });
-                return ref.set(data).then(function () {
-                    return { mode: 'client', gained: applied.gained, newBadges: applied.newBadges, profile: applied.profile };
-                }, function (err) {
-                    // A database still on the rules from before badge XP refuses the newer fields:
-                    // save the game without them rather than lose the XP.
-                    if (!attempt) {
-                        var plain = Object.assign({}, data);
+                var mine = Object.assign({}, result, { name: u.name }), at = now();
+                var applied = core.applyResult(current, mine, at);
+                var done = function (a, profile, legacy) { return { mode: 'client', gained: a.gained, base: a.base, bonus: a.bonus, newBadges: a.newBadges, profile: profile || a.profile, legacy: !!legacy }; };
+                return ref.set(Object.assign({}, applied.profile, { updatedAt: TS })).then(function () { return done(applied); }, function (err) {
+                    // A database still on the rules from before 1.9 refuses the bonus XP and the
+                    // newer fields: save the game the way those rules expect (its own XP, no chest,
+                    // quests or win streak) rather than lose it.
+                    var older = core.applyResult(current, mine, at, { legacy: true });
+                    return ref.set(Object.assign({}, older.profile, { updatedAt: TS })).then(function () { return done(older, null, true); }, function () {
+                        if (attempt) throw err;
+                        // …and one still on the rules from before badge XP refuses those fields too.
+                        var plain = Object.assign({}, older.profile, { updatedAt: TS });
                         delete plain.perfect; delete plain.claims; delete plain.claimed;
-                        return ref.set(plain).then(function () {
-                            var kept = Object.assign({}, applied.profile, { perfect: 0, claims: 0, claimed: {} });
-                            return { mode: 'client', gained: applied.gained, newBadges: applied.newBadges, profile: kept };
-                        }, function () {
-                            return new Promise(function (res) { setTimeout(res, 1200); }).then(function () { return writeOwnProfile(result, 1); });
-                        });
-                    }
-                    // Two games finishing within the cooldown, or the clock ticking over midnight UTC.
-                    if ((attempt || 0) < 2) return new Promise(function (res) { setTimeout(res, attempt ? 9000 : 1200); }).then(function () { return writeOwnProfile(result, (attempt || 0) + 1); });
-                    throw err;
+                        return ref.set(plain).then(function () { return done(older, Object.assign({}, older.profile, { perfect: 0, claims: 0, claimed: {} }), true); });
+                    }).catch(function () {
+                        // Two games finishing within the cooldown, or the clock ticking over midnight UTC.
+                        if ((attempt || 0) < 2) return new Promise(function (res) { setTimeout(res, attempt ? 9000 : 1200); }).then(function () { return writeOwnProfile(result, (attempt || 0) + 1); });
+                        throw err;
+                    });
                 });
             });
         }
@@ -455,6 +461,20 @@
          * Otherwise (no game server deployed): update my own profile inside the rule limits.
          */
         function award(result) {
+            return awardNow(result).then(function (a) { noteBonus(a); return a; });
+        }
+        /**
+         * Are the 1.9 bonuses (chest, quests, win streak…) being paid here? Not while the database
+         * is on older rules, or an older referee is doing the scoring — the Play page then leaves
+         * its "Today" card out rather than promise XP that will not arrive. Known from the last
+         * game saved on this device.
+         */
+        function noteBonus(a) {
+            if (!a || a.pending) return;
+            writeJson('gg_games_bonus_off', a.mode === 'client' ? !!a.legacy : !a.bonus);
+        }
+        function bonusOff() { return readJson('gg_games_bonus_off', false) === true; }
+        function awardNow(result) {
             var u = me();
             return Promise.all([serverAlive(), loadProfile(u.uid)]).then(function (r) {
                 var before = r[1] || {};
@@ -469,7 +489,12 @@
                 }).then(function (after) {
                     if (!after) return { mode: 'server', pending: true, gained: 0, newBadges: [], profile: before };
                     var fresh = Object.keys(after.badges || {}).filter(function (id) { return !(before.badges || {})[id]; });
-                    return { mode: 'server', gained: (after.xp || 0) - (before.xp || 0), newBadges: fresh, profile: after };
+                    var out = { mode: 'server', gained: (after.xp || 0) - (before.xp || 0), newBadges: fresh, profile: after };
+                    // The referee adds the bonuses itself. Say what they were only when my own sum
+                    // comes to exactly what it paid (an older referee pays the game's XP alone).
+                    var mine = core.applyResult(r[1], Object.assign({}, result, { name: u.name }), now());
+                    if (mine.gained === out.gained) { out.base = mine.base; out.bonus = mine.bonus; }
+                    return out;
                 });
             });
         }
@@ -504,7 +529,7 @@
         function leaderboard(limit) {
             return db.ref('games/profiles').orderByChild('xp').limitToLast(limit || 50).once('value').then(function (snap) {
                 var rows = [];
-                snap.forEach(function (c) { var p = c.val() || {}; rows.push({ uid: c.key, name: core.cleanName(p.name), xp: p.xp || 0, wins: p.wins || 0, played: p.played || 0, streak: p.streak || 0 }); });
+                snap.forEach(function (c) { var p = c.val() || {}; rows.push({ uid: c.key, name: core.cleanName(p.name), xp: p.xp || 0, wins: p.wins || 0, played: p.played || 0, streak: p.streak || 0, winStreak: p.winStreak || 0 }); });
                 return rows.sort(function (a, b) { return (b.xp - a.xp) || (a.uid < b.uid ? -1 : 1); });
             });
         }
@@ -513,7 +538,7 @@
             var q = db.ref('games/profiles').orderByChild('xp').limitToLast(limit || 50);
             var h = q.on('value', function (snap) {
                 var rows = [];
-                snap.forEach(function (c) { var p = c.val() || {}; rows.push({ uid: c.key, name: core.cleanName(p.name), xp: p.xp || 0, wins: p.wins || 0, played: p.played || 0, streak: p.streak || 0 }); });
+                snap.forEach(function (c) { var p = c.val() || {}; rows.push({ uid: c.key, name: core.cleanName(p.name), xp: p.xp || 0, wins: p.wins || 0, played: p.played || 0, streak: p.streak || 0, winStreak: p.winStreak || 0 }); });
                 onRows(rows.sort(function (a, b) { return (b.xp - a.xp) || (a.uid < b.uid ? -1 : 1); }));
             }, function () { onRows(null); });
             return function () { q.off('value', h); };
@@ -532,7 +557,7 @@
         }
         function profilesOf(uids) {
             return Promise.all(uids.map(function (uid) {
-                return loadProfile(uid).then(function (p) { return p ? { uid: uid, name: core.cleanName(p.name), xp: p.xp || 0, wins: p.wins || 0, played: p.played || 0, streak: p.streak || 0 } : null; }, function () { return null; });
+                return loadProfile(uid).then(function (p) { return p ? { uid: uid, name: core.cleanName(p.name), xp: p.xp || 0, wins: p.wins || 0, played: p.played || 0, streak: p.streak || 0, winStreak: p.winStreak || 0 } : null; }, function () { return null; });
             })).then(function (rows) { return rows.filter(Boolean).sort(function (a, b) { return b.xp - a.xp; }); });
         }
 
@@ -905,7 +930,7 @@
                 // In the background: the question history of everyone at the table (mine too — I
                 // may have played on another device). Fetched afresh once for each room.
                 var game = this.game, asked = this._seenAsked || (this._seenAsked = {});
-                this.seated().forEach(function (uid) { if (!asked[uid]) { asked[uid] = true; loadSeen(uid, game, true); } });
+                this.seated().forEach(function (uid) { if (!asked[uid]) { asked[uid] = true; loadSeen(uid, game, true); loadFlame(uid); } });
                 // Quick-match rooms start themselves as soon as the second player sits down.
                 if (room.meta.public && room.meta.hostUid === this.uid && this.seated().length >= 2) this.start();
             } else {
@@ -918,7 +943,9 @@
                 var clock = now();
                 // The game has begun: it is no longer one of "my games" waiting to be played.
                 if (!this._forgotten) { this._forgotten = true; forget(this.roomId); }
-                for (var r = 0; r <= upTo; r++) this._watchRound(r, 0, clock >= tl.rounds[r].nominalEnd);
+                // ("No answer" may be handed in once a round's full time has run out — or at once for
+                // the round an opponent's leaving cut short: that game is over, there is nothing to wait for.)
+                for (var r = 0; r <= upTo; r++) this._watchRound(r, 0, clock >= tl.rounds[r].nominalEnd || !!tl.rounds[r].cut);
                 if (asking && this._mine[view.round] === undefined && !this._probed[view.round]) {
                     // After a reload mid-round: did I already answer this one (from here or another tab)?
                     this._probed[view.round] = 'pending';
@@ -1000,7 +1027,7 @@
             createRoom: createRoom, joinRoom: joinRoom, joinByCode: joinByCode, leaveRoom: leaveRoom,
             quickMatch: quickMatch, quickWaiting: quickWaiting, stopWaiting: stopWaiting,
             openRoom: function (roomId) { return new RoomSession(roomId).open(); },
-            serverAlive: serverAlive, loadProfile: loadProfile, award: award, claimBadge: claimBadge, leaderboard: leaderboard, profilesOf: profilesOf,
+            serverAlive: serverAlive, loadProfile: loadProfile, flameOf: flameOf, bonusOff: bonusOff, award: award, claimBadge: claimBadge, leaderboard: leaderboard, profilesOf: profilesOf,
             watchLeaderboard: watchLeaderboard, watchDailyBoard: watchDailyBoard, myGames: myGames, cancelRoom: cancelRoom, forgetGame: forget, KEEP_MS: KEEP_MS,
             dailyStatus: dailyStatus, dailyStart: dailyStart, dailyFinish: dailyFinish, dailyBoard: dailyBoard, startRun: startRun,
             sendInvite: sendInvite, respondInvite: respondInvite, dismissInvite: dismissInvite, cancelInvite: cancelInvite,

@@ -120,6 +120,16 @@
 
     function isDayString(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s); }
 
+    /** A real calendar day ("YYYY-MM-DD", year 1000 or later) as a whole number of days — or null. */
+    function dayIndex(day) {
+        if (!isDayString(day)) return null;
+        var p = day.split('-'), y = +p[0], m = +p[1], d = +p[2];
+        if (y < 1000) return null;
+        var t = new Date(Date.UTC(y, m - 1, d));
+        if (t.getUTCFullYear() !== y || t.getUTCMonth() !== m - 1 || t.getUTCDate() !== d) return null;
+        return Math.round(t.getTime() / DAY_MS);
+    }
+
     /** Room codes: 5 characters, no look-alikes (0/O, 1/I/L). */
     var CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
     function makeCode(random) {
@@ -394,9 +404,11 @@
             while (pi < P.length && P[pi].s < start) pi++;
             while (pi < P.length && P[pi].s < nominal) { held.push(P[pi]); nominal += P[pi].e - P[pi].s; pi++; }
             var end = uids.length ? roundEnd(room, uids, r, start, nominal) : nominal;
-            if (alone !== null && alone < end) end = alone;
+            // `cut`: the game ended in the middle of this round — the last opponent left.
+            var cut = alone !== null && alone < end;
+            if (cut) end = alone;
             held = held.filter(function (p) { return p.s < end; }); // called after everyone had answered: too late to matter
-            rounds.push({ start: start, end: end, nominalEnd: nominal, pauses: held });
+            rounds.push({ start: start, end: end, nominalEnd: nominal, pauses: held, cut: cut });
             start = end + reveal;
         }
         return { rounds: rounds, startsAt: plan.startedAt + COUNTDOWN_MS, finishedAt: start, duration: D, reveal: reveal };
@@ -570,15 +582,126 @@
     }
 
     function emptyProfile(name) {
-        return { name: cleanName(name), xp: 0, played: 0, wins: 0, dailies: 0, streak: 0, bestStreak: 0, lastDay: '', dayNum: 0, dayXp: 0, perfect: 0, claims: 0, badges: {}, claimed: {}, games: {} };
+        return { name: cleanName(name), xp: 0, played: 0, wins: 0, dailies: 0, streak: 0, bestStreak: 0, lastDay: '', dayNum: 0, dayXp: 0, perfect: 0, claims: 0, winStreak: 0, freezes: 0, badges: {}, claimed: {}, games: {} };
+    }
+
+    // ---------- coming back every day (1.9): chest, grace days, quests, win streak, welcome back ----------
+    //
+    // All of it is worked out here, from the profile and the finished game alone — so the web
+    // app, the Android app and the referee always agree, and a game's bonus is written in the
+    // same single write as the game itself.
+
+    /** Bonus XP one game may carry on top of its own XP (the database allows one write 400 at most). */
+    var XP_BONUS_CAP = 200;
+    /** Daily chest: opened by the first game of the day; grows with the day streak. */
+    var CHEST_BASE = 10, CHEST_STEP = 5, CHEST_MAX = 50;
+    /** Winning games against other players in a row: +10 for the 2nd, +20 for the 3rd… */
+    var WIN_STREAK_STEP = 10, WIN_STREAK_MAX = 40;
+    /** Back after three whole days (or more) without a game: that game's own XP is doubled. */
+    var COMEBACK_GAP_DAYS = 4;
+    /** A grace day is earned on every 7th day of a streak; two can be kept. One missed day uses one. */
+    var FREEZE_EVERY = 7, FREEZE_MAX = 2;
+    var QUEST_XP = 15, QUEST_ALL_XP = 30;
+
+    function chestXp(streak) { return Math.min(CHEST_MAX, CHEST_BASE + CHEST_STEP * Math.max(0, streak - 1)); }
+    function winStreakXp(n) { return n >= 2 ? Math.min(WIN_STREAK_MAX, WIN_STREAK_STEP * (n - 1)) : 0; }
+
+    var QUEST_A = [['play', 2], ['play', 3], ['right', 10], ['right', 15]];
+    var QUEST_B = ['game', 'daily', 'variety'];
+    var QUEST_C = ['great', 'flawless', 'multi', 'great'];
+    /**
+     * The three quests of a day — the same for everyone, worked out from the date:
+     *   [{ slot: 'a'|'b'|'c', kind, target, game, text }]
+     * a: an easy one (play / answer), b: something particular (a game, the Daily Challenge, two
+     * different games), c: a stretch (80%, every answer right, or a game with someone else).
+     */
+    function questsFor(day) {
+        if (dayIndex(day) === null) return [];
+        var h = hash('quests:' + day);
+        var a = QUEST_A[h % 4], b = QUEST_B[floorDiv(h, 4) % 3], g = GAME_IDS[floorDiv(h, 12) % 5], c = QUEST_C[floorDiv(h, 60) % 4];
+        var list = [
+            { slot: 'a', kind: a[0], target: a[1], game: '' },
+            { slot: 'b', kind: b, target: b === 'variety' ? 2 : 1, game: b === 'game' ? g : '' },
+            { slot: 'c', kind: c, target: 1, game: '' }
+        ];
+        list.forEach(function (q) { q.text = questText(q); });
+        return list;
+    }
+    function questText(q) {
+        switch (q.kind) {
+            case 'play': return 'Play ' + q.target + ' games';
+            case 'right': return 'Get ' + q.target + ' answers right';
+            case 'game': return 'Play ' + GAMES[q.game].name;
+            case 'daily': return 'Finish today’s Daily Challenge';
+            case 'variety': return 'Play 2 different games';
+            case 'great': return 'Get at least 80% right in one game';
+            case 'flawless': return 'Finish a game with every answer right';
+            case 'multi': return 'Play a game with someone else';
+        }
+        return '';
+    }
+    function bitCount(n) { var c = 0; n = (n || 0) >>> 0; while (n) { c += n & 1; n >>>= 1; } return c; }
+    /** How far a quest has got (0…target) from its stored number. */
+    function questCount(q, v) { return Math.min(q.target, q.kind === 'variety' ? bitCount(v) : (v || 0)); }
+    /** A quest's stored number after one more finished game. */
+    function questAdvance(q, v, r) {
+        var units = Math.max(0, +r.units || 0), total = +r.totalUnits || 0, i;
+        switch (q.kind) {
+            case 'play': return Math.min(9999, v + 1);
+            case 'right': return Math.min(9999, v + units);
+            case 'game': return !r.daily && r.game === q.game ? 1 : v;
+            case 'daily': return r.daily ? 1 : v;
+            case 'variety': i = GAME_IDS.indexOf(r.game); return !r.daily && i >= 0 ? (v | (1 << i)) : v;
+            case 'great': return total >= 5 && units * 5 >= total * 4 ? 1 : v;
+            case 'flawless': return total >= 5 && units >= total ? 1 : v;
+            case 'multi': return r.multiplayer ? 1 : v;
+        }
+        return v;
+    }
+    function wholeIn(v, lo, hi) { var n = Math.floor(+v || 0); return Math.max(lo, Math.min(hi, n)); }
+    /** A profile's stored quest record, cleaned — or null. */
+    function questRecord(raw) {
+        if (!raw || typeof raw !== 'object' || dayIndex(raw.day) === null) return null;
+        return { day: raw.day, a: wholeIn(raw.a, 0, 9999), b: wholeIn(raw.b, 0, 9999), c: wholeIn(raw.c, 0, 9999), done: wholeIn(raw.done, 0, 15) };
+    }
+
+    /**
+     * What the Play page shows for `day` (the player's own calendar day):
+     *   { streak, freezes, winStreak, playedToday, streakAtRisk, graceWillSave,
+     *     chest: { opened, xp }, comeback, quests: [{ …quest, count, done }], questsDone, allDone }
+     */
+    function habitState(profile, day) {
+        var p = profile && typeof profile === 'object' ? profile : {};
+        var streak = wholeIn(p.streak, 0, 1e9), freezes = wholeIn(p.freezes, 0, FREEZE_MAX), lastDay = typeof p.lastDay === 'string' ? p.lastDay : '';
+        var today = dayIndex(day), last = dayIndex(lastDay), gap = today !== null && last !== null ? today - last : null;
+        var playedToday = today !== null && lastDay === day;
+        var carries = gap === 1, saved = gap === 2 && freezes > 0 && streak > 0;
+        var next = carries || saved ? streak + 1 : 1;
+        var rec = questRecord(p.quests), mine = rec && rec.day === day ? rec : { a: 0, b: 0, c: 0, done: 0 };
+        var quests = questsFor(day).map(function (q, i) {
+            var count = questCount(q, mine[q.slot]);
+            return { slot: q.slot, kind: q.kind, target: q.target, game: q.game, text: q.text, count: count, done: !!(mine.done & (1 << i)) || count >= q.target };
+        });
+        return {
+            streak: playedToday || carries || saved ? streak : 0, freezes: freezes, winStreak: wholeIn(p.winStreak, 0, 1e9),
+            playedToday: playedToday, streakAtRisk: !playedToday && (carries || saved) && streak > 0, graceWillSave: !playedToday && saved,
+            chest: { opened: playedToday || today === null || (gap !== null && gap < 0), xp: chestXp(next) },
+            comeback: gap !== null && gap >= COMEBACK_GAP_DAYS && (+p.played || 0) > 0,
+            quests: quests, questsDone: quests.filter(function (q) { return q.done; }).length, allDone: quests.length > 0 && quests.every(function (q) { return q.done; })
+        };
     }
 
     /**
      * Folds one finished game into a profile. `result`:
      *   { game, units, totalUnits, win, multiplayer, daily, day:'YYYY-MM-DD', minGuesses, score, name }
-     * Returns { profile, gained, newBadges } and never mutates its input.
+     * Returns { profile, gained, newBadges, base, bonus } and never mutates its input.
+     *   base  = the game's own XP that was added; gained = base + the bonuses below
+     *   bonus = { chest, comeback, winStreak, quests: [slot…], questXp, questAll, freezeUsed, freezeEarned, total }
+     * `opts.legacy`: exactly what versions before 1.9 did — no bonuses and none of the newer
+     * fields (for a database whose rules have not been updated yet).
      */
-    function applyResult(profile, result, nowMs) {
+    function applyResult(profile, result, nowMs, opts) {
+        var legacy = !!(opts && opts.legacy);
         var p = profile && typeof profile === 'object' ? profile : {};
         var out = {
             name: cleanName(result.name || p.name), xp: +p.xp || 0, played: +p.played || 0, wins: +p.wins || 0, dailies: +p.dailies || 0,
@@ -593,10 +716,60 @@
             out.games[k] = { played: +g0.played || 0, wins: +g0.wins || 0, best: +g0.best || 0 };
         }
 
+        var bonus = { chest: 0, comeback: 0, winStreak: 0, quests: [], questXp: 0, questAll: false, freezeUsed: false, freezeEarned: false, total: 0 };
+        var ownXp = xpFor(result);
+        if (!legacy) {
+            out.winStreak = wholeIn(p.winStreak, 0, 1e9);
+            out.freezes = wholeIn(p.freezes, 0, FREEZE_MAX);
+            var record = questRecord(p.quests);
+            if (record) out.quests = record;
+        }
+
+        // Day streak (the player's local calendar day) — first, because the chest grows with it.
+        var today = dayIndex(result.day), last = dayIndex(out.lastDay), gap = today !== null && last !== null ? today - last : null;
+        // (A date earlier than the last one played changes nothing: the calendar only goes forwards.)
+        if (isDayString(result.day) && result.day !== out.lastDay && !(gap !== null && gap < 0)) {
+            var hadDay = isDayString(out.lastDay);
+            if (out.lastDay === previousDay(result.day)) out.streak += 1;
+            else if (!legacy && gap === 2 && out.freezes > 0 && out.streak > 0) { out.streak += 1; out.freezes -= 1; bonus.freezeUsed = true; } // one missed day, covered by a grace day
+            else out.streak = 1;
+            out.lastDay = result.day;
+            // Bonuses only ever follow the calendar forwards (a day cannot be collected twice).
+            if (!legacy && today !== null && (gap === null ? !hadDay : gap > 0)) {
+                if (out.streak % FREEZE_EVERY === 0 && out.freezes < FREEZE_MAX) { out.freezes += 1; bonus.freezeEarned = true; }
+                bonus.chest = chestXp(out.streak);
+                if (gap !== null && gap >= COMEBACK_GAP_DAYS && (+p.played || 0) > 0) bonus.comeback = ownXp;
+            }
+        } else if (out.streak < 1) out.streak = 1;
+        if (out.streak > out.bestStreak) out.bestStreak = out.streak;
+
+        if (!legacy) {
+            // Wins against other players in a row.
+            if (result.multiplayer) {
+                out.winStreak = result.win ? out.winStreak + 1 : 0;
+                if (result.win) bonus.winStreak = winStreakXp(out.winStreak);
+            }
+            // Today's three quests.
+            if (today !== null) {
+                var qs = out.quests;
+                if (!qs || dayIndex(qs.day) < today) qs = { day: result.day, a: 0, b: 0, c: 0, done: 0 };
+                if (qs.day === result.day) {
+                    qs = { day: qs.day, a: qs.a, b: qs.b, c: qs.c, done: qs.done };
+                    questsFor(result.day).forEach(function (q, i) {
+                        qs[q.slot] = questAdvance(q, qs[q.slot], result);
+                        if (questCount(q, qs[q.slot]) >= q.target && !(qs.done & (1 << i))) { qs.done |= (1 << i); bonus.quests.push(q.slot); bonus.questXp += QUEST_XP; }
+                    });
+                    if ((qs.done & 7) === 7 && !(qs.done & 8)) { qs.done |= 8; bonus.questAll = true; bonus.questXp += QUEST_ALL_XP; }
+                    out.quests = qs;
+                }
+            }
+            bonus.total = Math.min(XP_BONUS_CAP, bonus.chest + bonus.comeback + bonus.winStreak + bonus.questXp);
+        }
+
         // XP, inside the UTC-day cap.
         var dayNum = Math.floor(nowMs / DAY_MS);
         var dayXp = out.dayNum === dayNum ? out.dayXp : 0;
-        var gained = Math.max(0, Math.min(xpFor(result), XP_DAY_CAP - dayXp));
+        var gained = Math.max(0, Math.min(ownXp + bonus.total, XP_DAY_CAP - dayXp));
         out.xp += gained; out.dayNum = dayNum; out.dayXp = dayXp + gained;
 
         // Stats.
@@ -611,13 +784,6 @@
         if (result.win && result.multiplayer) gs.wins += 1;
         if ((+result.score || 0) > gs.best) gs.best = +result.score || 0;
         out.games[key] = gs;
-
-        // Day streak (the player's local calendar day).
-        if (isDayString(result.day) && result.day !== out.lastDay) {
-            out.streak = out.lastDay === previousDay(result.day) ? out.streak + 1 : 1;
-            out.lastDay = result.day;
-        } else if (out.streak < 1) out.streak = 1;
-        if (out.streak > out.bestStreak) out.bestStreak = out.streak;
 
         // Badges.
         var newBadges = [];
@@ -659,7 +825,7 @@
         grant('word_quick', result.game === 'wordle' && !result.daily && result.minGuesses > 0 && result.minGuesses <= 2);
         GAME_IDS.forEach(function (id) { grant(id + '_10', !!out.games[id] && out.games[id].played >= 10); });
 
-        return { profile: out, gained: gained, newBadges: newBadges };
+        return { profile: out, gained: gained, newBadges: newBadges, base: Math.min(ownXp, gained), bonus: bonus };
     }
 
     function badgeById(id) { for (var i = 0; i < BADGES.length; i++) if (BADGES[i].id === id) return BADGES[i]; return null; }
@@ -698,6 +864,8 @@
         timeline: timeline, phaseAt: phaseAt, pointsFor: pointsFor, seatedPlayers: seatedPlayers, scoreRoom: scoreRoom, scoreDaily: scoreDaily,
         xpFor: xpFor, level: level, xpForLevel: xpForLevel, levelTitle: levelTitle, emptyProfile: emptyProfile, applyResult: applyResult,
         BADGE_XP_MAX: BADGE_XP_MAX, badgeById: badgeById, claimable: claimable, claimBadge: claimBadge,
+        XP_BONUS_CAP: XP_BONUS_CAP, CHEST_MAX: CHEST_MAX, WIN_STREAK_MAX: WIN_STREAK_MAX, COMEBACK_GAP_DAYS: COMEBACK_GAP_DAYS, FREEZE_EVERY: FREEZE_EVERY, FREEZE_MAX: FREEZE_MAX,
+        QUEST_XP: QUEST_XP, QUEST_ALL_XP: QUEST_ALL_XP, dayIndex: dayIndex, chestXp: chestXp, winStreakXp: winStreakXp, questsFor: questsFor, questCount: questCount, habitState: habitState,
         PAUSE_MAX_MS: PAUSE_MAX_MS, MAX_PAUSES: MAX_PAUSES, pausesOf: pausesOf, activeMs: activeMs
     };
 });

@@ -520,3 +520,48 @@
 .pl-score-name small { font-size: 11px; font-weight: 500; color: var(--text-slate); margin-left: 4px; white-space: nowrap; }
 .pl-forfeit-note { margin-top: 8px; font-size: 13px; font-weight: 600; opacity: 0.95; }
 @media (prefers-reduced-motion: reduce) { .pl-net { animation: none; } }
+
+/* ---------- 1.9: Today (chest, streak, grace days, quests), bonus XP, win-streak flame, near miss ---------- */
+.pl-habit { padding: 14px 16px; margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.pl-habit-top { display: flex; align-items: stretch; gap: 10px; }
+.pl-chest { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--radius-md); background: rgba(199, 166, 90, 0.18); border: 1px solid rgba(199, 166, 90, 0.5); color: var(--text-charcoal); }
+.pl-chest-icon { width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; background: var(--accent-muted-gold); color: #fff; animation: pl-pop 0.6s ease 1; }
+.pl-chest strong { display: block; font-size: 14px; line-height: 1.3; }
+.pl-chest small { display: block; font-size: 12px; color: var(--text-slate); line-height: 1.35; }
+.pl-chest-open { background: var(--pl-soft); border-color: var(--pl-line); }
+.pl-chest-open .pl-chest-icon { background: var(--secondary-sage); animation: none; }
+.pl-habit-streak, .pl-habit-grace { flex-shrink: 0; min-width: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 6px 8px; border-radius: var(--radius-md); background: var(--pl-soft); border: 1px solid var(--pl-line); color: var(--text-charcoal); font: inherit; }
+.pl-habit-grace { cursor: pointer; }
+.pl-habit-streak i { color: var(--accent-terracotta); font-size: 15px; }
+.pl-habit-grace i { color: #4A90C2; font-size: 15px; }
+.pl-habit-streak strong, .pl-habit-grace strong { font-size: 16px; line-height: 1.1; }
+.pl-habit-streak small, .pl-habit-grace small { font-size: 10px; color: var(--text-slate); }
+.pl-habit-note { font-size: 13px; line-height: 1.45; color: var(--text-charcoal); }
+.pl-habit-note i { color: var(--accent-terracotta); margin-right: 4px; }
+.pl-habit-note .fa-snowflake { color: #4A90C2; }
+.pl-habit-welcome { padding: 10px 12px; border-radius: var(--radius-md); background: rgba(199, 166, 90, 0.18); border: 1px solid rgba(199, 166, 90, 0.5); }
+.pl-habit-welcome i { color: var(--gold-dark); }
+.pl-habit-title { font-size: 14px; font-weight: 700; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; color: var(--text-charcoal); }
+.pl-habit-title span { font-size: 12px; font-weight: 500; color: var(--text-slate); }
+.pl-quest { display: flex; align-items: center; gap: 10px; }
+.pl-quest > i { font-size: 16px; color: var(--text-slate); opacity: 0.45; flex-shrink: 0; }
+.pl-quest-done > i { opacity: 1; }
+.pl-quest-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--text-charcoal); }
+.pl-quest .pl-xpbar { background: var(--pl-soft); height: 6px; }
+.pl-quest > small { font-size: 12px; font-weight: 700; color: var(--text-slate); white-space: nowrap; }
+.pl-quest-done > i { color: var(--secondary-sage); }
+.pl-quest-done .pl-quest-main span { text-decoration: line-through; opacity: 0.7; }
+.pl-quest-done > small { color: var(--gold-dark); }
+[data-theme="dark"] .pl-quest-done > small, [data-theme="dark"] .pl-habit-welcome i { color: var(--gold-light); }
+
+.pl-bonus { list-style: none; margin: 8px 0 0; padding: 8px 0 0; border-top: 1px dashed var(--pl-line); display: flex; flex-direction: column; gap: 6px; }
+.pl-bonus li { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-charcoal); }
+.pl-bonus li i { width: 16px; text-align: center; color: var(--gold-dark); flex-shrink: 0; }
+.pl-bonus li .fa-snowflake { color: #4A90C2; }
+.pl-bonus li span { flex: 1; min-width: 0; }
+.pl-bonus li b { font-weight: 700; color: var(--gold-dark); white-space: nowrap; }
+[data-theme="dark"] .pl-bonus li i, [data-theme="dark"] .pl-bonus li b { color: var(--gold-light); }
+
+.pl-flame { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; font-weight: 700; color: var(--accent-terracotta); white-space: nowrap; }
+.pl-flame i { font-size: 11px; }
+.pl-near-miss { margin-top: 8px; font-size: 13px; font-weight: 600; opacity: 0.95; }

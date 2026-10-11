@@ -167,10 +167,57 @@
             '<div class="pl-streak" title="Days played in a row"><i class="fas fa-fire"></i><strong>' + (p.streak || 0) + '</strong></div>' + HOW_TO_PLAY_ICON + '</div>';
     }
 
+    /** A flame beside a player's name: wins against other players in a row (two or more). */
+    function flameHtml(n) {
+        return n >= 2 ? ' <span class="pl-flame" title="' + n + ' wins in a row"><i class="fas fa-fire"></i>' + n + '</span>' : '';
+    }
+
+    /**
+     * "Today" (1.9): the day's chest, the streak and its grace days, the three quests, and a
+     * welcome back. Everything here is worked out by the shared engine (Core.habitState), which
+     * is also what pays it — so the card can never promise something the game does not give.
+     */
+    function habitCard(profile) {
+        // (Left out while the database cannot pay the bonuses yet — see bonusOff in games-net.js.)
+        if (!user() || getNet().bonusOff()) return '';
+        var h = Core.habitState(profile, today());
+        if (!h.quests.length) return '';
+        var tomorrow = Core.chestXp(h.streak + 1);
+        var chest = h.chest.opened
+            ? '<div class="pl-chest pl-chest-open"><span class="pl-chest-icon"><i class="fas fa-box-open"></i></span><div><strong>Daily chest opened</strong><small>Come back tomorrow for +' + tomorrow + ' XP</small></div></div>'
+            : '<div class="pl-chest"><span class="pl-chest-icon"><i class="fas fa-gift"></i></span><div><strong>Daily chest · +' + h.chest.xp + ' XP</strong><small>Opens with your first game today</small></div></div>';
+        var streak = '<div class="pl-habit-streak" title="Days played in a row"><i class="fas fa-fire"></i><strong>' + h.streak + '</strong><small>day' + (h.streak === 1 ? '' : 's') + '</small></div>' +
+            '<button type="button" class="pl-habit-grace" id="pl-grace-info" aria-label="Grace days"><i class="fas fa-snowflake"></i><strong>' + h.freezes + '</strong><small>grace</small></button>';
+        var note = h.comeback ? '<p class="pl-habit-note pl-habit-welcome"><i class="fas fa-hands-clapping"></i> Welcome back! Your first game today earns <strong>double XP</strong>.</p>'
+            : h.graceWillSave ? '<p class="pl-habit-note"><i class="fas fa-snowflake"></i> You missed yesterday — play today and a grace day keeps your ' + h.streak + '-day streak.</p>'
+            : h.streakAtRisk ? '<p class="pl-habit-note"><i class="fas fa-fire"></i> Play today to keep your ' + h.streak + '-day streak.</p>' : '';
+        var wins = h.winStreak >= 1 ? '<p class="pl-habit-note"><i class="fas fa-fire"></i> ' + (h.winStreak === 1 ? '1 win' : h.winStreak + ' wins in a row') + ' against other players — your next win earns +' + Core.winStreakXp(h.winStreak + 1) + ' XP.</p>' : '';
+        var quests = h.quests.map(function (q) {
+            return '<div class="pl-quest' + (q.done ? ' pl-quest-done' : '') + '"><i class="fas ' + (q.done ? 'fa-circle-check' : 'fa-circle') + '"></i>' +
+                '<div class="pl-quest-main"><span>' + esc(q.text) + '</span><div class="pl-xpbar"><div class="pl-xpbar-fill" style="width:' + Math.round(100 * q.count / q.target) + '%"></div></div></div>' +
+                '<small>' + (q.done ? '+' + Core.QUEST_XP + ' XP' : q.count + '/' + q.target) + '</small></div>';
+        }).join('');
+        return '<div class="card pl-habit" id="pl-habit"><div class="pl-habit-top">' + chest + streak + '</div>' + note +
+            '<h4 class="pl-habit-title">Today’s quests <span>' + h.questsDone + '/3 · +' + Core.QUEST_XP + ' XP each' + (h.allDone ? ' · all done!' : ', +' + Core.QUEST_ALL_XP + ' for all three') + '</span></h4>' + quests + wins + '</div>';
+    }
+    function showGraceInfo() {
+        showModal('<h3 style="margin-bottom:8px;"><i class="fas fa-snowflake"></i> Grace days</h3>' +
+            '<p class="text-muted" style="margin-bottom:10px;">Life happens. If you miss <strong>one</strong> day, a grace day keeps your streak alive — it is used by itself the next time you play.</p>' +
+            '<p class="text-muted" style="margin-bottom:16px;">You earn one on every ' + Core.FREEZE_EVERY + 'th day of a streak and can keep up to ' + Core.FREEZE_MAX + '. Missing two days in a row starts the streak again.</p>' +
+            '<button class="btn btn-primary btn-block" onclick="closeModal()">Got it</button>');
+    }
+    function fillHabit(profile) {
+        var slot = $id('pl-habit-slot');
+        if (!slot) return;
+        slot.innerHTML = habitCard(profile);
+        if ($id('pl-grace-info')) $id('pl-grace-info').onclick = showGraceInfo;
+    }
+
     function renderHub() {
         var u = user();
         page(
             '<div id="pl-level-slot">' + levelCard(profileCache) + '</div>' +
+            '<div id="pl-habit-slot"></div>' +
             // Bible first: the games sit under an invitation to read.
             '<div class="pl-word-first"><i class="fas fa-book-bible"></i><span>The Word comes first. <a href="#/bible">Read today</a> · <a href="#/devotional">Devotional</a></span></div>' +
             '<div class="pl-daily" id="pl-daily-card" onclick="GamesUI.go(\'daily\')"><div class="pl-daily-icon"><i class="fas fa-calendar-day"></i></div>' +
@@ -185,6 +232,7 @@
             '<div class="pl-row-links"><button class="btn btn-outline btn-sm" onclick="GamesUI.go(\'leaderboard\')"><i class="fas fa-ranking-star"></i> Leaderboard</button>' +
             '<button class="btn btn-outline btn-sm" onclick="GamesUI.showBadges()"><i class="fas fa-award"></i> Badges</button></div>' +
             '<div id="pl-mine-slot"></div><div id="pl-top-slot"></div>');
+        fillHabit(profileCache);
         maybeShowTour();
         var input = $id('pl-code-input');
         input.addEventListener('keydown', function (e) { if (e.key === 'Enter') joinTyped(); });
@@ -194,6 +242,7 @@
         n.loadProfile(u.uid).then(function (p) {
             profileCache = p;
             var slot = $id('pl-level-slot'); if (slot) slot.innerHTML = levelCard(p);
+            fillHabit(p);
         }).catch(function () {});
         n.dailyStatus(today()).then(function (run) {
             var sub = $id('pl-daily-sub'), card = $id('pl-daily-card');
@@ -385,7 +434,7 @@
             if (!live.stage) {
                 if (AppState.sheetOpen && typeof closeSheet === 'function') closeSheet(); // e.g. the invite list, still open when the game starts
                 box.innerHTML = '<div id="pl-stage-box"></div><button class="btn btn-outline btn-sm pl-leave" id="pl-leave"><i class="fas fa-person-walking-arrow-right"></i> Leave game</button>';
-                live.stage = Play.mount($id('pl-stage-box'), s, { names: function (uid) { return nameOf(uid, (s.room.players[uid] || {}).name); } });
+                live.stage = Play.mount($id('pl-stage-box'), s, { names: function (uid) { return nameOf(uid, (s.room.players[uid] || {}).name); }, flameOf: function (uid) { return getNet().flameOf(uid); } });
                 $id('pl-leave').onclick = confirmLeave;
             }
             lastPhase = view.phase;
@@ -410,7 +459,8 @@
         // Seated but not in the room yet: "Connecting…" for the first moments after joining, "Away" after that.
         var clock = getNet().now();
         var stateOf = function (uid) { var p = view.room.players[uid]; return p.online !== false ? '+' : (clock - (p.joinedAt || 0) < 20000 ? 'c' : '-'); };
-        var key = 'lobby:' + seated.map(function (u) { return u + stateOf(u); }).join(',') + ':' + view.canStart + ':' + !!auto + ':' + (auto ? auto.invited || 0 : '') + ':' + (waitingFor ? waitingFor.join(',') : '');
+        var flame = function (uid) { return getNet().flameOf(uid); };
+        var key = 'lobby:' + seated.map(function (u) { return u + stateOf(u) + flame(u); }).join(',') + ':' + view.canStart + ':' + !!auto + ':' + (auto ? auto.invited || 0 : '') + ':' + (waitingFor ? waitingFor.join(',') : '');
         if (box.getAttribute('data-key') === key) return;
         box.setAttribute('data-key', key);
         var searching = meta.public && seated.length < 2;
@@ -427,7 +477,7 @@
             '<h3 class="pl-section">Players <span>' + seated.length + '/' + max + '</span></h3><div class="card pl-players">' + seated.map(function (uid) {
                 var p = view.room.players[uid], st = stateOf(uid);
                 return '<div class="pl-player' + (st === '-' ? ' pl-player-away' : '') + '"><span class="post-avatar pl-avatar">' + esc(nameOf(uid, p.name).charAt(0).toUpperCase()) + '</span>' +
-                    '<span class="pl-player-name">' + esc(nameOf(uid, p.name)) + (uid === s.uid ? ' <small>(you)</small>' : '') + '</span>' +
+                    '<span class="pl-player-name">' + esc(nameOf(uid, p.name)) + (uid === s.uid ? ' <small>(you)</small>' : '') + flameHtml(flame(uid)) + '</span>' +
                     (uid === meta.hostUid ? '<span class="pl-tag">Host</span>' : '') + (st === 'c' ? '<span class="pl-tag pl-tag-away">Connecting…</span>' : st === '-' ? '<span class="pl-tag pl-tag-away">Away</span>' : '') + '</div>';
             }).join('') + '</div>' +
             (waitingFor ? '<div class="pl-searching"><div class="pl-spinner"></div><p>Starting — waiting for ' + esc(waitingFor.map(function (uid) { return nameOf(uid, (view.room.players[uid] || {}).name); }).join(', ')) + ' to connect…</p><small>So everyone starts at the same moment. It begins in a few seconds either way.</small></div>' : '') +
@@ -560,7 +610,40 @@
         }).join('');
         return '<div class="pl-xp-earned"><strong>+' + award.gained + ' XP</strong><span>' + esc(Core.levelTitle(lvl)) + ' · Level ' + lvl + '</span>' +
             '<div class="pl-xpbar"><div class="pl-xpbar-fill" style="width:' + Math.round(100 * ((p.xp || 0) - from) / (to - from)) + '%"></div></div>' +
-            (award.gained === 0 && (p.dayXp || 0) >= Core.XP_DAY_CAP ? '<small>You’ve reached today’s XP limit — well played!</small>' : '') + '</div>' + badges;
+            (award.gained === 0 && (p.dayXp || 0) >= Core.XP_DAY_CAP ? '<small>You’ve reached today’s XP limit — well played!</small>' : '') + bonusHtml(award) + '</div>' + badges;
+    }
+    /** Where the XP came from (1.9): the game itself, then the chest, welcome back, win streak and quests. */
+    function bonusHtml(award) {
+        var b = award.bonus, p = award.profile || {};
+        if (!b || (!b.total && !b.freezeUsed && !b.freezeEarned)) return '';
+        var line = function (icon, text, xp) { return '<li><i class="fas ' + icon + '"></i><span>' + text + '</span>' + (xp ? '<b>+' + xp + '</b>' : '') + '</li>'; };
+        var rows = [];
+        // The amounts are listed only when they add up to what was saved (the day's XP limit can cut a game short).
+        var exact = award.gained === (award.base || 0) + b.total, xp = function (n) { return exact ? n : 0; };
+        if (b.total) rows.push(line('fa-gamepad', 'This game', xp(award.base)));
+        if (b.chest) rows.push(line('fa-gift', 'Daily chest' + (p.streak > 1 ? ' · day ' + p.streak + ' of your streak' : ''), xp(b.chest)));
+        if (b.comeback) rows.push(line('fa-hands-clapping', 'Welcome back — double XP', xp(b.comeback)));
+        if (b.winStreak) rows.push(line('fa-fire', (p.winStreak || 2) + ' wins in a row', xp(b.winStreak)));
+        var quests = Core.questsFor(p.quests && p.quests.day);
+        (b.quests || []).forEach(function (slot) {
+            var q = quests.filter(function (x) { return x.slot === slot; })[0];
+            rows.push(line('fa-circle-check', 'Quest: ' + esc(q ? q.text : 'done'), xp(Core.QUEST_XP)));
+        });
+        if (b.questAll) rows.push(line('fa-star', 'All three quests today', xp(Core.QUEST_ALL_XP)));
+        if (b.freezeUsed) rows.push(line('fa-snowflake', 'A grace day kept your streak alive', 0));
+        if (b.freezeEarned) rows.push(line('fa-snowflake', p.streak + '-day streak — you earned a grace day', 0));
+        return '<ul class="pl-bonus" id="pl-bonus">' + rows.join('') + '</ul>' + (b.total && !exact ? '<small>You’ve reached today’s XP limit.</small>' : '');
+    }
+    /** Lost by a whisker (or one answer short of a clean sheet): say so — it is the best reason to go again. */
+    function nearMiss(res, mine, multi, rounds) {
+        if (!mine || mine.forfeit) return '';
+        if (multi) {
+            if (mine.win) return '';
+            var top = res.byUid[res.ranking[0]], gap = top ? top.score - mine.score : 0;
+            if (!top || top.forfeit || gap <= 0 || !(gap <= 150 || gap * 10 <= top.score)) return '';
+            return 'So close! Only ' + gap + ' point' + (gap === 1 ? '' : 's') + ' behind ' + esc(top.name) + '.';
+        }
+        return rounds >= 5 && mine.correct === rounds - 1 ? 'So close! One answer away from a flawless game.' : '';
     }
 
     /** "From the Word": every question's Scripture, missed ones first, each one tap from the reader. */
@@ -596,16 +679,18 @@
         var headline = !mine ? 'Game over' : mine.forfeit ? 'You left the game' : multi ? (mine.win ? (res.ranking.filter(function (u) { return res.byUid[u].win; }).length > 1 ? 'It’s a tie!' : 'You won! 🎉') : ordinal(mine.rank) + ' place')
             : (mine.units >= res.totalUnits ? 'Flawless! 🌟' : mine.correct ? 'Well played' : 'Good try');
         var rematchRoom = s.room.rematch, canRematch = !s.solo && s.canRematch();
+        var near = nearMiss(res, mine, multi, s.room.plan.rounds);
         box.removeAttribute('data-key');
         box.innerHTML = '<div id="pl-results"><div class="pl-hero pl-game-card-' + s.game + '"><span class="pl-game-icon"><i class="fas ' + g.icon + '"></i></span><h2>' + esc(headline) + '</h2>' +
             (mine ? '<div class="pl-final-score">' + mine.score + '<small> points</small></div><p>' + mine.correct + ' of ' + s.room.plan.rounds + ' correct' + (mine.bestStreak > 1 ? ' · best streak ' + mine.bestStreak : '') + '</p>' : '') +
-            (mine && mine.win && res.byForfeit ? '<p class="pl-forfeit-note"><i class="fas fa-flag"></i> ' + (res.players === 2 ? 'Your opponent left — the win is yours.' : 'Everyone else left — the win is yours.') + '</p>' : '') + '</div>' +
+            (mine && mine.win && res.byForfeit ? '<p class="pl-forfeit-note"><i class="fas fa-flag"></i> ' + (res.players === 2 ? 'Your opponent left — the win is yours.' : 'Everyone else left — the win is yours.') + '</p>' : '') +
+            (near ? '<p class="pl-near-miss" id="pl-near-miss"><i class="fas fa-bolt"></i> ' + near + '</p>' : '') + '</div>' +
             xpHtml(award) +
             (multi ? '<h3 class="pl-section">Final ranking</h3><div class="card pl-board">' + boardRows(res.ranking.map(function (uid) { return { uid: uid, name: res.byUid[uid].name, xp: 0, score: res.byUid[uid].score, forfeit: res.byUid[uid].forfeit }; }), me, function (r) { return r.forfeit ? 'Left' : r.score + ' pts'; }) + '</div>' : '') +
             scriptureHtml(items) +
             '<div class="pl-result-actions">' +
-            (s.solo ? '<button class="btn btn-primary btn-block" id="pl-again"><i class="fas fa-rotate-right"></i> Play again</button>'
-                : '<button class="btn btn-primary btn-block' + (rematchRoom ? ' pl-pulse' : '') + '" id="pl-rematch"' + (rematchRoom ? ' data-room="' + esc(rematchRoom) + '"' : ' data-can="' + canRematch + '"' + (canRematch ? '' : ' disabled')) + '>' +
+            (s.solo ? '<button class="btn btn-primary btn-block' + (near ? ' pl-pulse' : '') + '" id="pl-again"><i class="fas fa-rotate-right"></i> ' + (near ? 'Go again' : 'Play again') + '</button>'
+                : '<button class="btn btn-primary btn-block' + (rematchRoom || (near && canRematch) ? ' pl-pulse' : '') + '" id="pl-rematch"' + (rematchRoom ? ' data-room="' + esc(rematchRoom) + '"' : ' data-can="' + canRematch + '"' + (canRematch ? '' : ' disabled')) + '>' +
                   (rematchRoom ? '<i class="fas fa-rotate-right"></i> Join the rematch' : rematchLabel(canRematch)) + '</button>') +
             '<button class="btn btn-block pl-btn-whatsapp" id="pl-share-result"><i class="fab fa-whatsapp"></i> Challenge a friend</button>' +
             '<button class="btn btn-outline btn-block" onclick="GamesUI.go()">Back to Play &amp; Learn</button></div></div>';

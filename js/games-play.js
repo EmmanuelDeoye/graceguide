@@ -105,6 +105,8 @@
         function dropped(uid) { return typeof session.stale === 'function' ? session.stale(uid) : false; }
 
         function nameOf(uid) { return uid === me ? 'You' : (opts.names ? opts.names(uid) : 'Player'); }
+        /** Wins in a row before this game (a flame beside the name from two up). */
+        function flame(uid) { return opts.flameOf ? opts.flameOf(uid) || 0 : 0; }
 
         function scoreboardHtml(view, upTo) {
             if (view.seated.length < 2) return '';
@@ -120,7 +122,7 @@
                     ? (cfg.type === 'wordle' ? '<span class="pl-score-tick">' + answered[uid] + '/6</span>' : '<i class="fas fa-check pl-score-tick"></i>') : '';
                 return '<div class="pl-score' + (uid === me ? ' pl-score-me' : '') + state + '">' +
                     '<span class="pl-score-rank">' + (res ? i + 1 : '•') + '</span>' +
-                    '<span class="pl-score-name">' + esc(nameOf(uid)) + (typeof p.leftAt === 'number' ? ' <small>left</small>' : state ? ' <small><i class="fas fa-wifi"></i> reconnecting</small>' : '') + '</span>' + tick +
+                    '<span class="pl-score-name">' + esc(nameOf(uid)) + (flame(uid) >= 2 ? ' <span class="pl-flame" title="' + flame(uid) + ' wins in a row"><i class="fas fa-fire"></i>' + flame(uid) + '</span>' : '') + (typeof p.leftAt === 'number' ? ' <small>left</small>' : state ? ' <small><i class="fas fa-wifi"></i> reconnecting</small>' : '') + '</span>' + tick +
                     '<span class="pl-score-pts">' + s + '</span></div>';
             }).join('') + '</div>';
         }
@@ -268,7 +270,7 @@
                 opts.roundLabel || '', view.phase === 'paused' ? view.pauseIndex : ''].join(':');
             // What only the scoreboard shows: who has locked in, and whose connection has dropped.
             var side = view.syncing || view.seated.length < 2 ? '' : JSON.stringify((view.room.answered && view.room.answered[view.round]) || {}) + '|' +
-                view.seated.map(function (uid) { var p = view.room.players[uid] || {}; return typeof p.leftAt === 'number' ? 'L' : (dropped(uid) ? 'A' : '-'); }).join('');
+                view.seated.map(function (uid) { var p = view.room.players[uid] || {}; return (typeof p.leftAt === 'number' ? 'L' : (dropped(uid) ? 'A' : '-')) + flame(uid); }).join('');
             if (k === key && !force) {
                 // Only the scoreboard changed (another player locked in, someone's connection
                 // dropped): redraw just that. Redrawing the whole stage here used to swallow taps —
