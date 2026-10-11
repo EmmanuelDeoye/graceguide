@@ -2187,6 +2187,18 @@
 .app-update-bar .btn { flex-shrink: 0; }
 @keyframes app-update-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 
+/* v1.8 — the three parts of the Spirit Life score, and how it works */
+.faith-parts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 10px 0 4px; }
+.faith-part { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 8px 4px; border-radius: var(--radius-md); background: rgba(48, 72, 58, 0.06); text-align: center; }
+[data-theme="dark"] .faith-part { background: rgba(255, 255, 255, 0.05); }
+.faith-part i { font-size: 12px; color: var(--accent-muted-gold); }
+.faith-part strong { font-size: 16px; line-height: 1.2; color: var(--text-charcoal); font-variant-numeric: tabular-nums; }
+.faith-part small { font-size: 11px; color: var(--text-slate); }
+.faith-how p { font-size: 13px; line-height: 1.5; color: var(--text-slate); margin-bottom: 8px; }
+.faith-how strong { color: var(--text-charcoal); }
+.faith-how i { color: var(--accent-muted-gold); width: 16px; text-align: center; }
+.faith-how { margin-bottom: 12px; }
+
 /* Rising to a higher Spirit Life: a full-screen celebration, grander than a game badge. */
 .spirit-pop { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 20px; overflow: hidden; opacity: 0; transition: opacity 0.3s ease;
     background: radial-gradient(circle at 50% 30%, #7a6526 0%, #1f5a43 36%, #07160f 82%); }
@@ -2249,3 +2261,15 @@
 .quiz-prize-main span { font-size: 13px; color: var(--text-slate); line-height: 1.4; }
 .quiz-prize-card .btn { flex: 0 0 auto; }
 @media (max-width: 480px) { .quiz-prize-card .btn { flex: 1 1 100%; } }
+
+/* ---------- User status (js/presence.js): Online / Active / Away ---------- */
+.user-status { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: var(--text-slate); white-space: nowrap; flex-shrink: 0; }
+.user-status:empty { display: none; }
+.user-status i { width: 8px; height: 8px; border-radius: 50%; background: #9AA3A0; flex-shrink: 0; }
+.user-status-online i { background: #2EAF62; box-shadow: 0 0 0 3px rgba(46, 175, 98, 0.18); }
+.user-status-active i { background: #5B8DEF; }
+.user-status-away i { background: #E0A526; }
+.user-status-offline i { background: #9AA3A0; }
+.user-status-lg { font-size: 12.5px; margin: 4px 0 6px; padding: 4px 11px; border-radius: 999px; background: var(--bg-soft, rgba(127, 127, 127, 0.1)); }
+.community-user-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 700; }
+.community-user-name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

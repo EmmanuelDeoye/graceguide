@@ -394,7 +394,9 @@
         if (s._view) s.onUpdate(s._view);
     }
     function confirmLeave() {
-        showModal('<h3 style="margin-bottom:8px;">Leave this game?</h3><p class="text-muted" style="margin-bottom:16px;">The others will carry on without you, and you won’t be able to rejoin.</p>' +
+        var s = live.session, others = s && s.seated ? s.seated().filter(function (uid) { return uid !== s.uid && typeof (s.room.players[uid] || {}).leftAt !== 'number'; }).length : 0;
+        showModal('<h3 style="margin-bottom:8px;">Leave this game?</h3><p class="text-muted" style="margin-bottom:16px;">Leaving now is a <strong>forfeit</strong>: ' +
+            (others === 1 ? 'your opponent wins the game' : 'you cannot win this game, and the others carry on without you') + '. You won’t be able to rejoin.</p>' +
             '<div style="display:flex; gap:8px;"><button class="btn btn-outline" style="flex:1" onclick="closeModal()">Stay</button><button class="btn btn-primary" style="flex:1" id="pl-leave-yes">Leave</button></div>');
         $id('pl-leave-yes').onclick = function () { closeModal(); closeLive(true); go(null, null, true); };
     }
@@ -591,14 +593,15 @@
             var q = Core.roomQuestion(BANK, s.game, s.room.plan, r);
             return q ? resultItem(s.game, q, !!(mine && mine.rounds[r] && mine.rounds[r].ok)) : null;
         }).filter(Boolean);
-        var headline = !mine ? 'Game over' : multi ? (mine.win ? (res.ranking.filter(function (u) { return res.byUid[u].win; }).length > 1 ? 'It’s a tie!' : 'You won! 🎉') : ordinal(mine.rank) + ' place')
+        var headline = !mine ? 'Game over' : mine.forfeit ? 'You left the game' : multi ? (mine.win ? (res.ranking.filter(function (u) { return res.byUid[u].win; }).length > 1 ? 'It’s a tie!' : 'You won! 🎉') : ordinal(mine.rank) + ' place')
             : (mine.units >= res.totalUnits ? 'Flawless! 🌟' : mine.correct ? 'Well played' : 'Good try');
         var rematchRoom = s.room.rematch, canRematch = !s.solo && s.canRematch();
         box.removeAttribute('data-key');
         box.innerHTML = '<div id="pl-results"><div class="pl-hero pl-game-card-' + s.game + '"><span class="pl-game-icon"><i class="fas ' + g.icon + '"></i></span><h2>' + esc(headline) + '</h2>' +
-            (mine ? '<div class="pl-final-score">' + mine.score + '<small> points</small></div><p>' + mine.correct + ' of ' + s.room.plan.rounds + ' correct' + (mine.bestStreak > 1 ? ' · best streak ' + mine.bestStreak : '') + '</p>' : '') + '</div>' +
+            (mine ? '<div class="pl-final-score">' + mine.score + '<small> points</small></div><p>' + mine.correct + ' of ' + s.room.plan.rounds + ' correct' + (mine.bestStreak > 1 ? ' · best streak ' + mine.bestStreak : '') + '</p>' : '') +
+            (mine && mine.win && res.byForfeit ? '<p class="pl-forfeit-note"><i class="fas fa-flag"></i> ' + (res.players === 2 ? 'Your opponent left — the win is yours.' : 'Everyone else left — the win is yours.') + '</p>' : '') + '</div>' +
             xpHtml(award) +
-            (multi ? '<h3 class="pl-section">Final ranking</h3><div class="card pl-board">' + boardRows(res.ranking.map(function (uid) { return { uid: uid, name: res.byUid[uid].name, xp: 0, score: res.byUid[uid].score }; }), me, function (r) { return r.score + ' pts'; }) + '</div>' : '') +
+            (multi ? '<h3 class="pl-section">Final ranking</h3><div class="card pl-board">' + boardRows(res.ranking.map(function (uid) { return { uid: uid, name: res.byUid[uid].name, xp: 0, score: res.byUid[uid].score, forfeit: res.byUid[uid].forfeit }; }), me, function (r) { return r.forfeit ? 'Left' : r.score + ' pts'; }) + '</div>' : '') +
             scriptureHtml(items) +
             '<div class="pl-result-actions">' +
             (s.solo ? '<button class="btn btn-primary btn-block" id="pl-again"><i class="fas fa-rotate-right"></i> Play again</button>'

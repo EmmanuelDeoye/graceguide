@@ -13,10 +13,11 @@
     <link rel="icon" type="image/png" sizes="512x512" href="img/icons/icon-512.png">
     <link rel="apple-touch-icon" href="img/icons/apple-touch-icon.png">
     <title>GRACEGUIDE — AI Christian Companion </title>
-    <link rel="stylesheet" href="css/base.css?v=1.7.0">
-    <link rel="stylesheet" href="css/pages.css?v=1.7.0">
-    <link rel="stylesheet" href="css/features.css?v=1.7.0">
-    <link rel="stylesheet" href="css/games.css?v=1.7.0">
+    <link rel="stylesheet" href="css/base.css?v=1.8.0">
+    <link rel="stylesheet" href="css/pages.css?v=1.8.0">
+    <link rel="stylesheet" href="css/features.css?v=1.8.0">
+    <link rel="stylesheet" href="css/games.css?v=1.8.0">
+    <link rel="stylesheet" href="css/desktop.css?v=1.8.0">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -79,6 +80,11 @@
                     <button id="drawer-close" class="icon-btn"><i class="fas fa-times"></i></button>
                 </div>
                 <nav class="drawer-nav">
+                    <!-- Laptops and desktops: the bottom bar's three pages live here instead (css/desktop.css). -->
+                    <a href="#/home" class="drawer-link desktop-only" data-route="home"><i class="fas fa-home"></i> Home</a>
+                    <a href="#/ask" class="drawer-link desktop-only" data-route="ask"><i class="fas fa-dove"></i> Shepherd</a>
+                    <a href="#/space" class="drawer-link desktop-only" data-route="space"><i class="fas fa-compass"></i> Space</a>
+                    <span class="drawer-divider"></span>
                     <a href="#/bible" class="drawer-link" data-route="bible"><i class="fas fa-book-bible"></i> Bible</a>
                     <a href="#/community" class="drawer-link" data-route="community"><i class="fas fa-users"></i> Community <span id="drawer-badge-community" class="drawer-badge-dot hidden"></span></a>
                     <a href="#/planner" class="drawer-link" data-route="planner"><i class="fas fa-calendar-check"></i> Study Planner</a>
@@ -139,21 +145,22 @@
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
 
     <!-- Main Application Script -->
-    <script src="js/config.js?v=1.7.0"></script>
-    <script src="js/core.js?v=1.7.0"></script>
-    <script src="js/features.js?v=1.7.0"></script>
-    <script src="js/streaks.js?v=1.7.0"></script>
-    <script src="js/community.js?v=1.7.0"></script>
-    <script src="js/messaging.js?v=1.7.0"></script>
-    <script src="js/quiz.js?v=1.7.0"></script>
-    <script src="js/sharecards.js?v=1.7.0"></script>
+    <script src="js/config.js?v=1.8.0"></script>
+    <script src="js/core.js?v=1.8.0"></script>
+    <script src="js/features.js?v=1.8.0"></script>
+    <script src="js/streaks.js?v=1.8.0"></script>
+    <script src="js/community.js?v=1.8.0"></script>
+    <script src="js/presence.js?v=1.8.0"></script>
+    <script src="js/messaging.js?v=1.8.0"></script>
+    <script src="js/quiz.js?v=1.8.0"></script>
+    <script src="js/sharecards.js?v=1.8.0"></script>
     <!-- Play & Learn (Bible games): question bank, shared engine, multiplayer, stage, screens -->
-    <script src="js/games-boot.js?v=1.7.0"></script>
-    <script src="js/games-bank.js?v=1.7.0" async></script>
-    <script src="js/games-core.js?v=1.7.0"></script>
-    <script src="js/games-net.js?v=1.7.0"></script>
-    <script src="js/games-play.js?v=1.7.0"></script>
-    <script src="js/games.js?v=1.7.0"></script>
-    <script src="js/pwa.js?v=1.7.0"></script>
+    <script src="js/games-boot.js?v=1.8.0"></script>
+    <script src="js/games-bank.js?v=1.8.0" async></script>
+    <script src="js/games-core.js?v=1.8.0"></script>
+    <script src="js/games-net.js?v=1.8.0"></script>
+    <script src="js/games-play.js?v=1.8.0"></script>
+    <script src="js/games.js?v=1.8.0"></script>
+    <script src="js/pwa.js?v=1.8.0"></script>
 </body>
 </html>

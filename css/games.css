@@ -509,3 +509,14 @@
 .pl-verse-q-emoji { font-size: 22px; letter-spacing: 2px; }
 .pl-verse-q-emoji > span { letter-spacing: 0.06em; }
 .pl-verse-main strong .pl-verse-a { font-weight: 600; color: var(--text-slate); }
+
+/* ---- v1.8.0: connection care (my own connection, waiting for a player) and forfeits ---- */
+.pl-net { display: flex; align-items: center; gap: 8px; padding: 9px 12px; margin-bottom: 10px; border-radius: var(--radius-md); font-size: 13px; font-weight: 600; line-height: 1.35;
+    color: #7a4a12; background: rgba(199, 166, 90, 0.2); border: 1px solid rgba(199, 166, 90, 0.55); animation: pl-net-pulse 1.6s ease-in-out infinite; }
+.pl-net.hidden { display: none; }
+[data-theme="dark"] .pl-net { color: var(--gold-light); }
+@keyframes pl-net-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.72; } }
+.pl-paused-net .pl-paused-icon { background: var(--secondary-sage); box-shadow: 0 0 0 10px rgba(113, 133, 117, 0.18); }
+.pl-score-name small { font-size: 11px; font-weight: 500; color: var(--text-slate); margin-left: 4px; white-space: nowrap; }
+.pl-forfeit-note { margin-top: 8px; font-size: 13px; font-weight: 600; opacity: 0.95; }
+@media (prefers-reduced-motion: reduce) { .pl-net { animation: none; } }

@@ -120,7 +120,7 @@ async function gatherCommunityPeople() {
         read(database.ref('games/profiles').orderByChild('xp').limitToLast(200))
     ]);
     Object.entries(cards || {}).forEach(([uid, p]) => {
-        if (p) add(uid, p.username, { avatar: p.avatar || '', bio: p.bio || '', createdAt: p.createdAt || 0, lastActiveAt: p.lastActiveAt || 0, eh: typeof p.eh === 'string' ? p.eh : '' });
+        if (p) add(uid, p.username, { avatar: p.avatar || '', bio: p.bio || '', createdAt: p.createdAt || 0, lastActiveAt: p.lastActiveAt || 0, eh: typeof p.eh === 'string' ? p.eh : '', presence: p.presence || null });
     });
     Object.entries(quiz || {}).forEach(([uid, row]) => { if (row) add(uid, row.username || row.name); });
     Object.entries(games || {}).forEach(([uid, row]) => { if (row) add(uid, row.name); });
@@ -245,11 +245,6 @@ function renderCommunityUsersList() {
             </div>`;
         return;
     }
-    const activeLabel = (ts) => {
-        if (!ts) return '';
-        const days = Math.floor((Date.now() - ts) / 86400000);
-        return days <= 0 ? 'Active today' : days === 1 ? 'Active yesterday' : days < 7 ? `Active ${days} days ago` : days < 30 ? `Active ${Math.floor(days / 7)} week${days < 14 ? '' : 's'} ago` : '';
-    };
     const tag = (status) => status === 'brethren' ? '<span class="badge-joined">Brethren</span>'
         : status === 'pending_sent' ? '<span class="community-user-tag">Request sent</span>'
         : status === 'pending_received' ? '<span class="community-user-tag">Wants to connect</span>' : '';
@@ -257,12 +252,13 @@ function renderCommunityUsersList() {
         <p class="community-users-count">${people.length} ${people.length === 1 ? 'person' : 'people'}</p>
         ${people.slice(0, CommunityUsers.shown).map(u => {
             const joined = u.createdAt ? `Joined ${new Date(u.createdAt).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}` : '';
-            const meta = [joined, activeLabel(u.lastActiveAt)].filter(Boolean).join(' · ');
+            // Status (Online / Active / Away) is shown beside the name — never "last seen" or "offline".
+            const meta = joined;
             return `
                 <div class="group-card community-user" onclick="viewUserProfile('${escapeHtml(u.uid)}', '${escapeHtml(u.username).replace(/'/g, "\\'")}')">
                     <div class="post-avatar community-user-avatar" data-spirit-uid="${escapeHtml(u.uid)}">${u.avatar ? `<img src="${escapeHtml(u.avatar)}" alt="" loading="lazy">` : escapeHtml(u.username.charAt(0).toUpperCase())}</div>
                     <div style="flex: 1; min-width: 0;">
-                        <div style="font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(u.username)}</div>
+                        <div class="community-user-name"><span>${escapeHtml(u.username)}</span>${typeof userStatusHTML === 'function' ? userStatusHTML(u.uid, false, u) : ''}</div>
                         ${u.bio ? `<div style="font-size: 12px; color: var(--text-slate); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(u.bio)}</div>` : ''}
                         ${meta ? `<div style="font-size: 11px; color: var(--text-slate); margin-top: 2px;">${meta}</div>` : ''}
                     </div>
@@ -813,6 +809,7 @@ async function renderViewProfilePage() {
                     ${typeof spiritStickerFor === 'function' ? `<div class="avatar-spirit">${spiritStickerFor(userId, profile)}</div>` : ''}
                 </div>
                 <h2 style="font-weight: 700; margin-top: 8px;">${name}</h2>
+                ${typeof userStatusHTML === 'function' ? userStatusHTML(userId, true) : ''}
                 <p style="color: var(--text-slate);">${escapeHtml(profile.bio || 'No bio yet')}</p>
                 ${typeof faithLineHTML === 'function' ? faithLineHTML(profile, userId) : ''}
                 ${status === 'pending_received' ? `<p style="font-size: 12px; color: var(--text-slate); margin-top: 4px;">Sent you a connection request</p>` : ''}
@@ -1530,6 +1527,7 @@ function renderProfilePage() {
                     <i class="fas fa-camera"></i> Change Photo
                 </button>
                 <h2 style="font-weight: 700; margin-top: 8px;">${escapeHtml(profile.username || 'User')}</h2>
+                ${typeof userStatusHTML === 'function' ? userStatusHTML(AppState.currentUser.uid, true) : ''}
                 <p style="color: var(--text-slate);">${escapeHtml(profile.bio || 'No bio yet')}</p>
                 
                 <div class="profile-stats">
@@ -2591,6 +2589,8 @@ function startRealtimeListeners() {
     if (!AppState.currentUser) return;
     stopRealtimeListeners();
     const uid = AppState.currentUser.uid;
+    // My status (Online / Away) for other members: kept true for as long as this tab lives.
+    if (typeof startPresence === 'function') startPresence();
     // Did I win the last Weekly Quiz? (A moment after sign-in, so it never competes with the page loading.)
     if (typeof checkQuizPrize === 'function') setTimeout(checkQuizPrize, 3000);
 
@@ -3157,7 +3157,7 @@ window.resendVerificationEmail = resendVerificationEmail;
    Three ways to get in touch: a message straight to the GraceGuide team
    (it lands in the admin page's Messages tab), WhatsApp, or email.
    ============================================ */
-const GRACEGUIDE_WEB_VERSION = '1.7.0';
+const GRACEGUIDE_WEB_VERSION = '1.8.0';
 const CONTACT_EMAIL = 'support@graceguide.com.ng';
 const CONTACT_CATEGORIES = [
     ['inquiry', 'Inquiry', 'fa-circle-question'],

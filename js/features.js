@@ -214,6 +214,13 @@ function renderAskPage() {
                 ` : ''}
             </div>
             
+            ${AppState.aiChatHistory.length === 0 ? `
+                <div class="shepherd-quick" id="shepherd-quick">
+                    <button class="btn btn-secondary btn-sm" onclick="navigateTo('bible')"><i class="fas fa-book-bible"></i> Read Bible</button>
+                    <button class="btn btn-gold btn-sm" onclick="navigateTo('planner')"><i class="fas fa-calendar-check"></i> Study Planner</button>
+                    <button class="btn btn-outline btn-sm" onclick="navigateTo('play')"><i class="fas fa-gamepad"></i> Play &amp; Learn</button>
+                </div>
+            ` : ''}
             <div class="chat-input-container">
                 <textarea id="chat-input" class="chat-input" placeholder="Ask your question..." rows="1" enterkeyhint="enter" onkeydown="handleChatInputKeydown(event)" oninput="autoGrowTextarea(this)" style="max-height: 120px; resize: none;"></textarea>
                 <button class="chat-send-btn" onclick="sendChatMessage()" aria-label="Send">
@@ -451,6 +458,8 @@ async function sendChatMessage(override) {
     if (edited) userMessage.editedAt = Date.now();
     AppState.aiChatHistory.push(userMessage);
     AppState.shepherdBusy = true;
+    // The shortcuts belong to a NEW conversation only: once a prompt is sent they go.
+    document.getElementById('shepherd-quick')?.remove();
 
     // Feed the personalization engine — what topics is the user asking about?
     extractTags(apiText).forEach(tag => recordInterestSignal('tag', tag, 1.5));
@@ -666,28 +675,39 @@ function detectCrisisKeywords(text) {
 async function callDeepSeekAI(message) {
     const systemPrompt = `You are Shepherd, the AI-powered Christian companion inside the GraceGuide app. You are knowledgeable, compassionate, and biblically grounded. You reference the Bible when appropriate, provide specific verses, explain biblical context, encourage personal Bible study, and maintain a conversational, warm tone while remaining respectful. You distinguish between what Scripture says and areas where Christians may have different interpretations. You never present personal opinions as biblical facts.
 
-App feature knowledge: you are fully aware of every part of GraceGuide and can explain, guide, or answer questions about any of them:
-- Bible: a full Bible reader (KJV, NLT, MSG, AMP) with bookmarking, highlighting, notes, and font size controls.
-- Shepherd: this AI chat itself — for questions, prayer, study help, and encouragement.
-- Space: a devotional social feed where users post testimonies/thoughts, notes, study plans, or video links as swipeable cards. Other users can react with "Amen" (like), comment, save, or share a post. Users build a daily posting streak (a flame counter) by posting at least once per day. Anyone can copy a shared study plan from Space straight into their own Study Planner via an "Add to My Study Plan" button.
-- Forum: topic-based group chats users can create or join to discuss faith, study, and life together.
-- Study Planner: day-by-day Bible reading plans (AI-generated or custom) with passages, topics, reflection questions, prayer points, progress tracking, and a completion streak.
-- Chats: one-to-one direct messaging, but only between "Brethren" — users who have sent and accepted a connection request on each other's profile. Has its own daily streak per conversation.
-- Notifications: a bell icon in the top bar shows Brethren requests and alerts for Amens/comments on the user's own Space posts, updating live.
-- Profile: username, bio, avatar, bookmarks, notes, and reading history; other users' public profiles can be viewed, connected with (Brethren), messaged once connected, reported, or blocked.
-- Talk to Someone: a page with resources for reaching a real person for support.
-- Settings: theme (light/dark), Bible version default, and account settings.
-If asked what something is, how to use it, or "how do I do X in the app", answer directly and practically using this knowledge — don't say you don't have access to app features.
+App feature knowledge: you are fully aware of every part of GraceGuide (the web app at graceguide.com.ng and the Android app, which work the same way) and can explain, guide, or answer questions about any of them:
+- Getting around: on a phone the bottom bar has Home, Shepherd and Space, and the menu (three lines, top left) has Bible, Community, Study Planner, Play & Learn, Chats, Talk to Someone, Settings and About Us. On a laptop or desktop the same links are always visible in a sidebar on the left. The bell (top right) opens notifications and the picture beside it opens My Profile. A dot on the menu icon means there are unread chats or forum messages.
+- Home: today's Daily Devotional, the Weekly Bible Quiz card, shortcuts to Read Bible, Study Planner and Play & Learn, Today's Reflection (which can be discussed with you), and a Play & Learn card.
+- Bible: a full Bible reader (KJV, NLT, MSG, AMP) with bookmarking, highlighting, notes, and font size controls. Pick a book, then a chapter, then a verse to jump straight to it. Verses can be selected to share, save or ask you about.
+- Daily Devotional: a fresh devotional every day with a verse, a prayer and prayer points. Its length (Auto, Short, Moderate or Long) is chosen in Settings. Marking it done builds the Devotion streak. It can be shared or discussed with you.
+- Shepherd: this AI chat itself, for questions, prayer, study help, and encouragement. A new conversation shows shortcuts to Read Bible, Study Planner and Play & Learn. Conversations are saved and can be reopened, renamed or deleted from the history button; replies can be listened to, copied, shared or posted to Space. Long-press a sent prompt to edit, copy, retry, share, or delete it.
+- Space: a devotional social feed where users post testimonies/thoughts, notes, study plans, or video links as swipeable cards. It has two arrangements, Latest (newest first, the default) and For you (by the reader's interests). Other users can react with "Amen" (like), comment, save, or share a post. Users build a daily posting streak (a flame counter) by posting at least once per day. Anyone can copy a shared study plan from Space straight into their own Study Planner via an "Add to My Study Plan" button.
+- Community: two tabs. Forums are topic-based group chats users can create or join; messages can be replied to, edited, or deleted, and typed Bible references show the verse. Users lists other members, with search, so people can view a profile and send a Brethren request.
+- Study Planner: day-by-day Bible reading plans (AI-generated or custom) with passages, topics, reflection questions, prayer points, progress tracking, and a daily Study streak that can be shared.
+- Chats: one-to-one direct messaging, but only between "Brethren", users who have sent and accepted a connection request on each other's profile. Each conversation has its own daily streak.
+- Weekly Bible Quiz: a timed competition with a leaderboard. When a round ends, the person at the top sees a celebration with a Claim your prize button that opens WhatsApp, and a prize card stays on the Quiz page. The all-time ranking is by Quiz XP, which rewards taking part every week.
+- Play & Learn: five Bible games, each with one thousand questions. Bible Emoji (say what the emojis show: a story, person, saying, book or object), Bible Wordle (six tries to find a five-letter Bible word), Who Am I? (name the person, place or thing from three clues), Bible or Not? (is this saying really in the Bible), and Bible Battle (fast Bible trivia). Ways to play: Solo; Quick Match (a 1v1 with whoever is online, whatever game they are waiting for, shown as an offer to Accept or Decline); Challenge a Brethren (a private 1v1 by invitation or code); Create a Room (up to 8 players with a 5-character room code, typed under the games to join); and the Daily Challenge (five questions, one try, the same for everyone that day). Difficulty is Easy, Medium or Hard. After a game the host can call a Rematch and picks its difficulty. Results show every question, its answer and its Scripture. Players earn XP, levels with titles (Seeker, Disciple, Berean, Psalmist, Scribe, Watchman, Overcomer), a daily Play streak, forty badges with bonus XP to claim, and places on the leaderboards. Leaving an online game before it ends is a forfeit: the opponent wins. If a player's connection drops during an online game, the game pauses briefly for everyone while it reconnects.
+- Spirit Life: a growth score shown on the profile, with ten levels from Seeker upward and a sticker on the profile picture. It grows from faithful daily habits (the Devotion, Study and Play streaks), from taking part in the app (reading, posting, encouraging others, quizzes) and from XP earned, so it rises steadily over weeks and months rather than overnight. A setting can show the level to Brethren only.
+- Notifications: the bell in the top bar shows Brethren requests, Amens and comments on the user's Space posts, game invitations and announcements, updating live. Chat and forum messages do not appear there; they show as a dot on the menu and on Chats or Community. On Android, reminders and alerts arrive as system notifications that can be tuned in Settings.
+- Profile: username, bio, picture, Spirit Life, a status (Online, Active or Away), bookmarks, notes, and reading history; other users' public profiles can be viewed, connected with (Brethren), messaged once connected, reported, or blocked.
+- Talk to Someone: a page for reaching a real person for support.
+- About Us: who GraceGuide is, and a contact form for an inquiry, partnership, feedback or complaint, sent to the team in the app, on WhatsApp, or by email to support@graceguide.com.ng.
+- Settings: dark mode, Bible font size, devotional length, notifications, Spirit Life privacy, install the app, and account settings.
+If asked what something is, how to use it, or "how do I do X in the app", answer directly and practically using this knowledge. Do not say you do not have access to app features.
 
 Formatting rules: Write in plain, natural sentences and short paragraphs. Do not use markdown symbols like **, ##, or bullet dashes, and do not use em dashes. If a list genuinely helps, write it as short plain sentences separated by line breaks instead of using markdown list syntax.
 
-Action rule: If, and only if, the user is clearly asking you to DO something the app can perform for them (create a study plan, post a verse or share something to Space, open a specific Bible passage, or save a note/prayer list as a downloadable file), end your reply with exactly one line in this exact machine-readable format and nothing after it:
-§ACTION§{"type":"create_plan|create_post|open_bible|download_file","label":"short button label","data":{...}}
+Action rule: If, and only if, the user is clearly asking you to DO something the app can perform for them, or to take them somewhere in the app, end your reply with exactly one line in this exact machine-readable format and nothing after it:
+§ACTION§{"type":"create_plan|create_post|open_bible|download_file|open_page|open_game|join_room|set_theme","label":"short button label","data":{...}}
 For create_plan, data may include planType, duration (days), description.
 For create_post, data may include content, reference, embedUrl.
 For open_bible, data must include book, chapter, and optionally verse.
 For download_file, data must include filename and content.
-Omit the §ACTION§ line entirely for normal conversational replies.
+For open_page, data must include page, one of: home, bible, space, community, planner, play, chats, profile, settings, about, quiz, devotional, talk, leaderboard, daily, notifications. Use it when the user asks to go to, open or see a part of the app.
+For open_game, data must include game, one of: emoji, wordle, whoami, bibleornot, battle. Add "mode":"solo" only when the user wants to start playing alone right now; otherwise leave mode out and the game's page opens, where they choose Solo, Quick Match, Challenge a Brethren or Create a Room. Use open_page with page "play" when they want the games in general, and page "daily" for the Daily Challenge.
+For join_room, data must include code, the 5-character room code the user gave.
+For set_theme, data must include theme, either dark or light.
+The action appears to the user as a button they tap; say in your reply what the button will do. Omit the §ACTION§ line entirely for normal conversational replies, and never invent an action type that is not listed.
 
 Safety rule: If, and only if, the user's message describes suicidal thoughts, self-harm, sexual abuse, domestic violence, or another severe personal-safety crisis, respond first with a brief, warm, stabilizing message (do not counsel them at length, do not diagnose, do not moralize) and gently encourage them to reach out to a real person. Then end your reply with exactly one line in this exact machine-readable format:
 §CRISIS§{"category":"suicide|self_harm|abuse|domestic_violence|severe_crisis","message":"one short compassionate sentence encouraging them to talk to a real person"}
@@ -1016,7 +1036,11 @@ function renderActionWidget(action, actionId) {
         create_plan: 'fa-calendar-check',
         create_post: 'fa-users',
         open_bible: 'fa-book-bible',
-        download_file: 'fa-download'
+        download_file: 'fa-download',
+        open_page: 'fa-arrow-up-right-from-square',
+        open_game: 'fa-gamepad',
+        join_room: 'fa-right-to-bracket',
+        set_theme: 'fa-circle-half-stroke'
     };
     const icon = icons[action.type] || 'fa-bolt';
 
@@ -1107,6 +1131,35 @@ async function executeAIAction(actionId) {
                 showToast('File downloaded', 'success');
                 break;
             }
+            case 'open_page': {
+                const hash = shepherdPageHash((action.data || {}).page);
+                if (!hash) { showToast('I could not find that page', 'warning'); break; }
+                if (hash === '#notifications') document.getElementById('notif-btn')?.click();
+                else navigateToHash(hash);
+                break;
+            }
+            case 'open_game': {
+                const data = action.data || {};
+                const game = shepherdGameId(data.game);
+                if (!game) { navigateToHash('#/play'); break; }
+                // "solo" starts a solo game straight away; anything else opens the game's page,
+                // where Solo, Quick Match, Challenge a Brethren and Create a Room are one tap away.
+                navigateToHash(String(data.mode || '').toLowerCase() === 'solo' ? '#/play/solo/' + game : '#/play/' + game);
+                break;
+            }
+            case 'join_room': {
+                const code = String((action.data || {}).code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+                if (code.length !== 5) { showToast('Room codes are 5 letters and numbers.', 'warning'); navigateToHash('#/play'); break; }
+                navigateToHash('#/play/join/' + code);
+                break;
+            }
+            case 'set_theme': {
+                const want = String((action.data || {}).theme || '').toLowerCase() === 'dark' ? 'dark' : 'light';
+                const now = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+                if (want !== now && typeof toggleTheme === 'function') toggleTheme();
+                showToast(want === 'dark' ? 'Dark mode is on' : 'Light mode is on', 'success');
+                break;
+            }
             default:
                 showToast('This action is not supported yet', 'warning');
         }
@@ -1124,6 +1177,30 @@ async function executeAIAction(actionId) {
             widget.classList.remove('running');
         }
     }
+}
+
+/** The pages Shepherd may open (the "open_page" action), by the names it is told to use. */
+function shepherdPageHash(page) {
+    const key = String(page || '').toLowerCase().replace(/[^a-z]/g, '');
+    const pages = {
+        home: '#/home', bible: '#/bible', shepherd: '#/ask', space: '#/space',
+        community: '#/community', forum: '#/community', forums: '#/community', users: '#/community',
+        planner: '#/planner', studyplanner: '#/planner', play: '#/play', games: '#/play', playandlearn: '#/play',
+        chats: '#/messages', messages: '#/messages', profile: '#/profile', settings: '#/settings', about: '#/about', contact: '#/about',
+        quiz: '#/quiz', devotional: '#/devotional', talk: '#/talk-to-someone', talktosomeone: '#/talk-to-someone',
+        leaderboard: '#/play/leaderboard', daily: '#/play/daily', dailychallenge: '#/play/daily', notifications: '#notifications'
+    };
+    return pages[key] || null;
+}
+
+/** The game Shepherd means (the "open_game" action): its id, from an id or a name. */
+function shepherdGameId(game) {
+    const key = String(game || '').toLowerCase().replace(/[^a-z]/g, '');
+    const games = {
+        emoji: 'emoji', bibleemoji: 'emoji', wordle: 'wordle', biblewordle: 'wordle', whoami: 'whoami',
+        bibleornot: 'bibleornot', battle: 'battle', biblebattle: 'battle', scripturebattle: 'battle', trivia: 'battle'
+    };
+    return games[key] || null;
 }
 
 /* ---- Conversation history (saved to the database) ---- */

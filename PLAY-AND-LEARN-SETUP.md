@@ -1,4 +1,4 @@
-# GraceGuide — going live (web v15 shell, Android 1.7.0)
+# GraceGuide — going live (web v16 shell, Android 1.8.0)
 
 Three things have to happen in Firebase before everything works for real
 users. Do them in this order.
@@ -15,7 +15,20 @@ and the others. Do not replace anything that is already there.
 | `community.rules.json` | `"publicProfiles": { … }` | Community → Users shows "Couldn't load people". |
 | `contact.rules.json` (new in 1.6.0) | `"contactMessages": { … }` | About Us → "Send to the GraceGuide team" fails (it tells the person to use WhatsApp or email instead), and the admin page's Messages tab cannot load. |
 
-**The `"games"` block changed again in 1.5.0 — replace the one you pasted before:**
+**Both blocks changed in 1.8.0 — replace the ones you pasted before:**
+
+- `"games"`: `rooms/{id}/players/{uid}/beat` (a heartbeat each device sends
+  during a game) and `rooms/{id}/pauses` (a pause the database only accepts
+  for a player whose connection it can see has really dropped — nobody can
+  pause a game by hand). Until this is live, games still work exactly as
+  before, but **a game does not pause when a player loses connection**; the
+  affected player is still told their connection is weak or lost.
+- `"publicProfiles"`: a card may now hold `presence` (`online` / `away` /
+  `off`, stamped by the server). Until this is live, nobody shows as Online or
+  Away; profiles show "Active" for people who used the app in the last day,
+  from the date the card already carries.
+
+**The `"games"` block changed in 1.5.0 (still needed if you have not pasted it yet):**
 
 - `seen` (new): each player's question history, so games can be dealt from
   questions nobody at the table has seen. Until this is live the apps fall
@@ -24,8 +37,8 @@ and the others. Do not replace anything that is already there.
 - `invites`: a rematch may invite anyone who was in the game just played,
   not only Brethren. Until this is live, rematch invitations reach Brethren
   only (the others get an ordinary notification instead).
-- `rooms/{id}/pauses` is gone: nobody can pause a game any more, whatever
-  version of the app they are on.
+- Players can no longer pause a game, whatever version of the app they are
+  on. (1.8.0 brings `pauses` back for one purpose only — see above.)
 
 **Both blocks changed in 1.3.0 (still needed if you have not pasted them yet):**
 
@@ -76,14 +89,65 @@ firebase deploy --only functions
 
 ## 3. Publish
 
-- Web: upload the `graceguide` folder (including `index.html`, `sw.js` and everything in `js/` and `css/`). `sw.js` is at cache version v15. New files to upload in 1.7.0: `js/games-boot.js` and `img/icons/badge-96.png` (and the much larger `js/games-bank.js`). Upload `admin.html`, `css/admin.css` and `js/admin.js` too — the admin page was repaired in 1.4.1. `js/games-ai.js` is gone — delete it from the server too.
+- Web: upload the `graceguide` folder (including `index.html`, `sw.js` and everything in `js/` and `css/`). `sw.js` is at cache version v16. New files to upload in 1.8.0: `css/desktop.css` and `js/presence.js`. New in 1.7.0: `js/games-boot.js` and `img/icons/badge-96.png` (and the much larger `js/games-bank.js`). Upload `admin.html`, `css/admin.css` and `js/admin.js` too — the admin page was repaired in 1.4.1. `js/games-ai.js` is gone — delete it from the server too.
 - Android: `graceguide-android/app/build/outputs/bundle/release/app-release.aab`
-  or `…/apk/release/app-release.apk` — version 1.7.0 (code 9). Set the admin
-  page's "Android latest version" to 1.7.0 (code 9).
+  or `…/apk/release/app-release.apk` — version 1.8.0 (code 10). Set the admin
+  page's "Android latest version" to 1.8.0 (code 10).
 - Release web and Android together, and ask players to update: a phone still on
   an older version does not know the new questions (it shows "This question
   isn't available in your version of the app") and does not freeze when someone
   pauses, so it would fall out of step in a shared room.
+
+## What changed in 1.8.0
+
+Two rule blocks changed (`games.rules.json`, `community.rules.json` — see
+section 1). If you run the Cloud Functions, redeploy them: the referee's copy
+of the engine changed (a player who leaves forfeits). On Windows PowerShell use
+`npm.cmd install` and `firebase.cmd deploy --only functions`.
+
+- **Laptops and desktops get a real layout** (web only, `css/desktop.css`,
+  from 1024 px wide): the menu is a permanent sidebar (with Home, Shepherd and
+  Space, so the bottom bar is not needed), and Home, Space, the Bible's books,
+  Community, the Study Planner, Chats, Settings, Profile and Play & Learn use
+  grids. Colours, fonts and components are unchanged, and phones and tablets
+  look exactly as before.
+- **Status on profiles: Online, Active or Away** (`js/presence.js`, Android
+  `data/Presence.kt`). Online = the app is open in front of the person. Away =
+  open but not touched for five minutes, or in the background. Active = not
+  here now, but used GraceGuide in the last 24 hours. Otherwise nothing is
+  shown: members never see "offline" or "last seen" (Community → Users no
+  longer says "Active 3 days ago"). **Only the admin page** (Users tab) shows
+  Offline and the last time each person was seen.
+- **Shepherd knows the whole app as it is today** and can do more: open any
+  page, open Play & Learn or one particular game (solo or with others), join a
+  room by its code, and switch between light and dark — as well as the plans,
+  posts, Bible passages and downloads it could already make. Its settings,
+  keys and `js/config.js` were not touched.
+- **Shepherd, new conversation: three quick buttons** above the message box
+  (Read Bible, Study Planner, Play & Learn), scrolling sideways like the ones
+  on Home. They go away once a message is sent or a conversation is opened,
+  and come back with a new conversation.
+- **Games — the tap that did not register.** Cause: on the web, the whole
+  question was redrawn every time an opponent locked in an answer; a tap that
+  was in progress at that instant landed on a button that no longer existed.
+  Now only the scoreboard is redrawn. (Android never redrew that way.)
+- **Games — poor connection.** The affected player is told ("Connection lost
+  — reconnecting…" or "Weak connection — still sending your answer…"; the
+  answer is kept and sent when they are back). The others see "Waiting for
+  Ada" and the clock stops for everyone — for up to 30 seconds, at most twice
+  per player per game, so nobody can hold a game up. No time is lost.
+- **Games — leaving is a forfeit.** A player who leaves a game in progress
+  cannot win it. In a 1v1 the game ends there and the opponent wins,
+  whatever the score. In a bigger room the others carry on, and the leaver is
+  placed last. A dropped connection is not leaving.
+- **Spirit Life is no longer streaks alone.** Points now come from three
+  places: Habits (the three daily streaks, up to 500), Engagement (days
+  active, chapters read, study days, notes, bookmarks and highlights,
+  Brethren) and XP (games and the Weekly Quiz). The ten stages need 0, 30,
+  100, 250, 500, 900, 1,500, 2,400, 3,600 and 5,000 points: someone who uses
+  the app faithfully every day reaches the middle in about three weeks and
+  the top in roughly ten months. **Existing members' stages are recalculated
+  on this scale, so some will change.**
 
 ## What changed in 1.7.0
 

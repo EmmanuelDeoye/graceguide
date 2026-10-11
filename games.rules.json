@@ -31,11 +31,14 @@
             "online": {
               ".validate": "newData.isBoolean()"
             },
+            "beat": {
+              ".validate": "newData.val() == now"
+            },
             "leftAt": {
               ".validate": "data.exists() ? newData.val() == data.val() : newData.val() == now"
             },
             "$other": {
-              ".validate": "$other == 'name' || $other == 'joinedAt' || $other == 'online' || $other == 'leftAt'"
+              ".validate": "$other == 'name' || $other == 'joinedAt' || $other == 'online' || $other == 'leftAt' || $other == 'beat'"
             }
           }
         },
@@ -107,6 +110,54 @@
             "$other": {
               ".validate": "$other == 't' || $other == 'day'"
             }
+          }
+        },
+        "pauses": {
+          "0": {
+            ".write": "(auth != null) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists()) && (root.child('games/rooms/' + $room).child('plan').exists()) && (true) && (newData.exists())",
+            ".validate": "(newData.hasChildren(['s', 'by', 'why'])) && (newData.child('why').val() == 'net') && (data.exists() ? newData.child('s').val() == data.child('s').val() : newData.child('s').val() == now) && (data.exists() ? newData.child('by').val() == data.child('by').val() : ((newData.child('by').isString() && newData.child('by').val() != auth.uid) && (root.child('games/rooms/' + $room).child('players/' + newData.child('by').val()).exists()) && (!root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/leftAt').exists()) && ((root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/online').val() == false) || (root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/beat').val() < now - 8000)))) && (data.child('e').exists() ? newData.child('e').val() == data.child('e').val() : (!newData.child('e').exists() || newData.child('e').val() == now))",
+            "$other": {
+              ".validate": "$other == 's' || $other == 'by' || $other == 'why' || $other == 'e'"
+            }
+          },
+          "1": {
+            ".write": "(auth != null) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists()) && (root.child('games/rooms/' + $room).child('plan').exists()) && (data.parent().child('0').exists()) && (newData.exists())",
+            ".validate": "(newData.hasChildren(['s', 'by', 'why'])) && (newData.child('why').val() == 'net') && (data.exists() ? newData.child('s').val() == data.child('s').val() : newData.child('s').val() == now) && (data.exists() ? newData.child('by').val() == data.child('by').val() : ((newData.child('by').isString() && newData.child('by').val() != auth.uid) && (root.child('games/rooms/' + $room).child('players/' + newData.child('by').val()).exists()) && (!root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/leftAt').exists()) && ((root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/online').val() == false) || (root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/beat').val() < now - 8000)))) && (data.child('e').exists() ? newData.child('e').val() == data.child('e').val() : (!newData.child('e').exists() || newData.child('e').val() == now))",
+            "$other": {
+              ".validate": "$other == 's' || $other == 'by' || $other == 'why' || $other == 'e'"
+            }
+          },
+          "2": {
+            ".write": "(auth != null) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists()) && (root.child('games/rooms/' + $room).child('plan').exists()) && (data.parent().child('1').exists()) && (newData.exists())",
+            ".validate": "(newData.hasChildren(['s', 'by', 'why'])) && (newData.child('why').val() == 'net') && (data.exists() ? newData.child('s').val() == data.child('s').val() : newData.child('s').val() == now) && (data.exists() ? newData.child('by').val() == data.child('by').val() : ((newData.child('by').isString() && newData.child('by').val() != auth.uid) && (root.child('games/rooms/' + $room).child('players/' + newData.child('by').val()).exists()) && (!root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/leftAt').exists()) && ((root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/online').val() == false) || (root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/beat').val() < now - 8000)))) && (data.child('e').exists() ? newData.child('e').val() == data.child('e').val() : (!newData.child('e').exists() || newData.child('e').val() == now))",
+            "$other": {
+              ".validate": "$other == 's' || $other == 'by' || $other == 'why' || $other == 'e'"
+            }
+          },
+          "3": {
+            ".write": "(auth != null) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists()) && (root.child('games/rooms/' + $room).child('plan').exists()) && (data.parent().child('2').exists()) && (newData.exists())",
+            ".validate": "(newData.hasChildren(['s', 'by', 'why'])) && (newData.child('why').val() == 'net') && (data.exists() ? newData.child('s').val() == data.child('s').val() : newData.child('s').val() == now) && (data.exists() ? newData.child('by').val() == data.child('by').val() : ((newData.child('by').isString() && newData.child('by').val() != auth.uid) && (root.child('games/rooms/' + $room).child('players/' + newData.child('by').val()).exists()) && (!root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/leftAt').exists()) && ((root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/online').val() == false) || (root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/beat').val() < now - 8000)))) && (data.child('e').exists() ? newData.child('e').val() == data.child('e').val() : (!newData.child('e').exists() || newData.child('e').val() == now))",
+            "$other": {
+              ".validate": "$other == 's' || $other == 'by' || $other == 'why' || $other == 'e'"
+            }
+          },
+          "4": {
+            ".write": "(auth != null) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists()) && (root.child('games/rooms/' + $room).child('plan').exists()) && (data.parent().child('3').exists()) && (newData.exists())",
+            ".validate": "(newData.hasChildren(['s', 'by', 'why'])) && (newData.child('why').val() == 'net') && (data.exists() ? newData.child('s').val() == data.child('s').val() : newData.child('s').val() == now) && (data.exists() ? newData.child('by').val() == data.child('by').val() : ((newData.child('by').isString() && newData.child('by').val() != auth.uid) && (root.child('games/rooms/' + $room).child('players/' + newData.child('by').val()).exists()) && (!root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/leftAt').exists()) && ((root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/online').val() == false) || (root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/beat').val() < now - 8000)))) && (data.child('e').exists() ? newData.child('e').val() == data.child('e').val() : (!newData.child('e').exists() || newData.child('e').val() == now))",
+            "$other": {
+              ".validate": "$other == 's' || $other == 'by' || $other == 'why' || $other == 'e'"
+            }
+          },
+          "5": {
+            ".write": "(auth != null) && (root.child('games/rooms/' + $room).child('players/' + auth.uid).exists()) && (root.child('games/rooms/' + $room).child('plan').exists()) && (data.parent().child('4').exists()) && (newData.exists())",
+            ".validate": "(newData.hasChildren(['s', 'by', 'why'])) && (newData.child('why').val() == 'net') && (data.exists() ? newData.child('s').val() == data.child('s').val() : newData.child('s').val() == now) && (data.exists() ? newData.child('by').val() == data.child('by').val() : ((newData.child('by').isString() && newData.child('by').val() != auth.uid) && (root.child('games/rooms/' + $room).child('players/' + newData.child('by').val()).exists()) && (!root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/leftAt').exists()) && ((root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/online').val() == false) || (root.child('games/rooms/' + $room).child('players/' + newData.child('by').val() + '/beat').val() < now - 8000)))) && (data.child('e').exists() ? newData.child('e').val() == data.child('e').val() : (!newData.child('e').exists() || newData.child('e').val() == now))",
+            "$other": {
+              ".validate": "$other == 's' || $other == 'by' || $other == 'why' || $other == 'e'"
+            }
+          },
+          ".read": "auth != null",
+          "$other": {
+            ".validate": "false"
           }
         },
         "rematch": {

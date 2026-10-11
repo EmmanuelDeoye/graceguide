@@ -1,15 +1,21 @@
 /* ============================================
    GraceGuide — js/streaks.js
-   The devotion streak, and the Faithfulness score that brings the three
-   daily habits together:
+   The devotion streak, and the Spirit Life score (called "faith" in the code
+   and the database). Since v1.8 Spirit Life is three things added together:
 
-     Devotion  — days in a row the Daily Devotional was marked done
-     Study     — days in a row a Study Planner entry was completed
-     Play      — days in a row a Play & Learn game was played
+     Habits      — the AVERAGE of three daily streaks (Devotion, Study, Play)
+                   × 10, up to 500. Averaging on purpose: one long streak
+                   cannot carry it. This part falls when the streaks lapse.
+     Engagement  — what has been done in the app over time: days it was used,
+                   chapters read, study days completed, notes, bookmarks and
+                   highlights, Brethren. This part is never lost.
+     XP          — one point for every 25 XP earned in Play & Learn and the
+                   Weekly Quiz. Never lost either.
 
-   Spirit Life (shown to users under that name) = the AVERAGE of those three current streaks. It earns
-   points (average × 10) and one of ten titles. Averaging on purpose: one
-   long streak cannot carry the score — the way up is to keep all three.
+   Ten levels are reached at set point totals (FAITH_TITLES). Someone faithful
+   every day reaches the middle levels in a few weeks and the top in about ten
+   months; nobody can reach it in days, and a broken streak no longer sends a
+   long-standing member back to the start.
 
    The pure functions at the top are shared with the tests (and mirrored in
    the Android app's Faithfulness.kt — keep the two in step).
@@ -18,19 +24,38 @@
 (function (root) {
     'use strict';
 
-    /** [minimum average streak in days, title, what it means] — ten levels. */
+    /** [minimum Spirit Life points, title, what it means] — ten levels. */
     var FAITH_TITLES = [
-        [0, 'Seeker', 'Just beginning — start any streak today.'],
-        [1, 'Starter', 'You have begun the habit.'],
-        [3, 'Steady', 'Three days and counting across your habits.'],
-        [5, 'Committed', 'Most of a week, kept together.'],
-        [7, 'Devoted', 'A full week of daily faithfulness.'],
-        [14, 'Faithful', 'Two weeks without letting go.'],
-        [21, 'Steadfast', 'Three weeks — it is becoming who you are.'],
-        [30, 'Disciplined', 'A whole month, day after day.'],
-        [60, 'Pillar', 'Two months of unbroken devotion.'],
-        [100, 'Unshakeable', 'A hundred days. Well done, good and faithful servant.']
+        [0, 'Seeker', 'Just beginning — open the Word today.'],
+        [30, 'Starter', 'You have begun.'],
+        [100, 'Steady', 'A steady rhythm is forming.'],
+        [250, 'Committed', 'You keep showing up.'],
+        [500, 'Devoted', 'Daily habits, kept together.'],
+        [900, 'Faithful', 'Weeks of faithfulness behind you.'],
+        [1500, 'Steadfast', 'It is becoming who you are.'],
+        [2400, 'Disciplined', 'Months of walking with Him daily.'],
+        [3600, 'Pillar', 'Others can lean on your example.'],
+        [5000, 'Unshakeable', 'Well done, good and faithful servant.']
     ];
+    /** The most the three streaks can give (an average streak of fifty days). */
+    var HABIT_CAP = 500;
+
+    var whole = function (n) { return Math.max(0, Math.floor(Number(n) || 0)); };
+
+    /**
+     * Engagement points from what a person has done in the app (lifetime counts; never lost):
+     * 2 for each day the app was used, 2 for each chapter read (the Bible has 1,189), 5 for each
+     * study-plan day completed, 3 for each note (up to 150 points), 1 for each bookmark or
+     * highlight (up to 100) and 5 for each of the first twenty Brethren.
+     */
+    function engagementPoints(stats) {
+        var s = stats || {};
+        return 2 * whole(s.activeDays) + 2 * Math.min(1189, whole(s.chapters)) + 5 * whole(s.studyDays) +
+            Math.min(150, 3 * whole(s.notes)) + Math.min(100, whole(s.marks)) + Math.min(100, 5 * whole(s.brethren));
+    }
+
+    /** One Spirit Life point for every 25 XP earned in Play & Learn and the Weekly Quiz. */
+    function xpPoints(gamesXp, quizXp) { return Math.floor((whole(gamesXp) + whole(quizXp)) / 25); }
 
     function previousDayKey(key) {
         var p = String(key).split('-');
@@ -54,24 +79,33 @@
         return { c: count, last: todayKey, best: Math.max(s.best || 0, count) };
     }
 
-    /** { average, points, level (1–10), title, about, next: { title, at, toGo } | null } */
-    function faithScore(devotion, study, games) {
+    /**
+     * The Spirit Life score. `extra` = { eng, xp }: engagement and XP POINTS (see engagementPoints,
+     * xpPoints); left out, the score is the habits alone.
+     * → { devotion, study, games, average, habits, engagement, xp, points, level (1–10), title,
+     *     about, next: { title, at, toGo (points) } | null }
+     */
+    function faithScore(devotion, study, games, extra) {
         var d = Math.max(0, devotion || 0), s = Math.max(0, study || 0), g = Math.max(0, games || 0);
         var average = Math.round(((d + s + g) / 3) * 10) / 10;
+        var habits = Math.min(HABIT_CAP, Math.round(average * 10));
+        var engagement = whole(extra && extra.eng), xp = whole(extra && extra.xp);
+        var points = habits + engagement + xp;
         var level = 0;
-        for (var i = 0; i < FAITH_TITLES.length; i++) if (average >= FAITH_TITLES[i][0]) level = i;
+        for (var i = 0; i < FAITH_TITLES.length; i++) if (points >= FAITH_TITLES[i][0]) level = i;
         var next = FAITH_TITLES[level + 1];
         return {
-            devotion: d, study: s, games: g, average: average, points: Math.round(average * 10),
+            devotion: d, study: s, games: g, average: average, habits: habits, engagement: engagement, xp: xp, points: points,
             level: level + 1, title: FAITH_TITLES[level][1], about: FAITH_TITLES[level][2],
-            next: next ? { title: next[1], at: next[0], toGo: Math.round((next[0] - average) * 10) / 10 } : null
+            next: next ? { title: next[1], at: next[0], toGo: next[0] - points } : null
         };
     }
 
     /** Each Spirit Life level has its own sticker (shown on the profile picture). Level 1 → 10. */
     var SPIRIT_STICKERS = ['🌱', '🕯️', '🌿', '🔥', '🙏', '🛡️', '⚓', '⛰️', '🏛️', '👑'];
 
-    var api = { SPIRIT_STICKERS: SPIRIT_STICKERS, FAITH_TITLES: FAITH_TITLES, previousDayKey: previousDayKey, liveStreak: liveStreak, extendStreak: extendStreak, faithScore: faithScore };
+    var api = { SPIRIT_STICKERS: SPIRIT_STICKERS, FAITH_TITLES: FAITH_TITLES, HABIT_CAP: HABIT_CAP, previousDayKey: previousDayKey, liveStreak: liveStreak, extendStreak: extendStreak,
+        engagementPoints: engagementPoints, xpPoints: xpPoints, faithScore: faithScore };
     if (typeof module === 'object' && module.exports) { module.exports = api; return; }
     root.Streaks = api;
 
@@ -94,7 +128,42 @@
         } catch (e) { console.error('Error saving devotion streak:', e); return null; }
     };
 
-    /** My three streaks as stored records ({ c, last }), freshly read. */
+    /**
+     * Counts today as a day the app was used (once a day, kept at users/{uid}/activeDays as
+     * { n, last }). Resolves the number of days so far.
+     */
+    async function countActiveDay() {
+        var ref = database.ref('users/' + AppState.currentUser.uid + '/activeDays'), today = localToday();
+        try {
+            var cur = (await ref.once('value')).val() || {};
+            if (cur.last === today) return whole(cur.n);
+            var next = { n: whole(cur.n) + 1, last: today };
+            ref.set(next).catch(function () {});
+            return next.n;
+        } catch (e) { return 0; }
+    }
+
+    /** My engagement and XP points, from what the app already knows about me. */
+    async function myExtraPoints(gamesXp) {
+        var uid = AppState.currentUser.uid;
+        var r = await Promise.all([
+            countActiveDay(),
+            database.ref('quizLeaderboardAllTime/' + uid).once('value').then(function (s) { return s.val(); }, function () { return null; })
+        ]);
+        var quizXp = r[1] ? (typeof quizXpOf === 'function' ? quizXpOf(r[1]) : r[1].xp) : 0;
+        var brethren = 0;
+        if (AppState.userConnections) AppState.userConnections.forEach(function (status) { if (status === 'brethren') brethren++; });
+        var studyDays = (AppState.plannerData || []).reduce(function (sum, plan) { return sum + whole(plan && plan.completed); }, 0);
+        return {
+            eng: engagementPoints({
+                activeDays: r[0], chapters: (AppState.readingHistory || []).length, studyDays: studyDays, notes: (AppState.notes || []).length,
+                marks: (AppState.bookmarks || []).length + (AppState.highlights || []).length, brethren: brethren
+            }),
+            xp: xpPoints(gamesXp, quizXp)
+        };
+    }
+
+    /** My three streaks as stored records ({ c, last }) with my engagement and XP points, freshly read. */
     async function myStreakRecords() {
         var uid = AppState.currentUser.uid;
         var study = typeof computeStudyStreak === 'function' ? computeStudyStreak() : { count: 0, doneToday: false };
@@ -105,17 +174,19 @@
         ]);
         AppState.devotionStreak = results[0];
         var game = results[1] || {};
+        var extra = await myExtraPoints(game.xp);
         return {
             dev: results[0] ? { c: results[0].c || 0, last: results[0].last || '', best: results[0].best || 0 } : { c: 0, last: '' },
             study: { c: study.count, last: studyLast },
-            games: { c: game.streak || 0, last: game.lastDay || '' }
+            games: { c: game.streak || 0, last: game.lastDay || '' },
+            eng: extra.eng, xp: extra.xp
         };
     }
 
-    /** Faithfulness from stored records. Devotion days are UTC; study and games use the local day. */
+    /** Spirit Life from stored records. Devotion days are UTC; study and games use the local day. */
     function scoreFromRecords(rec) {
         rec = rec || {};
-        return faithScore(liveStreak(rec.dev, utcToday()), liveStreak(rec.study, localToday()), liveStreak(rec.games, localToday()));
+        return faithScore(liveStreak(rec.dev, utcToday()), liveStreak(rec.study, localToday()), liveStreak(rec.games, localToday()), { eng: rec.eng, xp: rec.xp });
     }
     root.faithFromProfile = function (profile) { return profile && profile.faith ? scoreFromRecords(profile.faith) : null; };
 
@@ -255,6 +326,10 @@
     root.showSpiritLevelUp = showSpiritLevelUp;
     root.playFanfare = fanfare;
 
+    /** One of the three parts of the score: "Habits 120". */
+    function partChip(label, points, icon) {
+        return '<span class="faith-part"><i class="fas ' + icon + '"></i><strong>' + points + '</strong><small>' + label + '</small></span>';
+    }
     function streakRow(icon, label, days, hint) {
         return '<div class="faith-row"><span class="faith-row-icon"><i class="fas ' + icon + '"></i></span><span class="faith-row-label">' + label +
             '<small>' + hint + '</small></span><span class="faith-row-value"><i class="fas fa-fire"></i> ' + days + '</span></div>';
@@ -266,17 +341,18 @@
         var score = await publishFaith();
         var card = document.getElementById('faith-card');
         if (!card || !score) return;
-        var pct = score.next ? Math.max(4, Math.min(100, Math.round(100 * (score.average - FAITH_TITLES[score.level - 1][0]) / (score.next.at - FAITH_TITLES[score.level - 1][0])))) : 100;
+        var pct = score.next ? Math.max(4, Math.min(100, Math.round(100 * (score.points - FAITH_TITLES[score.level - 1][0]) / (score.next.at - FAITH_TITLES[score.level - 1][0])))) : 100;
         // My profile picture carries my level sticker (where the camera icon used to be).
         var mySticker = document.getElementById('my-spirit-sticker');
         if (mySticker) mySticker.innerHTML = stickerHTML(score);
         card.innerHTML =
             '<div class="faith-head"><div class="faith-badge">' + SPIRIT_STICKERS[score.level - 1] + '</div><div class="faith-head-main"><div class="faith-eyebrow">Spirit Life</div><div class="faith-title">' + score.points + ' <span>· ' + escapeHtml(score.title) + '</span></div>' +
-            '<div class="faith-sub">Level ' + score.level + ' of 10 · average streak ' + score.average + ' day' + (score.average === 1 ? '' : 's') + '</div></div>' +
+            '<div class="faith-sub">Level ' + score.level + ' of 10 · ' + score.points + ' point' + (score.points === 1 ? '' : 's') + '</div></div>' +
             '<button class="icon-btn" onclick="shareMySpiritLife()" aria-label="Share my Spirit Life"><i class="fas fa-share-nodes"></i></button>' +
             '<button class="icon-btn" onclick="showFaithTitles()" aria-label="How Spirit Life works"><i class="fas fa-circle-info"></i></button></div>' +
             '<div class="faith-bar"><div style="width:' + pct + '%"></div></div>' +
-            '<div class="faith-next">' + (score.next ? score.next.toGo + ' more day' + (score.next.toGo === 1 ? '' : 's') + ' of average streak to reach <strong>' + escapeHtml(score.next.title) + '</strong>' : 'The highest title. Keep going!') + '</div>' +
+            '<div class="faith-next">' + (score.next ? score.next.toGo + ' more point' + (score.next.toGo === 1 ? '' : 's') + ' to reach <strong>' + escapeHtml(score.next.title) + '</strong>' : 'The highest title. Keep going!') + '</div>' +
+            '<div class="faith-parts">' + partChip('Habits', score.habits, 'fa-fire') + partChip('Engagement', score.engagement, 'fa-seedling') + partChip('XP', score.xp, 'fa-star') + '</div>' +
             streakRow('fa-sun', 'Devotion', score.devotion, 'Mark the Daily Devotional done') +
             streakRow('fa-calendar-check', 'Study', score.study, 'Complete a Study Planner entry') +
             streakRow('fa-gamepad', 'Play &amp; Learn', score.games, 'Play any Bible game');
@@ -291,11 +367,14 @@
     root.showFaithTitles = function () {
         var mine = AppState.faith ? scoreFromRecords(AppState.faith) : null;
         showSheet('<h3 style="margin-bottom:4px;">Spirit Life</h3>' +
-            '<p class="text-muted" style="font-size:13px; margin-bottom:14px;">Your Spirit Life is the <strong>average</strong> of three daily streaks — Devotion, Study and Play &amp; Learn — times ten. Keeping all three alive is what moves you up; a streak ends after a day is missed. Each level has its own badge, shown on your profile picture.</p>' +
+            '<p class="text-muted" style="font-size:13px; margin-bottom:10px;">Your Spirit Life is three things added together. Each level has its own badge, shown on your profile picture.</p>' +
+            '<div class="faith-how"><p><strong><i class="fas fa-fire"></i> Habits</strong> — the <em>average</em> of your three daily streaks (Devotion, Study, Play &amp; Learn) × 10, up to ' + HABIT_CAP + '. Keep all three going; this part falls if they lapse.</p>' +
+            '<p><strong><i class="fas fa-seedling"></i> Engagement</strong> — what you do here over time: each day you use the app, chapters read, study days completed, notes, bookmarks and highlights, and your Brethren. Never lost.</p>' +
+            '<p><strong><i class="fas fa-star"></i> XP</strong> — one point for every 25 XP earned in Play &amp; Learn and the Weekly Quiz. Never lost.</p></div>' +
             FAITH_TITLES.map(function (t, i) {
                 var on = mine && mine.level === i + 1;
                 return '<div class="faith-level' + (on ? ' faith-level-on' : '') + '"><span class="faith-level-num">' + SPIRIT_STICKERS[i] + '</span><span class="faith-level-main"><strong>' + t[1] + '</strong><small>' + t[2] + '</small></span>' +
-                    '<span class="faith-level-at">' + (t[0] === 0 ? 'Start' : t[0] + '+ days') + '</span></div>';
+                    '<span class="faith-level-at">' + (t[0] === 0 ? 'Start' : t[0].toLocaleString() + ' pts') + '</span></div>';
             }).join(''));
     };
 

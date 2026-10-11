@@ -383,13 +383,18 @@
         var uids = seatedPlayers(room.players, (room.meta || {}).kind);
         var P = pausesOf(room), pi = 0;
         var rounds = [], start = plan.startedAt + COUNTDOWN_MS;
+        // Leaving a game is a forfeit. Once every player but one has left there is nobody to play
+        // against: the game ends there (the round in progress is cut short, the rest are skipped).
+        var alone = aloneSince(room, uids);
         for (var r = 0; r < n; r++) {
+            if (alone !== null && alone <= start) { rounds.push({ start: start, end: start, nominalEnd: start, pauses: [], skipped: true }); continue; }
             var nominal = start + D, held = [];
             // A pause freezes the question it was called in: the round's clock stops for
             // everyone and the time is added back. (One called outside a question does nothing.)
             while (pi < P.length && P[pi].s < start) pi++;
             while (pi < P.length && P[pi].s < nominal) { held.push(P[pi]); nominal += P[pi].e - P[pi].s; pi++; }
             var end = uids.length ? roundEnd(room, uids, r, start, nominal) : nominal;
+            if (alone !== null && alone < end) end = alone;
             held = held.filter(function (p) { return p.s < end; }); // called after everyone had answered: too late to matter
             rounds.push({ start: start, end: end, nominalEnd: nominal, pauses: held });
             start = end + reveal;
@@ -397,7 +402,24 @@
         return { rounds: rounds, startsAt: plan.startedAt + COUNTDOWN_MS, finishedAt: start, duration: D, reveal: reveal };
     }
 
+    /**
+     * The server time from which only ONE seated player was still in the game (every other one
+     * had left, `leftAt`), or null while two or more remain — or when everybody has gone.
+     */
+    function aloneSince(room, uids) {
+        if (uids.length < 2) return null;
+        var staying = 0, last = null;
+        for (var i = 0; i < uids.length; i++) {
+            var left = room.players[uids[i]].leftAt;
+            if (typeof left !== 'number') { staying++; continue; }
+            if (last === null || left > last) last = left;
+        }
+        return staying === 1 ? last : null;
+    }
+
     // ---------- pauses ----------
+    // (v1.8: the app pauses a game only while a player's connection has dropped — `why: 'net'`,
+    // `by` = the player being waited for. The rules below are the same for any pause.)
     // Any player may pause a game; it is then paused for everyone. A pause is a server-stamped
     // record { s, by } that gets its end stamp `e` when someone resumes — and ends by itself
     // after PAUSE_MAX_MS, so a game can never be left frozen. Every client derives the same
@@ -413,7 +435,7 @@
             var cap = p.s + PAUSE_MAX_MS;
             var open = !(typeof p.e === 'number' && p.e >= p.s);
             var e = open ? cap : Math.min(p.e, cap);
-            out.push({ s: p.s, e: e, by: typeof p.by === 'string' ? p.by : '', open: open, index: i });
+            out.push({ s: p.s, e: e, by: typeof p.by === 'string' ? p.by : '', open: open, index: i, net: p.why === 'net' });
             last = e;
         }
         return out;
@@ -432,11 +454,12 @@
         if (now < tl.startsAt) return { phase: 'countdown', round: 0, msLeft: tl.startsAt - now };
         for (var r = 0; r < tl.rounds.length; r++) {
             var rd = tl.rounds[r];
+            if (rd.skipped) continue; // the game ended before this round (everyone else had left)
             if (now < rd.end) {
                 var held = rd.pauses || [];
                 for (var i = 0; i < held.length; i++) {
                     // Frozen: `msLeft` counts down to when it resumes by itself, `roundLeft` is the question time still to come.
-                    if (now >= held[i].s && now < held[i].e) return { phase: 'paused', round: r, msLeft: held[i].e - now, roundLeft: Math.max(0, rd.end - held[i].e), elapsed: activeMs(rd, held[i].s), by: held[i].by, pauseIndex: held[i].index };
+                    if (now >= held[i].s && now < held[i].e) return { phase: 'paused', round: r, msLeft: held[i].e - now, roundLeft: Math.max(0, rd.end - held[i].e), elapsed: activeMs(rd, held[i].s), by: held[i].by, pauseIndex: held[i].index, net: held[i].net };
                 }
                 return { phase: 'question', round: r, msLeft: rd.end - now, elapsed: activeMs(rd, now) };
             }
@@ -471,7 +494,7 @@
             for (var r = 0; r <= last; r++) {
                 var rd = tl.rounds[r], q = roomQuestion(bank, game, plan, r);
                 var ans = answers[r] && answers[r][uid];
-                var valid = !!ans && typeof ans.t === 'number' && ans.t >= rd.start && ans.t <= rd.end;
+                var valid = !rd.skipped && !!ans && typeof ans.t === 'number' && ans.t >= rd.start && ans.t <= rd.end;
                 var judged = valid ? judge(game, q, ans.a) : { ok: false, guesses: 0 };
                 var pts = valid ? pointsFor(game, plan, rd, ans.t, streak, judged) : 0;
                 if (judged.ok) {
@@ -483,19 +506,27 @@
                 score += pts;
                 rounds.push({ a: ans ? ans.a : null, answered: !!ans && ans.a !== -1 && ans.a !== '', ok: judged.ok, pts: pts, guesses: judged.guesses, ms: valid ? activeMs(rd, ans.t) : null });
             }
-            byUid[uid] = { uid: uid, name: cleanName(room.players[uid].name), score: score, correct: correct, units: units, streak: streak, bestStreak: best, minGuesses: minGuesses, rounds: rounds };
+            // Leaving before the game is over is a forfeit: that player cannot win and is ranked
+            // below everyone who stayed. (Leaving the results screen afterwards is not.)
+            var leftAt = room.players[uid].leftAt;
+            byUid[uid] = { uid: uid, name: cleanName(room.players[uid].name), score: score, correct: correct, units: units, streak: streak, bestStreak: best, minGuesses: minGuesses, rounds: rounds,
+                forfeit: typeof leftAt === 'number' && leftAt < tl.finishedAt };
         });
         var ranking = uids.slice().sort(function (a, b) {
-            return (byUid[b].score - byUid[a].score) || (byUid[b].correct - byUid[a].correct) ||
+            return ((byUid[a].forfeit ? 1 : 0) - (byUid[b].forfeit ? 1 : 0)) ||
+                (byUid[b].score - byUid[a].score) || (byUid[b].correct - byUid[a].correct) ||
                 (room.players[a].joinedAt - room.players[b].joinedAt) || (a < b ? -1 : a > b ? 1 : 0);
         });
-        var top = ranking.length ? byUid[ranking[0]].score : 0;
+        var staying = ranking.filter(function (uid) { return !byUid[uid].forfeit; });
+        // The only player left when the others walked away wins outright, whatever the scores.
+        var byForfeit = uids.length >= 2 && staying.length === 1;
+        var top = staying.length ? byUid[staying[0]].score : 0;
         ranking.forEach(function (uid, i) {
             byUid[uid].rank = i + 1;
-            byUid[uid].win = uids.length >= 2 && top > 0 && byUid[uid].score === top;
+            byUid[uid].win = !byUid[uid].forfeit && uids.length >= 2 && (byForfeit || (top > 0 && byUid[uid].score === top));
         });
         var totalUnits = plan.rounds * (GAMES[game].type === 'wordle' ? WORDLE_UNITS : 1);
-        return { byUid: byUid, ranking: ranking, players: uids.length, totalUnits: totalUnits, timeline: tl };
+        return { byUid: byUid, ranking: ranking, players: uids.length, totalUnits: totalUnits, timeline: tl, byForfeit: byForfeit };
     }
 
     /** Daily Challenge score: correctness plus a bonus for total time, both server-verifiable. */

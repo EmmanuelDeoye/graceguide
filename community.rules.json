@@ -23,6 +23,12 @@
       "eh": {
         ".validate": "newData.isString() && newData.val().length == 64"
       },
+      "presence": {
+        ".validate": "newData.hasChildren(['s', 'at']) && newData.child('s').isString() && newData.child('s').val().matches(/^(online|away|off)$/) && newData.child('at').val() == now",
+        "$field": {
+          ".validate": "$field == 's' || $field == 'at'"
+        }
+      },
       "$other": {
         ".validate": "$other == 'username'"
       }

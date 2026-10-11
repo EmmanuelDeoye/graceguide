@@ -1214,7 +1214,9 @@ function handleDrawerAuthButtonClick() {
 }
 
 function handleLogout() {
-    auth.signOut().then(() => {
+    // Say "gone" while still signed in (a moment at most), then sign out.
+    const gone = typeof stopPresence === 'function' ? stopPresence() : Promise.resolve();
+    Promise.race([gone, new Promise(resolve => setTimeout(resolve, 800))]).then(() => auth.signOut()).then(() => {
         if (typeof stopRealtimeListeners === 'function') stopRealtimeListeners();
         AppState.currentUser = null;
         AppState.userProfile = null;

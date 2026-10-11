@@ -1,0 +1,160 @@
+/* ============================================
+   GraceGuide — css/desktop.css
+   Load this file LAST.
+
+   Laptops and desktops (1024px and wider). Same colours, cards and type as the
+   phone layout — what changes is the frame: the menu becomes a sidebar that is
+   always there (with Home, Shepherd and Space in it, so the bottom bar goes),
+   and pages use the width with grids instead of one phone-wide column.
+   Nothing here applies below 1024px.
+   ============================================ */
+.drawer-link.desktop-only { display: none; }
+.drawer-divider { display: none; }
+
+@media (min-width: 1024px) {
+    :root {
+        --sidebar-width: 264px;
+        --bottom-nav-height: 0px;
+        --top-bar-height: 64px;
+        --desktop-wide: 1120px;
+    }
+
+    /* ---- the frame ----
+       The content area sits to the right of the sidebar. `transform` makes it the reference
+       for everything inside that is position: fixed (top bar, Shepherd chat, toasts, sheets,
+       the game "Next" bar…), so they all line up with the content instead of the window. */
+    .main-content {
+        margin-left: var(--sidebar-width);
+        width: calc(100% - var(--sidebar-width));
+        transform: translate(0);
+    }
+    .side-drawer,
+    .side-drawer.open {
+        left: calc(-1 * var(--sidebar-width));
+        width: var(--sidebar-width);
+        transform: none;
+        box-shadow: none;
+        border-right: 1px solid rgba(0, 0, 0, 0.06);
+        transition: none;
+    }
+    [data-theme="dark"] .side-drawer { border-right-color: var(--dark-border); }
+    .drawer-overlay { display: none !important; }
+    #drawer-close, #menu-btn { display: none; }
+    .drawer-header { padding: 18px var(--spacing-lg); min-height: var(--top-bar-height); }
+    .drawer-link.desktop-only { display: flex; }
+    .drawer-divider { display: block; height: 1px; margin: 6px var(--spacing-md); background: rgba(0, 0, 0, 0.06); flex-shrink: 0; }
+    [data-theme="dark"] .drawer-divider { background: var(--dark-border); }
+    .drawer-link { padding: 12px var(--spacing-md); }
+    #bottom-nav { display: none !important; }
+
+    .top-bar { padding-left: var(--spacing-xl); padding-right: var(--spacing-xl); }
+    .top-bar-title { font-size: var(--text-xl); }
+
+    .page-container {
+        max-width: none;
+        margin: 0;
+        padding-bottom: var(--spacing-2xl);
+    }
+    .page-container::-webkit-scrollbar { width: 10px; }
+    .page-container::-webkit-scrollbar-thumb { border: 3px solid transparent; background-clip: padding-box; }
+
+    /* Dialogs keep a comfortable width instead of stretching. */
+    .sheet-content { max-width: 640px; margin-left: auto; margin-right: auto; border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
+    .toast-container { left: auto; right: var(--spacing-xl); max-width: 420px; }
+
+    /* ---- Home: two columns ---- */
+    .home-container {
+        max-width: var(--desktop-wide) !important;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-auto-flow: dense;
+        gap: var(--spacing-lg);
+        align-items: stretch;
+        padding: var(--spacing-xl);
+    }
+    .home-container > * { margin-bottom: 0 !important; min-width: 0; }
+    .home-container > :empty { display: none !important; }
+    .home-container > div[id$="-slot"], .home-container > div[id*="-slot-"] { display: flex; }
+    .home-container > div[id$="-slot"] > .card, .home-container > div[id*="-slot-"] > .card { flex: 1; margin-bottom: 0 !important; }
+    .home-container > .flex.gap-2 { grid-column: 1 / -1; }
+    .home-container > .flex.gap-2 .btn { padding: 12px 22px; font-size: var(--text-sm); }
+    .home-container > .card:not(.shepherd-promo-card):not(.pl-home-card) { grid-column: 1 / -1; }
+
+    /* ---- Shepherd ---- */
+    .chat-container { max-width: 920px; padding: var(--spacing-lg) var(--spacing-xl); }
+    .group-chat-container { max-width: 920px; }
+
+    /* ---- Space: a two-column feed ---- */
+    .space-container { max-width: var(--desktop-wide) !important; padding-left: var(--spacing-xl); padding-right: var(--spacing-xl); }
+    .space-container > .space-search-bar, .space-container > .space-mode-toggle { max-width: 560px; }
+    .space-feed { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--spacing-lg); align-items: start; }
+    .space-feed > * { margin-bottom: 0; min-width: 0; }
+    .space-feed > .empty-state, .space-feed > .loading-state, .space-feed > p { grid-column: 1 / -1; }
+
+    /* ---- Bible ---- */
+    .bible-reader { max-width: var(--desktop-wide) !important; padding-left: var(--spacing-xl); padding-right: var(--spacing-xl); }
+    .bible-book-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+    .bible-reader:has(.bible-verse), .bible-reader:has(.verse) { max-width: 820px; }
+
+    /* ---- Community, Study Planner, Chats: lists become grids ---- */
+    .community-container, .planner-container { max-width: var(--desktop-wide) !important; padding-left: var(--spacing-xl); padding-right: var(--spacing-xl); }
+    #groups-list, #community-users-list, #planner-content, #dm-conversations-list {
+        display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--spacing-md); align-items: start;
+    }
+    #groups-list > *, #community-users-list > *, #planner-content > *, #dm-conversations-list > * { margin-bottom: 0; min-width: 0; }
+    #groups-list > .empty-state, #community-users-list > .empty-state, #planner-content > .empty-state, #dm-conversations-list > .empty-state,
+    #groups-list > :only-child, #community-users-list > :only-child, #planner-content > :only-child, #dm-conversations-list > :only-child { grid-column: 1 / -1; }
+    /* Lines that are not cards (the "12 people" count, "Show more", headings, notices) take the full width. */
+    #groups-list > p, #community-users-list > p, #planner-content > p, #dm-conversations-list > p,
+    #groups-list > button, #community-users-list > button, #planner-content > button, #dm-conversations-list > button,
+    #groups-list > h3, #community-users-list > h3, #planner-content > h3, #dm-conversations-list > h3,
+    #groups-list > .error-state, #community-users-list > .error-state, #planner-content > .error-state, #dm-conversations-list > .error-state { grid-column: 1 / -1; }
+    .community-tabs { max-width: 480px; }
+    .planner-container > .study-streak-card { max-width: 560px; }
+
+    /* ---- Settings and About: cards side by side ---- */
+    .planner-container:has(.settings-choice), .planner-container.about-page {
+        display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--spacing-lg); align-items: start;
+    }
+    .planner-container:has(.settings-choice) > h2, .about-page > .about-hero, .about-page > p { grid-column: 1 / -1; }
+    .planner-container:has(.settings-choice) > .card, .about-page > .card { margin-bottom: 0; }
+
+    /* ---- Profile ---- */
+    .profile-container {
+        max-width: var(--desktop-wide) !important;
+        display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--spacing-lg); align-items: start;
+        padding-left: var(--spacing-xl); padding-right: var(--spacing-xl);
+    }
+    .profile-container > * { min-width: 0; }
+    .profile-container > .card { margin-bottom: 0; }
+    .profile-container > :not(.card) { grid-column: 1 / -1; }
+    .profile-container > .profile-header + .flex { justify-content: center; }
+
+    /* ---- Play & Learn ---- */
+    .pl-page { max-width: 720px; }
+    .pl-page:has(> .pl-games) {
+        max-width: var(--desktop-wide);
+        display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--spacing-lg); align-items: start;
+        padding-left: var(--spacing-xl); padding-right: var(--spacing-xl);
+    }
+    .pl-page:has(> .pl-games) > * { grid-column: 1 / -1; min-width: 0; }
+    .pl-page:has(> .pl-games) > #pl-daily-card, .pl-page:has(> .pl-games) > .pl-join { grid-column: auto; align-self: stretch; margin-top: 0; margin-bottom: 14px; }
+    .pl-page:has(> .pl-games) > .pl-join { display: flex; align-items: center; }
+    .pl-page:has(> .pl-games) > #pl-mine-slot, .pl-page:has(> .pl-games) > #pl-top-slot { grid-column: auto; }
+    .pl-page:has(> .pl-games) > #pl-mine-slot:empty + #pl-top-slot, .pl-page:has(> .pl-games) > #pl-top-slot:only-of-type { grid-column: 1 / -1; }
+    .pl-games { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .pl-games .pl-game { grid-column: auto !important; min-height: 150px; }
+    .pl-row-links { max-width: 560px; }
+    .pl-modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .pl-modes .pl-mode { margin-bottom: 0; }
+    .pl-next { max-width: 688px; }
+
+    /* ---- Reading pages stay a comfortable reading width, a little wider than on a phone ---- */
+    .devotional-page-container, .quiz-page-container, .talk-to-someone-container { max-width: 820px; }
+}
+
+/* Very wide screens: a third column where a list benefits from it. */
+@media (min-width: 1500px) {
+    :root { --desktop-wide: 1320px; }
+    .space-feed, #groups-list, #community-users-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

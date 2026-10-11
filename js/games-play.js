@@ -98,9 +98,11 @@
      * Returns { update(view), destroy() }.
      */
     function mount(container, session, opts) {
-        var key = null, wordle = null, destroyed = false, lastScores = null, lastScene = null, lastPicked = false;
+        var key = null, sideKey = null, wordle = null, destroyed = false, lastScores = null, lastScene = null, lastPicked = false;
         opts = opts || {};
         var me = session.uid, cfg = Core.GAMES[session.game];
+        /** Has this player's connection dropped? (Online games only.) */
+        function dropped(uid) { return typeof session.stale === 'function' ? session.stale(uid) : false; }
 
         function nameOf(uid) { return uid === me ? 'You' : (opts.names ? opts.names(uid) : 'Player'); }
 
@@ -113,12 +115,12 @@
             return '<div class="pl-scores">' + order.map(function (uid, i) {
                 var s = res ? res.byUid[uid].score : 0;
                 var p = view.room.players[uid] || {};
-                var state = typeof p.leftAt === 'number' ? ' pl-score-left' : (p.online === false ? ' pl-score-away' : '');
+                var state = typeof p.leftAt === 'number' ? ' pl-score-left' : (dropped(uid) || p.online === false ? ' pl-score-away' : '');
                 var tick = view.phase === 'question' && answered[uid] != null
                     ? (cfg.type === 'wordle' ? '<span class="pl-score-tick">' + answered[uid] + '/6</span>' : '<i class="fas fa-check pl-score-tick"></i>') : '';
                 return '<div class="pl-score' + (uid === me ? ' pl-score-me' : '') + state + '">' +
                     '<span class="pl-score-rank">' + (res ? i + 1 : '•') + '</span>' +
-                    '<span class="pl-score-name">' + esc(nameOf(uid)) + '</span>' + tick +
+                    '<span class="pl-score-name">' + esc(nameOf(uid)) + (typeof p.leftAt === 'number' ? ' <small>left</small>' : state ? ' <small><i class="fas fa-wifi"></i> reconnecting</small>' : '') + '</span>' + tick +
                     '<span class="pl-score-pts">' + s + '</span></div>';
             }).join('') + '</div>';
         }
@@ -263,10 +265,24 @@
             // that have arrived for the reveal, or who has locked in (the scoreboard ticks).
             var k = view.syncing ? 'sync' : [view.phase, view.round, session.myAnswer(view.round) === undefined ? 0 : 1,
                 (view.room.answers[view.round] && view.phase !== 'question') ? Object.keys(view.room.answers[view.round]).length : 0,
-                view.seated.length > 1 ? JSON.stringify((view.room.answered && view.room.answered[view.round]) || {}) : '',
-                opts.roundLabel || ''].join(':');
-            if (k === key && !force) return;
-            key = k;
+                opts.roundLabel || '', view.phase === 'paused' ? view.pauseIndex : ''].join(':');
+            // What only the scoreboard shows: who has locked in, and whose connection has dropped.
+            var side = view.syncing || view.seated.length < 2 ? '' : JSON.stringify((view.room.answered && view.room.answered[view.round]) || {}) + '|' +
+                view.seated.map(function (uid) { var p = view.room.players[uid] || {}; return typeof p.leftAt === 'number' ? 'L' : (dropped(uid) ? 'A' : '-'); }).join('');
+            if (k === key && !force) {
+                // Only the scoreboard changed (another player locked in, someone's connection
+                // dropped): redraw just that. Redrawing the whole stage here used to swallow taps —
+                // an answer button replaced in the instant between finger down and finger up never
+                // receives its click, so the tap seemed to do nothing.
+                if (side !== sideKey) {
+                    sideKey = side;
+                    var board = container.querySelector('.pl-scores');
+                    if (board && view.phase !== 'paused') board.outerHTML = scoreboardHtml(view, view.phase === 'reveal' ? view.round : view.round - 1);
+                    else if (!board && view.phase !== 'paused') { key = null; render(view, true); }
+                }
+                return;
+            }
+            key = k; sideKey = side;
             if (view.syncing) {
                 container.innerHTML = '<div class="pl-stage pl-center"><div class="pl-spinner"></div><p class="pl-waiting">Catching up with the game…</p></div>';
                 return;
@@ -276,6 +292,21 @@
                 return;
             }
             if (view.phase === 'done') { container.innerHTML = '<div class="pl-stage pl-center"><div class="pl-spinner"></div><p class="pl-waiting">Adding up the scores…</p></div>'; return; }
+            if (view.phase === 'paused' && view.net) {
+                // A player's connection dropped: the clock is stopped for everyone while it comes
+                // back (it carries on by itself — when they return, or after a short wait).
+                lastScene = 'paused:' + view.round;
+                var mineDropped = view.by === me;
+                container.innerHTML = '<div class="pl-stage pl-center pl-paused pl-paused-net">' +
+                    '<div class="pl-paused-icon"><i class="fas fa-wifi"></i></div>' +
+                    '<h3 class="pl-paused-title">' + (mineDropped ? 'Reconnecting you…' : 'Waiting for ' + esc(nameOf(view.by))) + '</h3>' +
+                    '<p class="pl-waiting">' + (mineDropped ? 'Your connection dropped. The game is paused for everyone while you reconnect.'
+                        : esc(nameOf(view.by)) + '’s connection dropped. The game is paused for everyone and carries on the moment they are back.') + '</p>' +
+                    '<p class="pl-paused-count">Carries on by itself in <strong id="pl-paused-left"></strong></p>' +
+                    '<p class="pl-paused-note">Question ' + (view.round + 1) + ' of ' + view.room.plan.rounds + ' · ' + Math.ceil(view.roundLeft / 1000) + ' s left on the clock — no time is lost</p></div>';
+                tickDom(view);
+                return;
+            }
             if (view.phase === 'paused') {
                 // Pausing was removed from the game. This screen only appears if a player who is
                 // still on an older version of the app pauses: everyone stays in step, and anyone
@@ -304,6 +335,7 @@
             var fx = scene !== lastScene ? (revealed ? ' pl-fx-reveal' : ' pl-fx-question') : (picked && !lastPicked && !revealed ? ' pl-fx-pick' : '');
             lastScene = scene; lastPicked = picked;
             container.innerHTML = '<div class="pl-stage pl-game-' + session.game + (revealed ? ' pl-revealed' : '') + fx + '">' +
+                '<div class="pl-net hidden" id="pl-net" role="status"></div>' +
                 headerHtml(view) + duelBarHtml(view, revealed ? view.round : view.round - 1) +
                 '<div class="pl-body">' + body + waiting + (revealed ? learnHtml(q, view) : '') + '</div>' +
                 (revealed && view.solo ? '<button class="btn btn-primary btn-block pl-next" id="pl-next">' + esc(opts.nextLabel || (view.round + 1 >= view.room.plan.rounds ? 'See results' : 'Next')) + ' <i class="fas fa-arrow-right"></i></button>' : '') +
@@ -323,6 +355,13 @@
             }
             var count = container.querySelector('#pl-count');
             if (count) count.textContent = String(Math.max(1, Math.ceil(view.msLeft / 1000)));
+            // My own connection: say so plainly, so a tap that is slow to register is understood.
+            var net = container.querySelector('#pl-net');
+            if (net) {
+                var msg = view.offline ? '<i class="fas fa-wifi"></i> Connection lost — reconnecting… Your answer is kept and sent the moment you are back.'
+                    : view.sending ? '<i class="fas fa-wifi"></i> Weak connection — still sending your answer…' : '';
+                if (net.getAttribute('data-msg') !== msg) { net.setAttribute('data-msg', msg); net.innerHTML = msg; net.classList.toggle('hidden', !msg); }
+            }
             var pausedLeft = container.querySelector('#pl-paused-left');
             if (pausedLeft && view.phase === 'paused') pausedLeft.textContent = Math.max(1, Math.ceil(view.msLeft / 1000)) + ' s';
             if (session.game === 'whoami' && view.phase === 'question') {

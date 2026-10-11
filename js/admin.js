@@ -494,8 +494,17 @@ const usersView = { query: '', sort: 'newest' };
 function userSortName(u) { return (u.username || 'User').trim().toLowerCase(); }
 
 async function renderUsersTab() {
-    const userDirectory = await fetchUserDirectory();
-    const users = Object.entries(userDirectory).map(([uid, u]) => ({ uid, ...u }));
+    // Status and last seen are for this page only — members never see "offline" or "last seen".
+    const [userDirectory, cards] = await Promise.all([
+        fetchUserDirectory(),
+        database.ref('publicProfiles').once('value').then(snap => snap.val() || {}).catch(() => ({}))
+    ]);
+    const now = Date.now();
+    const users = Object.entries(userDirectory).map(([uid, u]) => {
+        const presence = cards[uid] && cards[uid].presence;
+        const status = typeof Presence !== 'undefined' ? Presence.adminStatus(presence, u.lastActiveAt, now) : { state: 'offline', lastSeen: u.lastActiveAt || null };
+        return { uid, ...u, status: status.state, lastActiveAt: Math.max(u.lastActiveAt || 0, (presence && typeof presence.at === 'number' && presence.at) || 0) || u.lastActiveAt };
+    });
     if (!USER_SORTS[usersView.sort]) usersView.sort = 'newest';
 
     const heading = (column, label) => `<th class="sortable" data-sort-column="${column}">${label}<i class="fas fa-sort"></i></th>`;
@@ -519,7 +528,7 @@ async function renderUsersTab() {
             <div class="admin-table-wrap">
                 <table class="admin-table">
                     <thead>
-                        <tr>${heading('username', 'Username')}${heading('email', 'Email')}${heading('createdAt', 'Joined')}${heading('lastActiveAt', 'Last Active')}<th></th></tr>
+                        <tr>${heading('username', 'Username')}${heading('email', 'Email')}${heading('createdAt', 'Joined')}<th>Status</th>${heading('lastActiveAt', 'Last Seen')}<th></th></tr>
                     </thead>
                     <tbody id="users-table-body"></tbody>
                 </table>
@@ -563,13 +572,18 @@ async function renderUsersTab() {
 }
 
 function usersTableRowsHTML(users) {
-    if (users.length === 0) return `<tr><td colspan="5" class="admin-loading-row">No users found.</td></tr>`;
+    if (users.length === 0) return `<tr><td colspan="6" class="admin-loading-row">No users found.</td></tr>`;
+    const statusCell = (u) => u.status === 'online' || u.status === 'away'
+        ? `<span class="user-status user-status-${u.status}"><i></i>${u.status === 'online' ? 'Online' : 'Away'}</span>`
+        : '<span class="user-status user-status-offline"><i></i>Offline</span>';
+    const lastSeen = (u) => u.status === 'online' ? 'Now' : (u.lastActiveAt ? new Date(u.lastActiveAt).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—');
     return users.map(u => `
         <tr>
             <td>${escapeHtml(u.username || 'User')}</td>
             <td>${escapeHtml(u.email || '—')}</td>
             <td>${formatDate(u.createdAt)}</td>
-            <td>${formatDate(u.lastActiveAt)}</td>
+            <td>${statusCell(u)}</td>
+            <td>${lastSeen(u)}</td>
             <td><button class="admin-icon-btn" title="Send notification" onclick="jumpToNotifyUser('${u.uid}', '${escapeHtml((u.username || 'User').replace(/'/g, "\\'"))}')"><i class="fas fa-bell"></i></button></td>
         </tr>
     `).join('');

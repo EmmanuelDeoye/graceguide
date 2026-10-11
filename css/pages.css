@@ -1729,4 +1729,7 @@
     line-height: 1.5;
 }
 
-
+/* Shepherd: shortcuts just above the input, on a NEW conversation only (the same three as on Home). */
+.shepherd-quick { display: flex; gap: 8px; overflow-x: auto; flex-shrink: 0; padding: 2px 2px 4px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.shepherd-quick::-webkit-scrollbar { display: none; }
+.shepherd-quick .btn { white-space: nowrap; flex-shrink: 0; }

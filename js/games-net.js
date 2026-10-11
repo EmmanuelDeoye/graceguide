@@ -41,6 +41,13 @@
      */
     function create(opts) {
         var db = opts.db, TS = opts.ServerValue.TIMESTAMP, core = opts.core, bank = opts.bank;
+        // Connection care (v1.8). A heartbeat every BEAT_MS; a player is taken to have dropped when
+        // theirs is STALE_MS old; the game then waits up to NET_WAIT_MS for them, at most
+        // NET_PAUSES_EACH times a game each. An answer still unconfirmed after SENDING_AFTER_MS is
+        // shown as "sending". (`opts.timing` shortens these in tests.)
+        var timing = opts.timing || {};
+        var BEAT_MS = timing.beat || 4000, STALE_MS = timing.stale || 11000, NET_WAIT_MS = timing.wait || 30000;
+        var NET_PAUSES_EACH = 2, SENDING_AFTER_MS = timing.sending || 1500;
         var storage = opts.storage || { get: function () { return null; }, set: function () {} };
         var offset = 0;
         var offsetRef = db.ref('.info/serverTimeOffset');
@@ -673,10 +680,17 @@
                     // whenever the connection comes back.
                     var conn = db.ref('.info/connected'), mineOnline = ref.child('players/' + u.uid + '/online');
                     var ch = conn.on('value', function (s) {
-                        if (s.val() !== true || self._closed) return;
+                        // `offline`: this device has lost the server (the stage tells the player so).
+                        self.offline = s.val() !== true;
+                        if (self.offline || self._closed) { self._tick(); return; }
                         mineOnline.onDisconnect().set(false).then(function () { if (!self._closed) mineOnline.set(true).catch(function () {}); }).catch(function () {});
+                        self._beat(); // back: say so at once, so a game paused for me carries on
+                        self._tick();
                     });
-                    self._subs.push(function () { conn.off('value', ch); mineOnline.onDisconnect().cancel().catch(function () {}); });
+                    // A heartbeat while a game is being played: the others notice a dead connection
+                    // within seconds (the server alone can take a minute to), and the game pauses.
+                    var beats = setInterval(function () { self._beat(); }, BEAT_MS);
+                    self._subs.push(function () { conn.off('value', ch); clearInterval(beats); mineOnline.onDisconnect().cancel().catch(function () {}); });
                     return self;
                 });
             });
@@ -690,6 +704,67 @@
         };
 
         RoomSession.prototype.seated = function () { return core.seatedPlayers(this.room.players, this.room.meta.kind); };
+
+        // ---------- connection care (v1.8) ----------
+
+        /** "I am here": stamped by the server every few seconds while the game is being played. */
+        RoomSession.prototype._beat = function () {
+            var self = this, v = this._view, mine = this.room.players[this.uid];
+            if (this._closed || this.offline || this._noBeat || !this.room.plan || !mine || typeof mine.leftAt === 'number') return;
+            if (!v || v.phase === 'lobby' || v.phase === 'done') return;
+            roomRef(this.roomId).child('players/' + this.uid + '/beat').set(TS).catch(function () {
+                // A database still on the rules from before 1.8 refuses it: stop asking (the
+                // server's own "online" flag is then all there is to go by).
+                self._noBeat = true;
+            });
+        };
+
+        /**
+         * Has this player's connection dropped? True when the server says so (`online: false`), or
+         * when their heartbeat has stopped. A player who left for good is not "dropped", and one
+         * on an older version of the app (no heartbeat at all) is judged by the server's flag alone.
+         */
+        RoomSession.prototype.stale = function (uid) {
+            var p = this.room.players[uid];
+            if (!p || typeof p.leftAt === 'number') return false;
+            if (p.online === false) return true;
+            return typeof p.beat === 'number' && now() - p.beat > STALE_MS;
+        };
+
+        /**
+         * Pauses the game while a player's connection is down, and carries on when they are back
+         * (or after NET_WAIT_MS — nobody can hold a game up for long; each player is waited for at
+         * most NET_PAUSES_EACH times a game). ONE device looks after this: the first seated player
+         * who is still connected. The pause itself is an ordinary engine pause (`why: 'net'`, `by` =
+         * the player being waited for), so every device stays in step.
+         */
+        RoomSession.prototype._netCare = function (view) {
+            var self = this, room = this.room, seated = this.seated(), mine = room.players[this.uid];
+            if (this.offline || seated.length < 2 || seated.indexOf(this.uid) < 0 || !mine || typeof mine.leftAt === 'number') return;
+            var connected = seated.filter(function (uid) { return typeof room.players[uid].leftAt !== 'number' && !self.stale(uid); });
+            if (connected[0] !== this.uid) return;
+            var pauses = core.pausesOf(room), ref = roomRef(this.roomId).child('pauses');
+            if (view.phase === 'paused') {
+                if (!view.net) return; // a pause from an older version of the app: its own Resume button ends it
+                var p = pauses.filter(function (x) { return x.index === view.pauseIndex; })[0];
+                var back = !this.stale(view.by);
+                if (p && p.open && (back || now() - p.s >= NET_WAIT_MS) && this._ending !== p.index) {
+                    this._ending = p.index;
+                    ref.child(p.index + '/e').set(TS).catch(function () { self._ending = null; });
+                }
+                return;
+            }
+            if (view.phase !== 'question' || this._noPause || this._pausing) return;
+            var answered = (room.answered && room.answered[view.round]) || {}, wordle = core.GAMES[this.game].type === 'wordle';
+            var dropped = seated.filter(function (uid) { return uid !== self.uid && self.stale(uid) && (wordle || answered[uid] == null); })[0];
+            if (!dropped || pauses.length >= core.MAX_PAUSES) return;
+            if (pauses.filter(function (x) { return x.net && x.by === dropped; }).length >= NET_PAUSES_EACH) return;
+            this._pausing = true;
+            ref.child(String(pauses.length)).set({ s: TS, by: dropped, why: 'net' }).then(function () { self._pausing = false; }, function () {
+                // Not allowed (a database still on the older rules): the game simply does not pause.
+                self._pausing = false; self._noPause = true;
+            });
+        };
 
         /** Who may press Start: the host, or — if the host is gone — the longest-seated online player. */
         RoomSession.prototype.canStart = function () {
@@ -792,15 +867,23 @@
             if (!v || v.phase !== 'question' || this._mine[v.round] !== undefined || this.seated().indexOf(this.uid) < 0) return Promise.resolve(false);
             var r = v.round, ref = roomRef(this.roomId);
             this._mine[r] = answer;
+            // On its way to the server. On a weak connection that can take a while: the stage says
+            // so (view.sending) instead of leaving the player wondering whether the tap counted.
+            this._sending = { round: r, since: Date.now() };
             this._tick();
+            var sent = function () { if (self._sending && self._sending.round === r) self._sending = null; };
             return ref.child('answers/' + r + '/' + this.uid).set({ a: answer, t: TS }).then(function () {
+                sent();
                 if (core.GAMES[self.game].type !== 'wordle') ref.child('answered/' + r + '/' + self.uid).set(1).catch(function () {});
                 self._watchRound(r, 0, true); // my answer is in: the round is now readable
+                self._tick();
                 return true;
             }, function () {
                 // Rejected (e.g. already answered from another tab): show what the server has instead.
+                sent();
                 self._mine[r] = undefined;
                 self._probed[r] = false;
+                self._tick();
                 return false;
             });
         };
@@ -858,6 +941,12 @@
                     if (settled) this._synced = true;
                 }
                 view.syncing = !this._synced;
+                this._netCare(view);
+                if (view.phase === 'paused' && view.net) {
+                    // A wait for a dropped connection ends after NET_WAIT_MS at most: count down to that.
+                    var waited = core.pausesOf(room).filter(function (x) { return x.index === view.pauseIndex; })[0];
+                    if (waited) view.msLeft = Math.max(0, Math.min(view.msLeft, waited.s + NET_WAIT_MS - now()));
+                }
                 if (view.phase !== 'countdown' && !this._remembered) { this._remembered = true; markRoomSeen(this.roomId, this.game, room.plan.q || []); }
             }
             view.room = room;
@@ -866,6 +955,9 @@
             view.canStart = this.canStart();
             view.waitingFor = this.waitingFor || null; // Start was pressed: players still connecting
             view.isHost = room.meta.hostUid === this.uid;
+            // My own connection: lost altogether, or an answer that is taking its time to arrive.
+            view.offline = !!this.offline;
+            view.sending = !!(this._sending && this._sending.round === view.round && Date.now() - this._sending.since > SENDING_AFTER_MS);
             this._view = view;
             if (this.onUpdate) this.onUpdate(view);
         };
