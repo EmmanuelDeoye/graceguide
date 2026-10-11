@@ -490,3 +490,22 @@
 }
 .pl-help-btn:hover, .pl-help-btn:focus-visible { background: rgba(255, 255, 255, 0.28); }
 .pl-level-guest .pl-help-btn { margin-left: 8px; }
+
+/* ---- v1.7.0: Quick Match offer, rematch difficulty, questions on the results ---- */
+.pl-qm-offer { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.pl-qm-offer .pl-game-icon { width: 64px; height: 64px; border-radius: 20px; font-size: 26px; color: #fff; margin-bottom: 4px; }
+.pl-qm-kicker { text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; font-weight: 700; color: var(--accent-muted-gold); }
+.pl-qm-offer h3 { margin: 0; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.pl-qm-game { font-size: 24px; font-weight: 700; color: var(--text-charcoal); line-height: 1.2; }
+.pl-qm-offer p { margin: 0; font-size: 14px; }
+.pl-qm-offer .pl-qm-facts { font-weight: 600; color: var(--text-charcoal); }
+.pl-qm-actions { display: flex; gap: 8px; width: 100%; margin: 10px 0 4px; }
+.pl-qm-actions .btn { flex: 1; }
+.pl-level-pick.pl-level-pick-stack { grid-template-columns: 1fr; }
+.pl-level-pick.pl-level-pick-stack button { flex-direction: row; align-items: center; justify-content: space-between; text-align: left; padding: 12px 14px; }
+.pl-verse-q { font-size: 14px; line-height: 1.45; color: var(--text-charcoal); margin-bottom: 6px; overflow-wrap: anywhere; }
+.pl-verse-q > span { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-slate); margin-bottom: 2px; }
+.pl-verse-q em { display: block; font-style: normal; padding-left: 10px; border-left: 2px solid var(--pl-line); margin-top: 4px; }
+.pl-verse-q-emoji { font-size: 22px; letter-spacing: 2px; }
+.pl-verse-q-emoji > span { letter-spacing: 0.06em; }
+.pl-verse-main strong .pl-verse-a { font-weight: 600; color: var(--text-slate); }

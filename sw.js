@@ -17,7 +17,7 @@
 
 // Bump this whenever the shell list below changes so old caches get
 // cleaned up and clients pick up the new files.
-const CACHE_VERSION = 'graceguide-shell-v14';
+const CACHE_VERSION = 'graceguide-shell-v15';
 
 const APP_SHELL = [
   '/',
@@ -35,6 +35,7 @@ const APP_SHELL = [
   '/js/messaging.js',
   '/js/quiz.js',
   '/js/sharecards.js',
+  '/js/games-boot.js',
   '/js/games-bank.js',
   '/js/games-core.js',
   '/js/games-net.js',
@@ -43,7 +44,8 @@ const APP_SHELL = [
   '/js/pwa.js',
   '/img/logo.png',
   '/img/icons/icon-192.png',
-  '/img/icons/icon-512.png'
+  '/img/icons/icon-512.png',
+  '/img/icons/badge-96.png'
 ];
 
 // How long to wait for the network before showing the saved copy (slow / flaky connections).

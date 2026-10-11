@@ -37,7 +37,7 @@ messaging.onBackgroundMessage((payload) => {
   self.registration.showNotification(title, {
     body,
     icon: '/img/icons/icon-192.png',
-    badge: '/img/icons/icon-96.png',
+    badge: '/img/icons/badge-96.png', // the leaf as a plain silhouette (what Android's status bar draws)
     tag: data.tag || undefined,   // same tag replaces/stacks related notifications instead of piling up
     data,
     vibrate: [100, 50, 100]

@@ -3157,7 +3157,7 @@ window.resendVerificationEmail = resendVerificationEmail;
    Three ways to get in touch: a message straight to the GraceGuide team
    (it lands in the admin page's Messages tab), WhatsApp, or email.
    ============================================ */
-const GRACEGUIDE_WEB_VERSION = '1.6.0';
+const GRACEGUIDE_WEB_VERSION = '1.7.0';
 const CONTACT_EMAIL = 'support@graceguide.com.ng';
 const CONTACT_CATEGORIES = [
     ['inquiry', 'Inquiry', 'fa-circle-question'],

@@ -1128,6 +1128,9 @@
     justify-content: center;
     font-size: 16px;
 }
+/* The GraceGuide leaf (the app's own logo) on a light disc. */
+.in-app-notif-logo { background: var(--bg-warm-ivory); border: 1px solid rgba(0, 0, 0, 0.08); }
+.in-app-notif-logo img { width: 26px; height: 26px; object-fit: contain; display: block; }
 
 .in-app-notif-body {
     flex: 1;

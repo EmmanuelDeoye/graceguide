@@ -1,4 +1,4 @@
-# GraceGuide — going live (web v14 shell, Android 1.6.0)
+# GraceGuide — going live (web v15 shell, Android 1.7.0)
 
 Three things have to happen in Firebase before everything works for real
 users. Do them in this order.
@@ -76,14 +76,63 @@ firebase deploy --only functions
 
 ## 3. Publish
 
-- Web: upload the `graceguide` folder (including `index.html`, `sw.js` and everything in `js/` and `css/`). `sw.js` is at cache version v14. Upload `admin.html`, `css/admin.css` and `js/admin.js` too — the admin page was repaired in 1.4.1. `js/games-ai.js` is gone — delete it from the server too.
+- Web: upload the `graceguide` folder (including `index.html`, `sw.js` and everything in `js/` and `css/`). `sw.js` is at cache version v15. New files to upload in 1.7.0: `js/games-boot.js` and `img/icons/badge-96.png` (and the much larger `js/games-bank.js`). Upload `admin.html`, `css/admin.css` and `js/admin.js` too — the admin page was repaired in 1.4.1. `js/games-ai.js` is gone — delete it from the server too.
 - Android: `graceguide-android/app/build/outputs/bundle/release/app-release.aab`
-  or `…/apk/release/app-release.apk` — version 1.6.0 (code 8). Set the admin
-  page's "Android latest version" to 1.6.0.
+  or `…/apk/release/app-release.apk` — version 1.7.0 (code 9). Set the admin
+  page's "Android latest version" to 1.7.0 (code 9).
 - Release web and Android together, and ask players to update: a phone still on
   an older version does not know the new questions (it shows "This question
   isn't available in your version of the app") and does not freeze when someone
   pauses, so it would fall out of step in a shared room.
+
+## What changed in 1.7.0
+
+No rule block changed. If you run the Cloud Functions, redeploy them so the
+referee has the new question bank (`functions/games-bank.json`; run
+`npm install` in `functions` first).
+
+- **Notifications show the GraceGuide leaf**, not the Shepherd dove: the small
+  status-bar icon on Android (`ic_stat_leaf`), the badge on web push
+  (`img/icons/badge-96.png`) and the in-app banner. Nothing about Shepherd
+  itself was touched.
+- **Quick Match is a match with whoever is online, whatever the game.** If
+  somebody is already waiting, the person joining is shown a card — "Ada
+  wants to play Bible Emoji · 1v1 · 8 rounds · Hard" — with **Accept** and
+  **Decline**. Accept starts the game at once, as before. Decline shows the
+  next person waiting, or, if there is nobody else, opens a room for the game
+  they tapped and waits. (Someone waiting for the same game is offered first.)
+- **Every rematch asks the host for the difficulty** (Easy / Medium / Hard,
+  with the level just played already selected) before it restarts. The other
+  players simply follow, as before.
+- **1,000 questions for every game** — 5,000 in all (see below).
+- **Results show the question as well as the answer**: the emojis, the three
+  clues, the quote, the trivia question or the Wordle clue, then "Answer: …",
+  the verse and the button that opens it.
+- The web app no longer waits for the question bank at start-up: it loads in
+  the background, and Play shows "Loading the games…" for a moment only if it
+  is opened before the bank has arrived.
+
+### The 5,000 questions — how they were checked
+
+They were written as compact lists (`graceguide-games-tests/bank3/`) and
+turned into the bank by `bank3/gen.js`, which checks them against the text of
+the King James Bible (a public-domain copy kept in the test folder only):
+
+- every reference is a real verse (this now covers the older 531 questions too);
+- every Wordle word is in the KJV, and its explanation is the verse it is in;
+- every "in the Bible" quote is word for word in the verse cited;
+- every "not in the Bible" saying appears in no verse (this caught several I
+  had wrong — "Every man for himself" is Numbers 31:53);
+- in fill-in-the-blank questions no wrong option also makes a real verse;
+- in Who Am I and the trivia, the answer is named at (or right beside) the
+  verse cited; explanations are the verse itself, trimmed.
+
+What a machine cannot check is still my own work and can contain mistakes:
+the wording of clues and trivia questions, which wrong options were chosen,
+the Easy / Medium / Hard labels, the emoji pictures, and who is credited with
+a non-Bible saying. If a question is wrong, correct it in
+`bank-src-3.js` and run `node build-bank.js --accept-changes` (never delete or
+reorder a row).
 
 ## What changed in 1.6.0
 

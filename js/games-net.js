@@ -330,23 +330,51 @@
         }
 
         /**
-         * Finds someone waiting for this game and takes the seat (first claim wins), otherwise
-         * opens a public 1v1 room and waits. Resolves { roomId, role: 'guest' | 'host' }.
+         * Everyone waiting for a Quick Match right now — WHATEVER game they asked for (a Quick
+         * Match is a match with whoever is online). Those waiting for `game` come first, then
+         * whoever has waited longest. Each: { host, name, game, room, t }.
          */
-        function quickMatch(game, level) {
+        function quickWaiting(game) {
+            var u = me();
+            return Promise.all(core.GAME_IDS.map(function (g) {
+                return val(db.ref('games/match/' + g)).then(function (all) {
+                    return Object.keys(all || {}).map(function (host) { var e = all[host] || {}; return { host: host, name: e.name, game: g, room: e.room, t: e.t || 0, taken: !!e.takenBy }; });
+                }, function () { return []; });
+            })).then(function (lists) {
+                return [].concat.apply([], lists)
+                    .filter(function (x) { return x.host !== u.uid && x.room && !x.taken && now() - x.t < QUEUE_FRESH_MS; })
+                    .sort(function (a, b) { return ((a.game === game ? 0 : 1) - (b.game === game ? 0 : 1)) || (a.t - b.t); });
+            });
+        }
+
+        /**
+         * Quick Match. Looks at everyone who is waiting (any game) and offers them one at a time:
+         * `ask({ host, name, game, level, room })` shows whose game it is and which game they want
+         * to play, and resolves true (Accept) or false (Decline). Accept takes the seat (first
+         * claim wins) and the game starts by itself; `lost(offer)` is told when somebody else got
+         * there first. When nobody is waiting, or every offer is declined, a public 1v1 room for
+         * `game` is opened and I wait in turn. Without `ask` every offer is accepted.
+         * Resolves { roomId, role: 'guest' | 'host' }.
+         */
+        function quickMatch(game, level, ask, lost) {
             var u = me(), q = db.ref('games/match/' + game);
             stopWaiting();
-            return val(q).then(function (all) {
-                var entries = Object.keys(all || {}).map(function (host) { return { host: host, e: all[host] }; })
-                    .filter(function (x) { return x.host !== u.uid && x.e && !x.e.takenBy && now() - (x.e.t || 0) < QUEUE_FRESH_MS; })
-                    .sort(function (a, b) { return a.e.t - b.e.t; });
+            return quickWaiting(game).then(function (entries) {
                 function tryNext(i) {
                     if (i >= entries.length) return null;
-                    var x = entries[i];
-                    return q.child(x.host + '/takenBy').transaction(function (cur) { return cur ? undefined : u.uid; }).then(function (res) {
-                        if (!res.committed || res.snapshot.val() !== u.uid) return tryNext(i + 1);
-                        return joinRoom(x.e.room).then(function () { return { roomId: x.e.room, role: 'guest' }; }, function () { return tryNext(i + 1); });
-                    }, function () { return tryNext(i + 1); });
+                    var x = entries[i], seat = db.ref('games/match/' + x.game + '/' + x.host + '/takenBy');
+                    var gone = function () { if (ask && lost) lost(x); return tryNext(i + 1); };
+                    // The level travels with the room (not the queue entry); it is shown with the offer.
+                    return val(roomRef(x.room).child('meta/level')).catch(function () { return null; }).then(function (lvl) {
+                        x.level = core.isLevel(lvl) ? lvl : null;
+                        return ask ? ask(x) : true;
+                    }).then(function (yes) {
+                        if (!yes) return tryNext(i + 1);
+                        return seat.transaction(function (cur) { return cur ? undefined : u.uid; }).then(function (res) {
+                            if (!res.committed || res.snapshot.val() !== u.uid) return gone();
+                            return joinRoom(x.room).then(function () { return { roomId: x.room, role: 'guest', game: x.game }; }, gone);
+                        }, gone);
+                    });
                 }
                 return tryNext(0);
             }).then(function (found) {
@@ -858,15 +886,16 @@
         };
 
         /**
-         * Rematch: the same room goes again — same code, same players, same level, new questions.
+         * Rematch: the same room goes again — same code, same players, new questions, at the
+         * level the host picks for it (`level`; none = the level of the game just played).
          * (Each game keeps its own answer record underneath, which is what makes scores
          * tamper-proof; players never see that.) Everyone still on the results follows
          * `rematch` into it; the others are invited back (see inviteBack). Resolves the id to open.
          */
-        RoomSession.prototype.rematch = function () {
+        RoomSession.prototype.rematch = function (level) {
             var self = this, ref = roomRef(this.roomId).child('rematch'), meta = this.room.meta;
             if (this.room.rematch) return joinRoom(this.room.rematch).then(function () { return self.room.rematch; });
-            return createRoom(this.game, meta.kind, false, meta.level, meta.hostUid === this.uid ? meta.code : null).then(function (room) {
+            return createRoom(this.game, meta.kind, false, core.isLevel(level) ? level : meta.level, meta.hostUid === this.uid ? meta.code : null).then(function (room) {
                 return ref.set(room.roomId).then(function () { self.rematchHosted = true; return room.roomId; }, function () {
                     // Someone beat me to it: drop my spare room and join theirs.
                     return leaveRoom(room.roomId).then(function () { return val(ref); }).then(function (id) { return joinRoom(id).then(function () { return id; }); });
@@ -877,7 +906,7 @@
         return {
             now: now, me: me, GameError: GameError,
             createRoom: createRoom, joinRoom: joinRoom, joinByCode: joinByCode, leaveRoom: leaveRoom,
-            quickMatch: quickMatch, stopWaiting: stopWaiting,
+            quickMatch: quickMatch, quickWaiting: quickWaiting, stopWaiting: stopWaiting,
             openRoom: function (roomId) { return new RoomSession(roomId).open(); },
             serverAlive: serverAlive, loadProfile: loadProfile, award: award, claimBadge: claimBadge, leaderboard: leaderboard, profilesOf: profilesOf,
             watchLeaderboard: watchLeaderboard, watchDailyBoard: watchDailyBoard, myGames: myGames, cancelRoom: cancelRoom, forgetGame: forget, KEEP_MS: KEEP_MS,

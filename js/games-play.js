@@ -163,7 +163,7 @@
         function promptHtml(q, view, revealed) {
             switch (session.game) {
                 case 'emoji':
-                    return '<div class="pl-emoji">' + esc(q.e) + '</div><p class="pl-prompt">Which Bible story is this?</p>';
+                    return '<div class="pl-emoji">' + esc(q.e) + '</div><p class="pl-prompt">What do these emojis show?</p>';
                 case 'whoami':
                     return '<p class="pl-prompt">Who am I?</p><ol class="pl-clues" id="pl-clues">' + q.clues.map(function (c, i) {
                         return '<li class="pl-clue' + (revealed ? '' : ' pl-clue-hidden') + '" data-clue="' + i + '"><span class="pl-clue-text">' + esc(c) + '</span><span class="pl-clue-lock"><i class="fas fa-lock"></i> Clue ' + (i + 1) + '</span></li>';

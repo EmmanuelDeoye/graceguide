@@ -305,7 +305,7 @@ function showInAppNotificationPopup(title, body, data = {}) {
     popup.id = 'in-app-notif-popup';
     popup.className = 'in-app-notif-popup';
     popup.innerHTML = `
-        <div class="in-app-notif-icon"><i class="fas fa-dove"></i></div>
+        <div class="in-app-notif-icon in-app-notif-logo"><img src="img/logo.png" alt=""></div>
         <div class="in-app-notif-body">
             <div class="in-app-notif-title">${escapeHtml(title)}</div>
             ${body ? `<div class="in-app-notif-text">${escapeHtml(body)}</div>` : ''}

@@ -284,7 +284,7 @@
             }).join('') + '</div></div>' +
             '<div class="pl-modes">' +
             mode('solo', 'fa-user', 'Solo', 'Practise at your own pace') +
-            mode('quick', 'fa-bolt', 'Quick Match', '1v1 against whoever is online') +
+            mode('quick', 'fa-bolt', 'Quick Match', '1v1 with whoever is online — any game') +
             mode('duel', 'fa-user-group', 'Challenge a Brethren', 'A private 1v1 — invite or share the code') +
             mode('room', 'fa-people-group', 'Create a Room', 'Up to 8 players with a room code') +
             '</div><p class="pl-foot">Every answer comes with its Scripture — read it after you play.</p>');
@@ -307,8 +307,39 @@
         if (busyWithRoom()) return;
         var n = getNet();
         loading(how === 'quick' ? 'Looking for an opponent…' : 'Setting up your room…');
-        var p = how === 'quick' ? n.quickMatch(game, gameLevel()) : n.createRoom(game, how === 'duel' ? 'duel' : 'room', false, gameLevel());
+        var p = how === 'quick' ? n.quickMatch(game, gameLevel(), askQuickMatch, function () { showToast('Someone else joined that game first.', 'info'); loading('Looking for an opponent…'); })
+            : n.createRoom(game, how === 'duel' ? 'duel' : 'room', false, gameLevel());
         p.then(function (r) { go('room', r.roomId, true); }, function (err) { showToast(errorText(err), 'error'); go(game, null, true); });
+    }
+    /**
+     * Quick Match found someone waiting: say who, and which game they want to play (it may not
+     * be the game I tapped). Accept takes the seat and the game starts by itself; Decline looks
+     * for the next person, or waits for an opponent of my own. Resolves true / false.
+     */
+    function askQuickMatch(offer) {
+        return new Promise(function (resolve) {
+            var g = Core.GAMES[offer.game], done = false;
+            var answer = function (yes) {
+                if (done) return;
+                done = true; watch.disconnect();
+                if ($id('pl-qm-offer')) closeModal();
+                if (AppState.currentRoute === 'play') loading(yes ? 'Joining…' : 'Looking for an opponent…');
+                setTimeout(function () { resolve(yes); }, 300); // let the closed dialog unwind before the next one opens
+            };
+            showModal('<div class="pl-qm-offer" id="pl-qm-offer"><span class="pl-game-icon pl-game-card-' + offer.game + '"><i class="fas ' + g.icon + '"></i></span>' +
+                '<small class="pl-qm-kicker">Quick Match found</small>' +
+                '<h3><span id="pl-qm-host">' + esc(nameOf(offer.host, offer.name)) + '</span> wants to play</h3>' +
+                '<div class="pl-qm-game" id="pl-qm-game">' + esc(g.name) + '</div>' +
+                '<p class="text-muted">' + esc(g.tagline) + '</p>' +
+                '<p class="pl-qm-facts">1v1 · ' + g.rounds + ' round' + (g.rounds === 1 ? '' : 's') + (Core.isLevel(offer.level) ? ' · ' + LEVEL_INFO[offer.level][0] : '') + '</p>' +
+                '<div class="pl-qm-actions"><button class="btn btn-outline" id="pl-qm-decline">Decline</button><button class="btn btn-primary" id="pl-qm-accept"><i class="fas fa-play"></i> Accept</button></div>' +
+                '<small class="text-muted">Accept and the game starts straight away.</small></div>');
+            $id('pl-qm-accept').onclick = function () { answer(true); };
+            $id('pl-qm-decline').onclick = function () { answer(false); };
+            // Closed any other way (a tap outside, the back button): the same as Decline.
+            var watch = new MutationObserver(function () { if (!$id('pl-qm-offer')) answer(false); });
+            watch.observe(DOM.modalContainer, { childList: true, subtree: true });
+        });
     }
 
     // ---------- rooms: lobby → game → results ----------
@@ -535,20 +566,30 @@
         var missed = items.filter(function (i) { return !i.ok; }), right = items.filter(function (i) { return i.ok; });
         function row(i) {
             return '<div class="pl-verse' + (i.ok ? '' : ' pl-verse-missed') + '"><i class="fas ' + (i.ok ? 'fa-circle-check' : 'fa-circle-xmark') + '"></i>' +
-                '<div class="pl-verse-main"><strong>' + esc(i.label) + '</strong><small>' + esc(i.q.x) + '</small></div>' +
+                '<div class="pl-verse-main">' + (i.ask ? '<div class="pl-verse-q' + (i.game === 'emoji' ? ' pl-verse-q-emoji' : '') + '"><span>' + esc(i.kicker) + '</span>' + i.ask + '</div>' : '') +
+                '<strong><span class="pl-verse-a">Answer:</span> ' + esc(i.label) + '</strong><small>' + esc(i.q.x) + '</small></div>' +
                 '<button class="btn btn-outline btn-sm" onclick="openPassageReference(\'' + esc(i.q.ref).replace(/'/g, "\\'") + '\')"><i class="fas fa-book-bible"></i> ' + esc(i.q.ref) + '</button></div>';
         }
         return '<h3 class="pl-section">From the Word</h3>' +
             (missed.length ? '<p class="pl-foot" style="text-align:left;">Missed ' + (missed.length === 1 ? 'one' : 'a few') + '? Read ' + (missed.length === 1 ? 'it' : 'them') + ' in context — that’s how it sticks.</p>' : '<p class="pl-foot" style="text-align:left;">A clean sheet! Go deeper into any of these passages.</p>') +
             '<div class="card pl-verses">' + missed.concat(right).map(row).join('') + '</div>';
     }
-    function answerLabel(game, q) { return game === 'wordle' ? q.w : game === 'bibleornot' ? '“' + truncate(q.q, 60) + '”' : q.o[q.c]; }
+    function answerLabel(game, q) { return game === 'wordle' ? q.w : game === 'bibleornot' ? (q.c === 0 ? 'In the Bible' : 'Not in the Bible') : q.o[q.c]; }
+    /** One line of the results: what was asked (HTML, already escaped), its answer, and whether I got it. */
+    function resultItem(game, q, ok) {
+        var kicker = { emoji: 'What do the emojis show?', whoami: 'Who am I?', bibleornot: 'Bible or not?', battle: 'Question', wordle: 'Clue' }[game] || 'Question';
+        var ask = game === 'emoji' ? esc(q.e)
+            : game === 'whoami' ? (q.clues || []).map(function (c) { return '<em>' + esc(c) + '</em>'; }).join('')
+            : game === 'bibleornot' ? '“' + esc(q.q) + '”'
+            : game === 'wordle' ? esc(q.hint) : esc(q.q);
+        return { q: q, ok: ok, game: game, kicker: kicker, ask: ask, label: answerLabel(game, q) };
+    }
 
     function renderResults(box, s, res, award) {
         var me = s.uid, mine = res.byUid[me], multi = res.players >= 2, g = Core.GAMES[s.game];
         var items = s.room.plan.q.map(function (id, r) {
             var q = Core.roomQuestion(BANK, s.game, s.room.plan, r);
-            return q ? { q: q, ok: !!(mine && mine.rounds[r] && mine.rounds[r].ok), label: answerLabel(s.game, q) } : null;
+            return q ? resultItem(s.game, q, !!(mine && mine.rounds[r] && mine.rounds[r].ok)) : null;
         }).filter(Boolean);
         var headline = !mine ? 'Game over' : multi ? (mine.win ? (res.ranking.filter(function (u) { return res.byUid[u].win; }).length > 1 ? 'It’s a tie!' : 'You won! 🎉') : ordinal(mine.rank) + ' place')
             : (mine.units >= res.totalUnits ? 'Flawless! 🌟' : mine.correct ? 'Well played' : 'Good try');
@@ -577,12 +618,40 @@
             // anyone who is not back within a few seconds is invited.
             var need = res.ranking.filter(function (uid) { var p = s.room.players[uid]; return p && typeof p.leftAt !== 'number'; }).length;
             var others = res.ranking.filter(function (uid) { return uid !== s.uid; }), prevRoom = live.roomId;
-            (target ? getNet().joinRoom(target).then(function () { return { id: target, mine: false }; }) : s.rematch().then(function (id) { return { id: id, mine: s.rematchHosted === true }; })).then(function (r) {
+            var fail = function (err) { btn.disabled = false; live.followed = false; if (err) showToast(errorText(err), 'error'); };
+            var open = function (r) {
                 closeLive(false);
                 if (r.mine && !target) { rematchAuto = { roomId: r.id, need: Math.max(2, need), prev: others, prevRoom: prevRoom }; inviteBackLater(rematchAuto); }
                 go('room', r.id, true);
-            }, function (err) { btn.disabled = false; live.followed = false; showToast(errorText(err), 'error'); });
+            };
+            if (target) { getNet().joinRoom(target).then(function () { open({ id: target, mine: false }); }, fail); return; }
+            // Calling the rematch: choose its difficulty first (every rematch asks).
+            pickRematchLevel(s.room.meta.level, function (level) {
+                if (!level) { fail(); return; }
+                if (live.session !== s) return;
+                // Someone else called it while the picker was open: go with theirs.
+                s.rematch(level).then(function (id) { open({ id: id, mine: s.rematchHosted === true }); }, fail);
+            });
         };
+    }
+    /** "Rematch — choose the difficulty": calls back with easy / medium / hard, or null when it is closed. */
+    function pickRematchLevel(current, then) {
+        var chosen = Core.isLevel(current) ? current : gameLevel(), done = false;
+        var finish = function (level) { if (done) return; done = true; watch.disconnect(); if ($id('pl-rematch-level')) closeModal(); then(level); };
+        showModal('<div id="pl-rematch-level"><h3 style="margin-bottom:4px;">Rematch</h3><p class="text-muted" style="margin-bottom:12px;">Same room, same players, new questions. Choose the difficulty for this game.</p>' +
+            '<div class="pl-level-pick pl-level-pick-stack" id="pl-rematch-pick">' + Core.LEVELS.map(function (l) {
+                return '<button type="button" data-level="' + l + '"' + (l === chosen ? ' class="on"' : '') + '><strong>' + LEVEL_INFO[l][0] + '</strong><small>' + LEVEL_INFO[l][1] + '</small></button>';
+            }).join('') + '</div>' +
+            '<button class="btn btn-primary btn-block" id="pl-rematch-go" style="margin-top:14px;"><i class="fas fa-rotate-right"></i> Start rematch</button>' +
+            '<button class="btn btn-outline btn-block" id="pl-rematch-cancel" style="margin-top:8px;">Not now</button></div>');
+        var buttons = DOM.modalContainer.querySelectorAll('#pl-rematch-pick [data-level]');
+        buttons.forEach(function (b) {
+            b.onclick = function () { chosen = b.getAttribute('data-level'); buttons.forEach(function (x) { x.classList.toggle('on', x === b); }); };
+        });
+        $id('pl-rematch-go').onclick = function () { finish(chosen); };
+        $id('pl-rematch-cancel').onclick = function () { finish(null); };
+        var watch = new MutationObserver(function () { if (!$id('pl-rematch-level')) finish(null); });
+        watch.observe(DOM.modalContainer, { childList: true, subtree: true });
     }
     function ordinal(n) { return n + (n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th'); }
 
@@ -683,7 +752,7 @@
         var sc = Core.scoreDaily(BANK, day, run), u = user();
         var items = Core.dailyQuestions(BANK, day).map(function (d, i) {
             var q = Core.questionById(BANK, d.game, d.id);
-            return { q: q, ok: (run.a || [])[i] === q.c, label: answerLabel(d.game, q) };
+            return resultItem(d.game, q, (run.a || [])[i] === q.c);
         });
         page('<div class="pl-hero pl-daily-hero"><span class="pl-game-icon"><i class="fas fa-calendar-check"></i></span><h2>Today’s challenge</h2>' +
             '<div class="pl-final-score">' + sc.score + '<small> points</small></div><p>' + sc.correct + ' of ' + sc.total + ' correct · ' + Math.round(sc.elapsed / 1000) + ' s</p><small>Come back tomorrow for five new questions.</small></div>' +
@@ -934,10 +1003,44 @@
 
     // ---------- routing ----------
 
+    // The question bank is large, so the app does not wait for it at start-up: it arrives in the
+    // background (index.html loads js/games-bank.js `async`). Opening Play before it is here
+    // shows a short "Loading" and carries on by itself the moment it lands.
+    function bankReady() { return !!(BANK && BANK.ready !== false && BANK.battle && BANK.battle.length); }
+    var bankWait = { on: false, timer: null, tries: 0 };
+    function waitForBank() {
+        loading('Loading the games…');
+        if (bankWait.on) return;
+        bankWait.on = true;
+        var done = function () {
+            if (!bankReady()) return;
+            bankWait.on = false; clearTimeout(bankWait.timer);
+            window.removeEventListener('gg-bank-ready', done);
+            if (AppState.currentRoute === 'play') renderPlayPage();
+        };
+        window.addEventListener('gg-bank-ready', done);
+        // Still not here after a while (a dropped connection): ask for the file again, and say so.
+        bankWait.timer = setTimeout(function () {
+            if (bankReady()) { done(); return; }
+            bankWait.on = false;
+            window.removeEventListener('gg-bank-ready', done);
+            if (AppState.currentRoute !== 'play') return;
+            page('<div class="pl-stage pl-center"><i class="fas fa-wifi pl-big-icon"></i><h3>Couldn’t load the questions</h3>' +
+                '<p class="pl-waiting">Check your connection and try again.</p><button class="btn btn-primary" id="pl-bank-retry">Try again</button></div>');
+            $id('pl-bank-retry').onclick = function () {
+                var s = document.createElement('script');
+                s.async = true; s.src = 'js/games-bank.js?retry=' + (++bankWait.tries);
+                document.head.appendChild(s);
+                renderPlayPage();
+            };
+        }, 15000);
+    }
+
     /** navigateTo('play') → this. AppState.playRoute = { sub, arg } from the URL (#/play/sub/arg). */
     function renderPlayPage() {
         var r = AppState.playRoute || {}, sub = r.sub, arg = r.arg;
         onSignedIn();
+        if (!bankReady()) { waitForBank(); return; }
         AppState.scrollPositions.play = 0; // every Play screen opens at the top
         stopBoards();
         if (sub === 'room' && arg) { openRoom(arg); return; }
