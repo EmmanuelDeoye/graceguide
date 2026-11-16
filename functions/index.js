@@ -321,5 +321,77 @@ exports.dailyReadingReminder = functions
     return null;
   });
 
+/**
+ * Account deletion (Google Play "User Data — Account Deletion").
+ * When a GraceGuide login is deleted — from Settings → Delete account, the
+ * delete-account.html page, or the Firebase console — this removes everything
+ * kept for that person with admin rights, including the paths the database
+ * rules do not let the person delete themselves (their game profile). The
+ * apps delete what they can first; this is the backstop and is safe to run
+ * on data that is already gone.
+ */
+exports.cleanUpDeletedAccount = functions
+  .region(REGION)
+  .auth.user()
+  .onDelete(async (user) => {
+    const uid = user.uid;
+    const db = admin.database();
+    const gone = {
+      [`users/${uid}`]: null,
+      [`userDirectory/${uid}`]: null,
+      [`publicProfiles/${uid}`]: null,
+      [`quizLeaderboardAllTime/${uid}`]: null,
+      [`quizCompetition/current/participants/${uid}`]: null,
+      [`games/profiles/${uid}`]: null,
+      [`games/seen/${uid}`]: null,
+      [`games/mine/${uid}`]: null,
+      [`games/runs/${uid}`]: null,
+      [`games/badgeClaims/${uid}`]: null,
+      [`games/invites/${uid}`]: null,
+    };
+    // Direct messages: every conversation goes for both people, and leaves the other
+    // person's chat list. The app may already have removed users/{uid}/dmIndex, so
+    // the conversations are also found by id (the two uids sorted, joined with "_").
+    const chatWith = new Set();
+    try {
+      (await db.ref(`users/${uid}/dmIndex`).once('value')).forEach((c) => { chatWith.add(c.key); });
+    } catch (e) {
+      console.error('cleanUpDeletedAccount: could not read the chat list', uid, e);
+    }
+    try {
+      (await db.ref('dmConversations').once('value')).forEach((c) => {
+        const parts = c.key.split('_');
+        if (parts.length === 2 && parts.includes(uid)) chatWith.add(parts[0] === uid ? parts[1] : parts[0]);
+      });
+    } catch (e) {
+      console.error('cleanUpDeletedAccount: could not list conversations', uid, e);
+    }
+    chatWith.forEach((other) => {
+      if (!other || other === uid) return;
+      gone[`dmConversations/${[uid, other].sort().join('_')}`] = null;
+      gone[`users/${other}/dmIndex/${uid}`] = null;
+    });
+    try {
+      const conns = await db.ref(`users/${uid}/connections`).once('value');
+      conns.forEach((c) => { gone[`users/${c.key}/connections/${uid}`] = null; });
+    } catch (e) {
+      console.error('cleanUpDeletedAccount: could not list Brethren', uid, e);
+    }
+    try {
+      const posts = await db.ref('spacePosts').orderByChild('authorId').equalTo(uid).once('value');
+      posts.forEach((p) => { gone[`spacePosts/${p.key}`] = null; });
+    } catch (e) {
+      console.error('cleanUpDeletedAccount: could not list Space posts', uid, e);
+    }
+    await db.ref().update(gone);
+    try {
+      await admin.storage().bucket().file(`avatars/${uid}.jpg`).delete({ ignoreNotFound: true });
+    } catch (e) {
+      console.error('cleanUpDeletedAccount: could not delete the profile photo', uid, e);
+    }
+    console.log('cleanUpDeletedAccount: removed the data of', uid);
+    return null;
+  });
+
 // Play & Learn: the game referee (XP, streaks and badges decided by the server).
 Object.assign(exports, require('./games'));

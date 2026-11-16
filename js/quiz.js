@@ -1132,15 +1132,82 @@ function showQuizWinnerModal(status) {
     document.getElementById('quiz-winner-claim').onclick = () => claimQuizPrize(status.id, status.score, status.total);
 }
 
-/** After sign-in: the celebration, once per visit, until the prize has been claimed. */
+/* 2nd and 3rd place: a quieter congratulations — no prize, no sparks, rays
+   or fanfare — shown once per round. "Seen" is remembered on the account
+   (users/{uid}/quizPlaceSeen) and on this device. */
+function quizPlaceSeenKey(uid, id) { return `gg_quiz_place_${uid}_${id}`; }
+
+/** Null unless I came 2nd or 3rd in the last finished round (within the same window as the prize). */
+async function quizPlaceStatus() {
+    const uid = AppState.currentUser?.uid;
+    if (!uid) return null;
+    try {
+        const latest = await latestFinishedQuizRound();
+        if (!latest) return null;
+        const ranked = getSortedParticipants(latest.round);
+        const index = ranked.findIndex(p => p.uid === uid);
+        if (index !== 1 && index !== 2) return null;
+        if (Date.now() - (latest.id + QUIZ_WINDOW_MS) > QUIZ_PRIZE_CLAIM_DAYS * 86400000) return null;
+        let seen = false;
+        try { seen = !!localStorage.getItem(quizPlaceSeenKey(uid, latest.id)); } catch (e) { /* private mode */ }
+        if (!seen) {
+            try { seen = (await database.ref(`users/${uid}/quizPlaceSeen/${latest.id}`).once('value')).exists(); } catch (e) { /* not readable: go by this device */ }
+        }
+        return { id: latest.id, place: index + 1, score: ranked[index].score, total: ranked[index].total, players: ranked.length, seen };
+    } catch (error) {
+        console.error('Error checking the quiz place:', error);
+        return null;
+    }
+}
+
+function markQuizPlaceSeen(id) {
+    const uid = AppState.currentUser?.uid;
+    if (!uid) return;
+    try { localStorage.setItem(quizPlaceSeenKey(uid, id), '1'); } catch (e) { /* private mode */ }
+    database.ref(`users/${uid}/quizPlaceSeen/${id}`).set(firebase.database.ServerValue.TIMESTAMP).catch(() => {});
+}
+
+function showQuizPlaceModal(status) {
+    if (document.getElementById('quiz-winner-pop') || document.getElementById('quiz-place-pop')) return;
+    const second = status.place === 2;
+    const ordinal = second ? 'second' : 'third';
+    const el = document.createElement('div');
+    el.id = 'quiz-place-pop';
+    el.className = `spirit-pop quiz-place-pop ${second ? 'quiz-place-silver' : 'quiz-place-bronze'}`;
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', `You came ${ordinal} in the Weekly Bible Quiz`);
+    el.innerHTML = `
+        <div class="spirit-pop-card">
+            <div class="spirit-pop-halo"><div class="spirit-pop-ring"></div><div class="spirit-pop-sticker">${second ? '🥈' : '🥉'}</div></div>
+            <div class="spirit-pop-eyebrow">Weekly Bible Quiz · ${status.place}${second ? 'nd' : 'rd'} place</div>
+            <h2 class="spirit-pop-title">Well done!</h2>
+            <p class="spirit-pop-about">You came ${ordinal} out of ${status.players} players. Keep it up, and the top spot could be yours next week.</p>
+            <div class="spirit-pop-points"><strong>${status.score}/${status.total}</strong><span>Your score</span></div>
+            <p class="spirit-pop-verse">“Let us run with patience the race that is set before us.” <small>Hebrews 12:1</small></p>
+            <div class="spirit-pop-actions">
+                <button class="btn btn-block spirit-pop-continue" id="quiz-place-continue">Continue</button>
+            </div>
+        </div>`;
+    document.body.appendChild(el);
+    setTimeout(() => el.classList.add('on'), 30);
+    markQuizPlaceSeen(status.id); // once per round
+    document.getElementById('quiz-place-continue').onclick = () => { el.classList.remove('on'); setTimeout(() => el.remove(), 320); };
+}
+
+/** After sign-in: the winner's celebration, once per visit, until the prize
+    has been claimed — or, for 2nd and 3rd place, their congratulations once. */
 async function checkQuizPrize() {
     if (quizPrizeShownThisVisit || !AppState.currentUser) return;
     const status = await quizPrizeStatus();
-    if (!status || status.claimed || quizPrizeShownThisVisit) return;
+    const place = status ? null : await quizPlaceStatus();
+    const show = status && !status.claimed ? () => showQuizWinnerModal(status)
+        : place && !place.seen ? () => showQuizPlaceModal(place)
+        : null;
+    if (!show || quizPrizeShownThisVisit) return;
     if (AppState.modalOpen || AppState.sheetOpen || document.getElementById('spirit-pop')) { setTimeout(checkQuizPrize, 8000); return; } // not on top of something else
     if (typeof quizAttempt !== 'undefined' && quizAttempt) return;
     quizPrizeShownThisVisit = true;
-    showQuizWinnerModal(status);
+    show();
 }
 window.checkQuizPrize = checkQuizPrize;
 

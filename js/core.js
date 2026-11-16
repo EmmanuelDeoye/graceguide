@@ -870,6 +870,10 @@ function describeAuthError(error) {
             return 'Your browser blocked the Google sign-in popup. Please allow popups for this site and try again.';
         case 'auth/account-exists-with-different-credential':
             return 'An account already exists with this email using a different sign-in method.';
+        case 'auth/unauthorized-domain':
+        case 'auth/operation-not-supported-in-this-environment':
+        case 'auth/web-storage-unsupported':
+            return "Google sign-in doesn't work in this browser. Open graceguide.com.ng in Chrome or Safari, or continue with your email.";
         default:
             return error?.message || 'Something went wrong. Please try again.';
     }
@@ -880,6 +884,12 @@ function describeAuthError(error) {
 const PASSWORD_RULE_TEXT = 'Password must be at least 8 characters and contain both letters and numbers.';
 function isPasswordValid(password) {
     return /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,}$/.test(password || '');
+}
+
+/** True inside an app's built-in browser, where Google blocks sign-in. */
+function isInAppBrowser() {
+    const ua = navigator.userAgent || '';
+    return /FBAN|FBAV|FB_IAB|Instagram|Snapchat|musical_ly|BytedanceWebview|TikTok|LinkedInApp|Line\/|; wv\)/i.test(ua);
 }
 
 function showAuthModal(options = {}) {
@@ -993,6 +1003,14 @@ function showAuthModal(options = {}) {
 
     $('#auth-google-btn').addEventListener('click', async () => {
         clearAuthError();
+        // Google refuses to sign anyone in inside an app's built-in browser
+        // (Instagram, Facebook, TikTok, Snapchat, LinkedIn, an Android WebView…):
+        // the window only shows Google's "403: disallowed_useragent" page.
+        // Say so here instead of opening that dead end.
+        if (isInAppBrowser()) {
+            showAuthError("Google doesn't allow sign-in inside this app's built-in browser. Open graceguide.com.ng in Chrome or Safari (use the ⋮ or share menu → Open in browser), or continue with your email.");
+            return;
+        }
         const googleBtn = $('#auth-google-btn');
         googleBtn.disabled = true;
         googleBtn.classList.add('btn-loading');
@@ -2252,10 +2270,20 @@ async function getTodayDevotional() {
     const uid = AppState.currentUser.uid;
     const todayKey = dayKey(Date.now());
 
+    const wantedLength = getSavedDevotionalLength() || 'auto';
     try {
         const snap = await database.ref(`users/${uid}/devotionals/${todayKey}`).once('value');
         const existing = snap.val();
-        if (existing) return existing;
+        // Today's is kept — unless it is not finished yet and either the reader
+        // has since chosen another length (it is written again at the new
+        // length; one without a recorded length counts as Auto), or it is the
+        // short stand-in shown when the AI failed (tried again after 15 minutes).
+        if (existing) {
+            const sameLength = (existing.length || 'auto') === wantedLength;
+            const fallback = existing.source === 'fallback';
+            const fallbackIsRecent = Date.now() - (existing.generatedAt || 0) < DEVOTIONAL_FALLBACK_RETRY_MS;
+            if (existing.completed || (sameLength && (!fallback || fallbackIsRecent))) return existing;
+        }
     } catch (error) {
         console.error("Error reading today's devotional:", error);
         // Fall through and try to generate one anyway — worst case this
@@ -2277,6 +2305,7 @@ async function getTodayDevotional() {
     }
 
     devotional.date = todayKey;
+    devotional.length = wantedLength;
     devotional.completed = false;
     devotional.completedAt = null;
     devotional.generatedAt = Date.now();
@@ -2363,12 +2392,21 @@ async function buildDevotionalPersonalizationContext() {
 /* ---- Devotional length (Settings → Daily Devotional) ----
    'auto' lets Shepherd decide (a full, unhurried devotional); the others ask
    for a set size. Saved on this device like the other reading preferences. */
+// Same values as Android (Daily.LENGTHS). `tokens` leaves room for the JSON
+// around the body (too tight a limit cut long ones off, the reply failed to
+// parse and the short fallback was shown). A body under `minWords` is sent
+// back once to be written at full length — the model often stops early.
 const DEVOTIONAL_LENGTHS = {
-    auto: { label: 'Auto', about: 'Shepherd decides — usually a full devotional', body: '3-5 paragraphs (roughly 220-320 words) — take the room the theme needs; do not cut it short', tokens: 1100 },
-    short: { label: 'Short', about: 'About a minute to read', body: '2 short paragraphs (roughly 80-120 words)', tokens: 600 },
-    moderate: { label: 'Moderate', about: 'About three minutes', body: '4-6 paragraphs (roughly 300-400 words)', tokens: 1300 },
-    long: { label: 'Long', about: 'A deeper, five-minute read', body: '7-9 paragraphs (roughly 600-750 words), developing the passage step by step with a practical application at the end', tokens: 2200 }
+    auto: { label: 'Auto', about: 'Shepherd decides — usually a full devotional', body: '3-5 paragraphs (roughly 220-320 words) — take the room the theme needs; do not cut it short', tokens: 1500, minWords: 200 },
+    short: { label: 'Short', about: 'About a minute to read', body: '2 short paragraphs (roughly 80-120 words)', tokens: 800, minWords: 70 },
+    moderate: { label: 'Moderate', about: 'About three minutes', body: '4-6 paragraphs (roughly 300-400 words)', tokens: 1800, minWords: 280 },
+    long: { label: 'Long', about: 'A deeper, five-minute read', body: '7-9 paragraphs (roughly 600-750 words), developing the passage step by step with a practical application at the end', tokens: 3200, minWords: 550 }
 };
+/** A fallback devotional (shown when the AI call failed) is kept this long before today's is tried again. */
+const DEVOTIONAL_FALLBACK_RETRY_MS = 15 * 60 * 1000;
+function devotionalWordCount(text) {
+    return String(text || '').trim().split(/\s+/).filter(Boolean).length;
+}
 /** The chosen length, or null if the person has never chosen one. */
 function getSavedDevotionalLength() {
     try { const v = localStorage.getItem('graceguide_devotional_length'); return DEVOTIONAL_LENGTHS[v] ? v : null; } catch (e) { return null; }
@@ -2376,7 +2414,9 @@ function getSavedDevotionalLength() {
 function setDevotionalLength(value) {
     if (!DEVOTIONAL_LENGTHS[value]) return;
     try { localStorage.setItem('graceguide_devotional_length', value); } catch (e) { /* private mode */ }
-    showToast(`Devotional length set to ${DEVOTIONAL_LENGTHS[value].label}. It applies from your next devotional.`, 'success');
+    // Today's devotional is written again at the new length, unless it has already been finished.
+    if (AppState.todayDevotional && !AppState.todayDevotional.completed) AppState.todayDevotional = null;
+    showToast(`Devotional length set to ${DEVOTIONAL_LENGTHS[value].label}. Today’s devotional will use it too, unless you’ve already finished it.`, 'success');
     if (AppState.currentRoute === 'settings') renderSettingsPage();
 }
 
@@ -2386,39 +2426,67 @@ async function generateDevotionalWithAI(personalContext, continuityEntries, date
         ? `Their recent devotionals, for natural continuity (don't repeat these — build on one only if it genuinely fits, otherwise ignore):\n${continuityEntries.map(e => `- ${e.date}: "${e.title}" (themes: ${(e.themes || []).join(', ') || 'none recorded'})`).join('\n')}`
         : 'No previous devotionals on record yet.';
 
-    const response = await fetch(DEEPSEEK_API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
-        body: JSON.stringify({
-            model: 'deepseek-chat',
-            messages: [
-                {
-                    role: 'system',
-                    content: `You are Shepherd, writing a warm, biblically grounded daily devotional for a specific user of the GraceGuide Bible app. Personalize the "body" using the context given, but weave it in naturally and only where it genuinely fits — don't recite their stats back at them or force a connection to every detail. If a previous devotional's theme naturally continues today, you may build on it briefly without repeating it. If nothing personal fits well, still write a solid, grounded devotional.
+    const messages = [
+        {
+            role: 'system',
+            content: `You are Shepherd, writing a warm, biblically grounded daily devotional for a specific user of the GraceGuide Bible app. Personalize the "body" using the context given, but weave it in naturally and only where it genuinely fits — don't recite their stats back at them or force a connection to every detail. If a previous devotional's theme naturally continues today, you may build on it briefly without repeating it. If nothing personal fits well, still write a solid, grounded devotional.
 
 "prayerPoints" is different: keep those GENERIC and tied only to the verse/theme, never to anything personal about this user — they may be shown to other people if this devotional gets shared, so they must stand alone for anyone.
 
-Respond with ONLY valid JSON — no markdown, no code fences, no commentary — matching exactly this shape:
-{"title": "3-6 word title", "body": "${length.body}, separated by \\n\\n", "verseReference": "e.g. Philippians 4:6-7", "verseText": "short quote or close paraphrase of that passage, under 30 words", "prayerPrompt": "one short, concrete prayer or action prompt, 1-2 sentences", "prayerPoints": ["3-4 short, general, actionable prayer points related to today's verse/theme — each under 15 words, generic enough for anyone to pray, not tied to this specific user's activity"], "themes": ["2-4 short lowercase theme words"]}`
-                },
-                {
-                    role: 'user',
-                    content: `Today's date: ${dateKey}\n\n${personalContext}\n\n${continuityText}\n\nWrite today's devotional.`
-                }
-            ],
-            temperature: 0.9,
-            max_tokens: length.tokens
-        })
-    });
+LENGTH (the reader chose this — it is required): the "body" must be ${length.body}, and never fewer than ${length.minWords} words. Do not write less than that.
 
-    if (!response.ok) throw new Error(`AI request failed (${response.status})`);
-    const data = await response.json();
-    let raw = data.choices?.[0]?.message?.content?.trim();
-    if (!raw) throw new Error('Empty AI response');
-    raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-    const objectMatch = raw.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(objectMatch ? objectMatch[0] : raw);
-    if (!parsed.title || !parsed.body) throw new Error('Malformed devotional response');
+Respond with ONLY valid JSON — no markdown, no code fences, no commentary — matching exactly this shape:
+{"title": "3-6 word title", "body": "${length.body} of devotional content, paragraphs separated by \\n\\n", "verseReference": "e.g. Philippians 4:6-7", "verseText": "short quote or close paraphrase of that passage, under 30 words", "prayerPrompt": "one short, concrete prayer or action prompt, 1-2 sentences", "prayerPoints": ["3-4 short, general, actionable prayer points related to today's verse/theme — each under 15 words, generic enough for anyone to pray, not tied to this specific user's activity"], "themes": ["2-4 short lowercase theme words"]}`
+        },
+        {
+            role: 'user',
+            content: `Today's date: ${dateKey}\n\n${personalContext}\n\n${continuityText}\n\nWrite today's devotional.`
+        }
+    ];
+
+    async function ask(msgs) {
+        const response = await fetch(DEEPSEEK_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+            body: JSON.stringify({ model: 'deepseek-chat', messages: msgs, temperature: 0.9, max_tokens: length.tokens })
+        });
+        if (!response.ok) throw new Error(`AI request failed (${response.status})`);
+        const data = await response.json();
+        const raw = data.choices?.[0]?.message?.content?.trim();
+        if (!raw) throw new Error('Empty AI response');
+        return raw;
+    }
+    function parse(raw) {
+        const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+        const objectMatch = cleaned.match(/\{[\s\S]*\}/);
+        const result = JSON.parse(objectMatch ? objectMatch[0] : cleaned);
+        if (!result || !result.title || !result.body) throw new Error('Malformed devotional response');
+        return result;
+    }
+
+    // One more try if the reply was cut off or was not valid JSON, before falling back.
+    let raw = await ask(messages);
+    let parsed;
+    try {
+        parsed = parse(raw);
+    } catch (error) {
+        raw = await ask(messages);
+        parsed = parse(raw);
+    }
+    // Too short for the length the reader chose: ask once for the full length, and keep the longer of the two.
+    const words = devotionalWordCount(parsed.body);
+    if (words < length.minWords) {
+        try {
+            const longer = parse(await ask([
+                ...messages,
+                { role: 'assistant', content: raw },
+                { role: 'user', content: `The "body" you wrote is only ${words} words. The reader chose ${length.label}, so it must be ${length.body} — at least ${length.minWords} words. Write the whole devotional again at that full length. Reply with ONLY the JSON, in the same shape.` }
+            ]));
+            if (devotionalWordCount(longer.body) > words) parsed = longer;
+        } catch (error) {
+            console.warn('Could not lengthen the devotional; keeping the first one:', error);
+        }
+    }
 
     return {
         title: String(parsed.title).trim(),

@@ -2262,6 +2262,23 @@
 .quiz-prize-card .btn { flex: 0 0 auto; }
 @media (max-width: 480px) { .quiz-prize-card .btn { flex: 1 1 100%; } }
 
+/* 2nd and 3rd place in the Weekly Quiz: the winner's pop-up, toned down —
+   no sparks, rays or breathing glow, a calmer background, silver / bronze. */
+.quiz-place-pop { background: radial-gradient(circle at 50% 30%, #2f4a3d 0%, #163027 45%, #07160f 85%); }
+.quiz-place-pop .spirit-pop-halo { width: 170px; height: 170px; }
+.quiz-place-pop .spirit-pop-ring { animation: none; box-shadow: 0 0 0 8px rgba(255,255,255,0.06); }
+.quiz-place-pop .spirit-pop-sticker { width: 112px; height: 112px; font-size: 56px; }
+.quiz-place-pop .spirit-pop-title { font-size: 34px; }
+.quiz-place-silver .spirit-pop-ring { border-color: rgba(214,220,226,0.7); }
+.quiz-place-silver .spirit-pop-sticker { background: radial-gradient(circle at 35% 30%, #ffffff, #d5dbe1 55%, #9aa4ad); }
+.quiz-place-silver .spirit-pop-eyebrow, .quiz-place-silver .spirit-pop-points strong, .quiz-place-silver .spirit-pop-verse small { color: #dfe5ea; }
+.quiz-place-silver .spirit-pop-points { border-color: rgba(214,220,226,0.45); }
+.quiz-place-bronze .spirit-pop-ring { border-color: rgba(214,150,96,0.75); }
+.quiz-place-bronze .spirit-pop-sticker { background: radial-gradient(circle at 35% 30%, #ffe6cc, #d9a06b 55%, #a8683a); }
+.quiz-place-bronze .spirit-pop-eyebrow, .quiz-place-bronze .spirit-pop-points strong, .quiz-place-bronze .spirit-pop-verse small { color: #f0c39a; }
+.quiz-place-bronze .spirit-pop-points { border-color: rgba(214,150,96,0.45); }
+@media (max-height: 640px) { .quiz-place-pop .spirit-pop-halo { width: 130px; height: 130px; } .quiz-place-pop .spirit-pop-sticker { width: 88px; height: 88px; font-size: 44px; } .quiz-place-pop .spirit-pop-title { font-size: 28px; } }
+
 /* ---------- User status (js/presence.js): Online / Active / Away ---------- */
 .user-status { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: var(--text-slate); white-space: nowrap; flex-shrink: 0; }
 .user-status:empty { display: none; }

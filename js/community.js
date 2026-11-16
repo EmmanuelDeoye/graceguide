@@ -2453,6 +2453,9 @@ function renderSettingsPage() {
                     <button class="btn btn-accent btn-block" onclick="handleLogout()">
                         <i class="fas fa-sign-out-alt"></i> Sign Out
                     </button>
+                    <button class="btn btn-outline btn-sm btn-block mt-3" style="color: #b3261e; border-color: rgba(179,38,30,0.45);" onclick="window.location.href = 'delete-account.html'">
+                        <i class="fas fa-user-xmark"></i> Delete Account
+                    </button>
                 ` : `
                     <button class="btn btn-primary btn-block" onclick="showAuthModal({message: 'Sign in to your GraceGuide account.'})">
                         <i class="fas fa-right-to-bracket"></i> Sign In

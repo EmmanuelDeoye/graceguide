@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Delete your GraceGuide account</title>
+<meta name="description" content="How to delete your GraceGuide account and the data kept with it.">
+<link rel="icon" href="img/logo.png">
+<style>
+    :root { --olive: #30483A; --gold: #C7A65A; --ivory: #F8F6F0; --text: #202522; --slate: #5b6660; --card: #ffffff; --line: rgba(0,0,0,0.1); --danger: #b3261e; }
+    @media (prefers-color-scheme: dark) { :root { --ivory: #101613; --text: #eef0ec; --slate: #a9b3ad; --card: #1a221e; --line: rgba(255,255,255,0.12); --danger: #f2867e; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--ivory); color: var(--text); font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+    header { background: var(--olive); color: #f8f6f0; padding: 22px 16px; text-align: center; }
+    header img { width: 52px; height: 52px; border-radius: 12px; display: block; margin: 0 auto 8px; }
+    header h1 { margin: 0; font-size: 24px; }
+    header p { margin: 4px 0 0; opacity: 0.85; font-size: 14px; }
+    main { max-width: 640px; margin: 0 auto; padding: 20px 16px 48px; }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin-bottom: 16px; }
+    h2 { font-size: 18px; margin: 0 0 8px; }
+    ul, ol { padding-left: 20px; margin: 6px 0; }
+    li { margin: 4px 0; }
+    .muted { color: var(--slate); font-size: 14px; }
+    button, input { font: inherit; }
+    .btn { display: block; width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text); font-weight: 600; cursor: pointer; margin-top: 10px; }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .btn-primary { background: var(--olive); border-color: var(--olive); color: #f8f6f0; }
+    .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+    input[type=email], input[type=password] { width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--ivory); color: var(--text); margin-top: 8px; }
+    label.check { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; font-size: 15px; }
+    label.check input { margin-top: 5px; }
+    .msg { margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: 14px; }
+    .msg.error { background: rgba(179,38,30,0.1); color: var(--danger); }
+    .msg.ok { background: rgba(48,72,58,0.12); }
+    .hidden { display: none; }
+    .divider { text-align: center; color: var(--slate); font-size: 13px; margin: 14px 0 4px; }
+    a { color: var(--gold); }
+</style>
+</head>
+<body>
+<header>
+    <img src="img/logo.png" alt="">
+    <h1>Delete your GraceGuide account</h1>
+    <p>GraceGuide — by Ruach</p>
+</header>
+<main>
+    <section>
+        <h2>How to delete your account</h2>
+        <p><strong>In the app:</strong> open the menu → <strong>Settings</strong> → <strong>Delete Account</strong>, then confirm.</p>
+        <p><strong>On this page:</strong> sign in below with the same account you use in GraceGuide, tick the box and tap <strong>Delete my account</strong>.</p>
+        <p class="muted">Can't sign in any more? Email <a href="mailto:support@graceguide.com.ng?subject=Delete%20my%20GraceGuide%20account">support@graceguide.com.ng</a> from the address on your account and we will delete it within 7 days.</p>
+    </section>
+
+    <section>
+        <h2>What is deleted</h2>
+        <p>Deletion is immediate and cannot be undone. We delete:</p>
+        <ul>
+            <li>Your login (email or Google sign-in) and your profile: name, photo, bio and Spirit Life.</li>
+            <li>Your Bible notes, highlights and bookmarks, study plans, devotionals and reading history.</li>
+            <li>Your conversations with Shepherd, your settings and your notification settings.</li>
+            <li>Your posts in Space and your Brethren connections.</li>
+            <li>Your direct message conversations. They are deleted for both people, so the other person no longer sees that chat either.</li>
+            <li>Your Weekly Quiz all-time record, your game profile (XP, wins, streaks and badges) and your game history.</li>
+        </ul>
+        <h2 style="margin-top:14px;">What is kept</h2>
+        <ul>
+            <li>Messages you sent in forum groups, and comments you left on other people's posts, stay there for the other members, under the name you had.</li>
+            <li>Results already shown on past Weekly Quiz rounds and past daily game leaderboards.</li>
+        </ul>
+        <p class="muted">Nothing else is kept. We do not keep backups of deleted accounts.</p>
+    </section>
+
+    <section id="delete-box">
+        <h2>Delete my account</h2>
+        <noscript><p class="muted">This needs JavaScript. You can also delete your account in the app (Settings → Delete Account) or email support@graceguide.com.ng.</p></noscript>
+
+        <div id="signed-out" class="hidden">
+            <p class="muted">Sign in with the account you want to delete.</p>
+            <button class="btn" id="google-btn" type="button">Continue with Google</button>
+            <div class="divider">or with your email</div>
+            <input type="email" id="email" placeholder="Email" autocomplete="email">
+            <input type="password" id="password" placeholder="Password" autocomplete="current-password">
+            <button class="btn btn-primary" id="email-btn" type="button">Sign in</button>
+        </div>
+
+        <div id="signed-in" class="hidden">
+            <p>Signed in as <strong id="who"></strong>.</p>
+            <div id="reauth-password" class="hidden">
+                <p class="muted">For your safety, enter your password again to confirm it is you.</p>
+                <input type="password" id="reauth-pw" placeholder="Password" autocomplete="current-password">
+            </div>
+            <label class="check"><input type="checkbox" id="confirm-box"> <span>I understand that my GraceGuide account and data will be deleted permanently and cannot be recovered.</span></label>
+            <button class="btn btn-danger" id="delete-btn" type="button" disabled>Delete my account</button>
+            <button class="btn" id="switch-btn" type="button">Use a different account</button>
+        </div>
+
+        <div id="done" class="hidden">
+            <p><strong>Your GraceGuide account has been deleted.</strong> Thank you for the time you spent with us. You can uninstall the app now.</p>
+        </div>
+
+        <div id="msg" class="msg hidden"></div>
+    </section>
+</main>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
+<script src="js/account-delete.js?v=1.9.2"></script>
+<script>
+(function () {
+    firebase.initializeApp({
+        apiKey: "AIzaSyAYyIEAlJD8FgeE2bv73fWwKbpsDPuiB84",
+        authDomain: "graceguide-8d9f5.firebaseapp.com",
+        databaseURL: "https://graceguide-8d9f5-default-rtdb.europe-west1.firebasedatabase.app",
+        projectId: "graceguide-8d9f5",
+        storageBucket: "graceguide-8d9f5.firebasestorage.app",
+        messagingSenderId: "859988308746",
+        appId: "1:859988308746:web:f68879be9f0d967b9040f3"
+    });
+    const auth = firebase.auth();
+    const $ = (id) => document.getElementById(id);
+    let deleting = false;
+
+    function show(id) { ['signed-out', 'signed-in', 'done'].forEach((x) => $(x).classList.toggle('hidden', x !== id)); }
+    function message(text, kind) { const m = $('msg'); m.textContent = text || ''; m.className = 'msg ' + (kind || 'error'); m.classList.toggle('hidden', !text); }
+    function inAppBrowser() { return /FBAN|FBAV|FB_IAB|Instagram|Snapchat|musical_ly|BytedanceWebview|TikTok|LinkedInApp|Line\/|; wv\)/i.test(navigator.userAgent || ''); }
+    function usesPassword(user) { return (user.providerData || []).some((p) => p.providerId === 'password'); }
+    function usesGoogle(user) { return (user.providerData || []).some((p) => p.providerId === 'google.com'); }
+    function describe(e) {
+        switch (e && e.code) {
+            case 'auth/wrong-password': case 'auth/invalid-credential': case 'auth/invalid-login-credentials': return "That email and password don't match. Please try again.";
+            case 'auth/user-not-found': return 'No GraceGuide account uses that email.';
+            case 'auth/too-many-requests': return 'Too many attempts. Please wait a few minutes and try again.';
+            case 'auth/network-request-failed': return "We couldn't reach the server. Check your internet connection and try again.";
+            case 'auth/popup-closed-by-user': case 'auth/cancelled-popup-request': return 'The Google window was closed before finishing.';
+            case 'auth/popup-blocked': return 'Your browser blocked the Google window. Allow pop-ups for this site and try again.';
+            case 'auth/user-mismatch': return 'Please confirm with the same Google account you signed in with.';
+            case 'auth/requires-recent-login': return 'For your safety, please sign in again and then delete.';
+            default: return (e && e.message) || 'Something went wrong. Please try again.';
+        }
+    }
+
+    auth.onAuthStateChanged((user) => {
+        if (deleting) return;
+        if (!user) { show('signed-out'); return; }
+        $('who').textContent = user.email || user.displayName || 'your account';
+        $('reauth-password').classList.add('hidden');
+        $('confirm-box').checked = false;
+        $('delete-btn').disabled = true;
+        show('signed-in');
+    });
+
+    $('google-btn').onclick = async () => {
+        message('');
+        if (inAppBrowser()) { message("Google doesn't allow sign-in inside this app's built-in browser. Open this page in Chrome or Safari, or sign in with your email."); return; }
+        try { await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()); } catch (e) { message(describe(e)); }
+    };
+    $('email-btn').onclick = async () => {
+        message('');
+        const email = $('email').value.trim(), pw = $('password').value;
+        if (!email || !pw) { message('Please enter your email and password.'); return; }
+        try { await auth.signInWithEmailAndPassword(email, pw); } catch (e) { message(describe(e)); }
+    };
+    $('switch-btn').onclick = () => { message(''); auth.signOut(); };
+    $('confirm-box').onchange = (e) => { $('delete-btn').disabled = !e.target.checked; };
+
+    $('delete-btn').onclick = async () => {
+        const user = auth.currentUser;
+        if (!user) return;
+        message('');
+        const btn = $('delete-btn');
+        btn.disabled = true; btn.textContent = 'Deleting…';
+        try {
+            // Firebase deletes a login only if it signed in moments ago: confirm it first.
+            if (accountDeletionNeedsFreshSignIn(user)) {
+                if (usesPassword(user)) {
+                    const pwBox = $('reauth-password');
+                    const pw = $('reauth-pw').value;
+                    if (pwBox.classList.contains('hidden') || !pw) {
+                        pwBox.classList.remove('hidden');
+                        message('Enter your password, then tap Delete my account again.', 'ok');
+                        btn.disabled = false; btn.textContent = 'Delete my account';
+                        return;
+                    }
+                    await user.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(user.email, pw));
+                } else if (usesGoogle(user)) {
+                    if (inAppBrowser()) throw { message: "Google doesn't allow sign-in inside this app's built-in browser. Open this page in Chrome or Safari." };
+                    await user.reauthenticateWithPopup(new firebase.auth.GoogleAuthProvider());
+                } else {
+                    throw { code: 'auth/requires-recent-login' };
+                }
+            }
+            deleting = true;
+            await deleteGraceGuideAccount(user);
+            show('done');
+            message('');
+        } catch (e) {
+            deleting = false;
+            console.error('Account deletion failed:', e);
+            message(describe(e));
+            btn.disabled = !$('confirm-box').checked; btn.textContent = 'Delete my account';
+        }
+    };
+})();
+</script>
+</body>
+</html>
