@@ -2436,6 +2436,9 @@ function renderSettingsPage() {
                 <button class="btn btn-outline btn-sm btn-block mt-3" onclick="navigateTo('terms')">
                     <i class="fas fa-file-contract"></i> Terms &amp; Conditions
                 </button>
+                <button class="btn btn-outline btn-sm btn-block mt-3" onclick="window.location.href = 'privacy-policy.html'">
+                    <i class="fas fa-user-shield"></i> Privacy Policy
+                </button>
             </div>
             
             <div class="card">
@@ -3160,7 +3163,7 @@ window.resendVerificationEmail = resendVerificationEmail;
    Three ways to get in touch: a message straight to the GraceGuide team
    (it lands in the admin page's Messages tab), WhatsApp, or email.
    ============================================ */
-const GRACEGUIDE_WEB_VERSION = '1.9.0';
+const GRACEGUIDE_WEB_VERSION = '1.9.4';
 const CONTACT_EMAIL = 'support@graceguide.com.ng';
 const CONTACT_CATEGORIES = [
     ['inquiry', 'Inquiry', 'fa-circle-question'],

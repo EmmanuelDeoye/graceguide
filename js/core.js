@@ -950,7 +950,8 @@ function showAuthModal(options = {}) {
 
             <p class="auth-terms-note">
                 By continuing, you agree to GraceGuide's
-                <a href="#/terms" id="auth-terms-link">Terms &amp; Conditions</a>.
+                <a href="#/terms" id="auth-terms-link">Terms &amp; Conditions</a> and
+                <a href="privacy-policy.html">Privacy Policy</a>.
             </p>
         </div>
     `;
@@ -1886,7 +1887,7 @@ function renderTermsPage() {
         ['4. Community Guidelines', `Space posts, comments, Forum groups and Chats are shared with other people. Please be kind, honest and respectful. You must not post content that is hateful, harassing, sexually explicit, violent, fraudulent, spam, or that infringes someone else's rights, and you must not impersonate anyone. You can report or block users from their profile. We may remove content or suspend accounts that break these guidelines.`],
         ['5. Your Content', `You keep ownership of what you post. By posting in shared areas of GraceGuide you give us permission to store, display and distribute that content within the app so it can be shown to the people you share it with, including through share links you create. You can edit or delete your own messages and delete your own posts.`],
         ['6. Bible Text & Third-Party Services', `Bible translations are provided through third-party services and remain the property of their respective copyright holders; they are shown for personal reading and study. GraceGuide also relies on third-party services for sign-in, data storage, notifications and AI features, and their availability is outside our control.`],
-        ['7. Privacy', `We store the information needed to run the app — such as your profile, reading history, notes, highlights, study plans and messages. Your profile name, photo, bio and public posts are visible to other users; some reading statistics are visible to your Brethren. We do not sell your personal information.`],
+        ['7. Privacy', `We store the information needed to run the app — such as your profile, reading history, notes, highlights, study plans and messages. Your profile name, photo, bio and public posts are visible to other users; some reading statistics are visible to your Brethren. We do not sell your personal information. Read the full <a href="privacy-policy.html">Privacy Policy</a>.`],
         ['8. Acceptable Use', `Do not attempt to disrupt the app, access other people's accounts or data, scrape content, or use GraceGuide for any unlawful purpose.`],
         ['9. Availability & Liability', `GraceGuide is provided "as is". We work to keep it available and accurate but cannot guarantee it will always be uninterrupted or error-free. To the fullest extent permitted by law, GraceGuide is not liable for any indirect or consequential loss arising from your use of the app.`],
         ['10. Changes to These Terms', `We may update these Terms from time to time. When we do, we will update the date at the top of this page. Continuing to use GraceGuide after changes take effect means you accept the updated Terms.`],

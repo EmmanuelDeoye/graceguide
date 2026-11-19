@@ -17,7 +17,7 @@
 
 // Bump this whenever the shell list below changes so old caches get
 // cleaned up and clients pick up the new files.
-const CACHE_VERSION = 'graceguide-shell-v19';
+const CACHE_VERSION = 'graceguide-shell-v20';
 
 const APP_SHELL = [
   '/',
@@ -136,7 +136,7 @@ self.addEventListener('fetch', (event) => {
   // Opening / reloading the app: always the latest page when online.
   // admin.html and delete-account.html are pages of their own, not the app.
   if (request.mode === 'navigate') {
-    const ownPage = url.pathname === '/admin.html' || url.pathname === '/delete-account.html';
+    const ownPage = url.pathname === '/admin.html' || url.pathname === '/delete-account.html' || url.pathname === '/privacy-policy.html';
     event.respondWith(networkFirst(ownPage ? request.url : '/index.html', ownPage ? request.url : '/index.html')
       .catch(() => saved('/index.html')));
     return;
